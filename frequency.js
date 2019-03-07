@@ -39,6 +39,7 @@ function on_decode_signals(resume)
   if (!resume) //If resume == false, it's the first call to this function.
   {
       //initialization code goes here, ex:
+      ScanaStudio.console_info_msg("Frequency analyzer initialized");
       state_machine = 0;
       sampling_rate = ScanaStudio.get_capture_sample_rate();
       freq_ch = ScanaStudio.gui_get_value("freq_ch");
@@ -46,9 +47,6 @@ function on_decode_signals(resume)
       last_rising_edge = -1;
       last_falling_edge = -1;
   }
-
-  ScanaStudio.console_info_msg("Hello from PWM decoder");
-
 
 
   while (ScanaStudio.abort_is_requested() == false)
@@ -154,7 +152,6 @@ function build_trigger_step_string(channel)
     }
   }
 }
-
 
 //Function called to generate demo siganls (when no physical device is attached)
 function on_build_demo_signals()
