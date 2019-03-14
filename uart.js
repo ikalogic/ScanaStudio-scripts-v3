@@ -246,7 +246,7 @@ function on_decode_signals(resume)
       				ScanaStudio.dec_item_add_content("Err");
       				ScanaStudio.dec_item_add_content("!");
 
-              //ScanaStudio.dec_item_emphasize(); //Ensure it stands out as an error!
+              ScanaStudio.dec_item_emphasize_error();
             }
 
             cursor += samples_per_bit;
@@ -280,7 +280,7 @@ function on_decode_signals(resume)
       			ScanaStudio.dec_item_add_content("No P!");
       			ScanaStudio.dec_item_add_content("P!");
 
-            //ScanaStudio.dec_item_emphasize(); //Ensure it stands out as an error!
+            ScanaStudio.dec_item_emphasize_error(); //Ensure it stands out as an error!
           }
           cursor += ((samples_per_bit*stop));
           state_machine = 0; //rewind to first state: wait for start bit.
