@@ -19,10 +19,7 @@ V0.0:  Initial release.
 //Decoder GUI
 function on_draw_gui_decoder()
 {
-  //Define decoder configuration GUI
   ScanaStudio.gui_add_ch_selector("freq_ch","Channel to analyze","");
-
-
 }
 
 //Global variables
