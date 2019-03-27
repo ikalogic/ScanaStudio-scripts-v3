@@ -6,6 +6,7 @@ Highly configurable SPI bus decoder
 <VERSION> 1.72 </VERSION>
 <AUTHOR_NAME>  Vladislav Kosinov, Ibrahim Kamal </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
+<HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/SPI-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
@@ -54,6 +55,9 @@ Highly configurable SPI bus decoder
   ================
     * Add option to display CLK average frequency
     * Add hex view and packet view support
+    * Add support for trigger
+    * add sample points
+    * Update online documentation
 */
 
 //Decoder GUI
@@ -91,7 +95,8 @@ function on_draw_gui_decoder()
       {
           ScanaStudio.gui_add_item_to_combo_box(i.toString(10),true);
       }
-      else {
+      else
+      {
         ScanaStudio.gui_add_item_to_combo_box(i.toString(10),false);
       }
     }
@@ -121,12 +126,14 @@ var bit_counter;
 var ch_mosi,ch_miso,ch_clk,ch_cs,bit_order;
 var format_hex,format_ascii,format_dec,format_bin;
 var cpol,cpha,nbits,cspol,opt;
+var configuraiton_valid;
 
 function on_decode_signals(resume)
 {
   if (!resume) //If resume == false, it's the first call to this function.
   {
       //initialization code
+      configuraiton_valid = true;
       state_machine = 0;
       cs_start_sample = 0;
       sampling_rate = ScanaStudio.get_capture_sample_rate();
@@ -145,6 +152,25 @@ function on_decode_signals(resume)
       nbits = ScanaStudio.gui_get_value("nbits")+2;
       cspol = ScanaStudio.gui_get_value("cspol");
       opt = ScanaStudio.gui_get_value("opt");
+
+      //Do some sanity checks
+      if (ch_clk == ch_cs)
+      {
+        ScanaStudio.console_error_msg( "Error in SPI decoder configuration,"
+                                      +"CS and CLK lines must be different");
+        configuraiton_valid = false;
+      }
+      if (ch_mosi == ch_miso)
+      {
+        ScanaStudio.console_error_msg( "Error in SPI decoder configuration,"
+                                      +"MOSI and MISO lines must be different");
+        configuraiton_valid = false;
+      }
+
+      if (!configuraiton_valid)
+      {
+        return;
+      }
 
       //set clock active edge
     	if ((cpol == 0) && (cpha == 0)) clk_active_edge = 1;
@@ -182,9 +208,17 @@ function on_decode_signals(resume)
         if (trs_cs.value == cspol) //leading edge found!
         {
           cs_start_sample = trs_cs.sample_index;
-          cs_end_sample = ScanaStudio.trs_get_next(ch_cs).sample_index;
-          // ScanaStudio.console_info_msg("cs_start_sample=" + cs_start_sample);
-          // ScanaStudio.console_info_msg("cs_end_sample=" + cs_end_sample);
+          //goto next state
+          state_machine++;
+        }
+        break;
+      case 1: //wait for end of CS transition
+        trs_cs = ScanaStudio.trs_get_next(ch_cs);
+        if (trs_cs.value != cspol) //Lagging edge found!
+        {
+          cs_end_sample = trs_cs.sample_index;
+           // ScanaStudio.console_info_msg("cs_start_sample=" + cs_start_sample);
+           // ScanaStudio.console_info_msg("cs_end_sample=" + cs_end_sample);
           if (cs_start_sample == 0)
           {
             //ScanaStudio.console_info_msg("CS warning");
@@ -215,8 +249,7 @@ function on_decode_signals(resume)
           //goto next state
           state_machine++;
         }
-        break;
-      case 1: //wait for clk active edge
+      case 2: //wait for clk active edge
 
         trs_clk = ScanaStudio.trs_get_next(ch_clk);
         //ScanaStudio.console_info_msg("Trs_clk=" + trs_clk.sample_index/sampling_rate + "/" + trs_clk.value);
@@ -234,7 +267,7 @@ function on_decode_signals(resume)
           state_machine = 0;
         }
         break;
-      case 2: //update mosi_bit value
+      case 3: //update mosi_bit value
         //ScanaStudio.console_info_msg("state=" + state_machine);
         if (opt == 1) //Ignore MOSI ?
         {
@@ -255,7 +288,7 @@ function on_decode_signals(resume)
           state_machine++;
         }
         break;
-      case 3: //update miso_bit value
+      case 4: //update miso_bit value
         //ScanaStudio.console_info_msg("state=" + state_machine);
         if (opt == 2) //Ignore MISO ?
         {
@@ -276,7 +309,7 @@ function on_decode_signals(resume)
           state_machine++;
         }
         break;
-      case 4: //build mosi & miso data
+      case 5: //build mosi & miso data
         //ScanaStudio.console_info_msg("state=" + state_machine);
         //ScanaStudio.console_info_msg("bit_counter="+bit_counter+" mosi=" + mosi_bit + " miso=" + miso_bit);
         if (bit_order == 0)
@@ -304,20 +337,20 @@ function on_decode_signals(resume)
           {
               //ScanaStudio.console_info_msg("data_mosi="+data_mosi);
               ScanaStudio.dec_item_new(ch_mosi,word_start_sample,word_end_sample);
-              add_spi_content(data_mosi);
+              add_spi_content_to_dec_item(data_mosi);
           }
 
           if (opt != 2)
           {
               //ScanaStudio.console_info_msg("data_miso="+data_miso + "ch_miso=" + ch_miso);
               ScanaStudio.dec_item_new(ch_miso,word_start_sample,word_end_sample);
-              add_spi_content(data_miso);
+              add_spi_content_to_dec_item(data_miso);
           }
 
           bit_counter = 0;
           data_miso = data_mosi = 0;
         }
-        state_machine = 1;
+        state_machine = 2;
 
         break;
       default:
@@ -326,7 +359,7 @@ function on_decode_signals(resume)
   }
 }
 
-function add_spi_content(value)
+function add_spi_content_to_dec_item(value)
 {
   var content,b;
   var prev_content = "";
@@ -379,10 +412,10 @@ function add_spi_content(value)
     }
     ScanaStudio.dec_item_add_content(content);
     //Add sample points
-    for (b = 1; b < nbits; b++) //Start at 1 to skip start bit
-    {
-      //TODO
-    }
+    // for (b = 0; b < nbits; b++) //Start at 1 to skip start bit
+    // {
+    //   //TODO
+    // }
   }
 
 }
@@ -419,13 +452,14 @@ function to_binary_str(value, size)
   return str;
 }
 
-
 //Function called to generate demo siganls (when no physical device is attached)
 function on_build_demo_signals()
 {
   //Use the function below to get the number of samples to be built
   var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
   var spi_builder = ScanaStudio.BuilderObject;
+  var ch_clk = ScanaStudio.gui_get_value("ch_clk");
+  var nbits = ScanaStudio.gui_get_value("nbits");
   spi_builder.config(
     ScanaStudio.gui_get_value("ch_mosi"),
     ScanaStudio.gui_get_value("ch_miso"),
@@ -439,7 +473,31 @@ function on_build_demo_signals()
     ScanaStudio.builder_get_sample_rate(),
     ScanaStudio.builder_get_sample_rate()/100  //clock frequency
   );
-  spi_builder.put_silence(0.1);
+
+  var random_mosi, random_miso, random_size, w;
+  spi_builder.put_silence(10e-6);
+  while (ScanaStudio.builder_get_samples_acc(ch_clk) < samples_to_build)
+  {
+    random_size = Math.floor(Math.random()*10) + 1;
+    spi_builder.put_start();
+    spi_builder.put_silence(1e-6); //1 ms
+    for (w = 0; w < random_size; w++)
+    {
+      random_mosi = Math.floor(Math.random()*(Math.pow(2,nbits)));
+      random_miso = Math.floor(Math.random()*(Math.pow(2,nbits)));
+      spi_builder.put_word(random_mosi,random_miso);
+      spi_builder.put_silence(1e-6); //1 ms
+    }
+
+    spi_builder.put_stop();
+    spi_builder.put_silence(1e-3); //1 ms
+
+    if (ScanaStudio.abort_is_requested())
+    {
+      break;
+    }
+  }
+  spi_builder.put_silence(10e-6);
   spi_builder.put_start();
   spi_builder.put_silence(1e-6); //1 ms
   spi_builder.put_word(0xAA,0x55);
