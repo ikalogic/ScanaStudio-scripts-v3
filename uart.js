@@ -4,12 +4,13 @@
 <DESCRIPTION>
 Serial UART (Universal asynchronous receiver/transmitter) Protocol Decoder.
 </DESCRIPTION>
-<VERSION> 1.45 </VERSION>
+<VERSION> 1.46 </VERSION>
 <AUTHOR_NAME>	Vladislav Kosinov, Ibrahim Kamal, Nicolas Bastit </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright 2019 Ikalogic SAS </COPYRIGHT>
 <LICENSE>	This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+  V1.46: Fixed a bug that caused start bit to be drawn at the end of a capture
 	V1.45: Migrated this script to new V3 API.
 	V1.44: Improved demo signals builder performance
 	V1.43: Add light packet capabilities
@@ -178,6 +179,13 @@ function on_decode_signals(resume)
         if ((trs.value == start_bit_value) && (trs.sample_index >= cursor)) //found!
         {
           cursor = trs.sample_index;
+          state_machine++;
+        }
+        break;
+      case 1:
+        //wait until we have enough samples for the start bit
+        if (ScanaStudio.get_available_samples(channel) > (cursor + samples_per_bit))
+        {
           //Add start bit item
           ScanaStudio.dec_item_new( channel,
                                     cursor + margin,
@@ -198,8 +206,7 @@ function on_decode_signals(resume)
           transfer_value = 0;
           state_machine++;
         }
-        break;
-      case 1:
+      case 2:
         //Wait until there is enough samples to capture a whole word
         if (ScanaStudio.get_available_samples(channel) > (cursor + (samples_per_bit * (nbits + 3))))
         {
