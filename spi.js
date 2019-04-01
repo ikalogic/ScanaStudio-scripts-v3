@@ -135,6 +135,11 @@ function on_draw_gui_decoder()
         ScanaStudio.gui_add_ch_selector("ch_io2","IO 2","SPI IO2");
         ScanaStudio.gui_add_ch_selector("ch_io3","IO 3","SPI IO3");
     }
+    else
+    {
+      ScanaStudio.gui_add_hidden_field("ch_io2",0);
+      ScanaStudio.gui_add_hidden_field("ch_io3",0);
+    }
 
     ScanaStudio.gui_add_info_label("IO0 is the MOSI line, IO1 is the MISO line.\n"
                                   +"Decoded multi-io words will appear on CS line.\n"
