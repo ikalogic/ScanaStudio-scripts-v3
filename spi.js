@@ -132,8 +132,8 @@ function on_draw_gui_decoder()
 
     if (ScanaStudio.get_device_channels_count() > 4)
     {
-        ScanaStudio.gui_add_ch_selector("ch_io2","IO 2","SPI IO2");
-        ScanaStudio.gui_add_ch_selector("ch_io3","IO 3","SPI IO3");
+        ScanaStudio.gui_add_ch_selector("ch_io2","IO 2","");
+        ScanaStudio.gui_add_ch_selector("ch_io3","IO 3","");
     }
     else
     {
@@ -846,6 +846,7 @@ function on_build_demo_signals()
 {
   //Use the function below to get the number of samples to be built
   var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
+  var silence_period = (samples_to_build / (125*ScanaStudio.builder_get_sample_rate()));
   var spi_builder = ScanaStudio.BuilderObject;
   var ch_clk = ScanaStudio.gui_get_value("ch_clk");
   var nbits = ScanaStudio.gui_get_value("nbits");
@@ -932,7 +933,7 @@ function on_build_demo_signals()
     }
 
     spi_builder.put_stop();
-    spi_builder.put_silence(1e-3); //1 ms
+    spi_builder.put_silence(silence_period);
 
     if (ScanaStudio.abort_is_requested())
     {
