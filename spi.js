@@ -56,7 +56,7 @@ Highly configurable SPI bus decoder
   ================
     * Add hex view and packet view support
     * Better demo mode for Dual/Quad SPI
-    * Update online documentation about dual/quad SPI
+    * Update online documentation about dual/quad SPI (and also BuilderObject part)
     * Add progress reproting in demo signal builder
   Future evoluations
   ==================
