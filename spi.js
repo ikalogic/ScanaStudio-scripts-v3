@@ -122,14 +122,11 @@ function on_draw_gui_decoder()
     ScanaStudio.gui_add_new_tab("multi_io", "Dual IO",false);
   }
 
-    ScanaStudio.gui_add_combo_box( "multi_io_mode", "Multiple IO mode" );
-  		ScanaStudio.gui_add_item_to_combo_box( "None, regular MISO/MOSI based SPI", true );
-  		ScanaStudio.gui_add_item_to_combo_box( "Dual IO" );
-      if (ScanaStudio.get_device_channels_count() > 4)
-      {
-          ScanaStudio.gui_add_item_to_combo_box( "Quad IO" );
-      }
-
+    ScanaStudio.gui_add_check_box("dual_io","Decode Dual IO SPI",false);
+    if (ScanaStudio.get_device_channels_count() > 4)
+    {
+      ScanaStudio.gui_add_check_box("quad_io","Decode Quad IO SPI",false);
+    }
     if (ScanaStudio.get_device_channels_count() > 4)
     {
         ScanaStudio.gui_add_ch_selector("ch_io2","IO 2","");
@@ -141,8 +138,9 @@ function on_draw_gui_decoder()
       ScanaStudio.gui_add_hidden_field("ch_io3",0);
     }
 
-    ScanaStudio.gui_add_info_label("IO0 is the MOSI line, IO1 is the MISO line.\n"
-                                  +"Decoded multi-io words will appear on CS line.\n"
+    ScanaStudio.gui_add_info_label("For dual IO, IO0 is the MOSI line, IO1 is the MISO line.\n"
+                                  +"Decoded DUAL IO words will appear on CLK line.\n"
+                                  +"Decoded QUAD IO words will appear on CS line.\n"
                                   +"Regular MOSI/MISO words will still appear on MOSI/MISO channels."
                                   );
   ScanaStudio.gui_end_tab();
@@ -155,20 +153,22 @@ var state_machine
 var trs_cs,trs_mosi,trs_miso,trs_clk;
 var trs_io2,trs_io3;
 var cs_start_sample,cs_end_sample;
-var data_mosi,data_miso,data_multi_io; //decoded data word
+var data_mosi,data_miso;
+var data_dual, data_quad; //decoded data word
 var miso_bit,mosi_bit; //bit value
 var io2_bit, io3_bit;
 var clk_active_edge;
 var word_start_sample,word_end_sample;
-var word_start_sample_mio,word_end_sample_mio; //multi_io version
-var bit_counter,bit_counter_multi_io;
+var word_start_sample_dual,word_end_sample_dual; //multi_io version
+var word_start_sample_quad,word_end_sample_quad;
+var bit_counter,bit_counter_dual,bit_counter_quad;
 var clock_sample_points = [];
 var frame_counter;
 var drw;
 // Gui variables
 var ch_mosi,ch_miso,ch_clk,ch_cs,bit_order;
 var format_hex,format_ascii,format_dec,format_bin;
-var cpol,cpha,nbits,cspol,opt,multi_io_mode,ch_io2,ch_io3;
+var cpol,cpha,nbits,cspol,opt,ch_io2,ch_io3;
 var configuraiton_valid;
 
 function on_decode_signals(resume)
@@ -200,7 +200,8 @@ function on_decode_signals(resume)
       nbits = ScanaStudio.gui_get_value("nbits")+2;
       cspol = ScanaStudio.gui_get_value("cspol");
       opt = ScanaStudio.gui_get_value("opt");
-      multi_io_mode = Number(ScanaStudio.gui_get_value("multi_io_mode"));
+      dual_io = ScanaStudio.gui_get_value("dual_io");
+      quad_io = ScanaStudio.gui_get_value("quad_io");
 
       //Do some sanity checks
       if (ch_clk == ch_cs)
@@ -232,7 +233,7 @@ function on_decode_signals(resume)
       ScanaStudio.trs_reset(ch_mosi);
       ScanaStudio.trs_reset(ch_miso);
       ScanaStudio.trs_reset(ch_clk);
-      if (multi_io_mode == 2)
+      if (quad_io)
       {
           ScanaStudio.trs_reset(ch_io2);
           ScanaStudio.trs_reset(ch_io3);
@@ -311,7 +312,7 @@ function on_decode_signals(resume)
             trs_miso = ScanaStudio.trs_get_before(ch_miso,cs_start_sample);
             miso_bit = trs_miso.value;
           }
-          if (multi_io_mode == 2)
+          if (quad_io)
           {
             trs_io2 = ScanaStudio.trs_get_before(ch_io2,cs_start_sample);
             io2_bit = trs_io2.value;
@@ -321,8 +322,8 @@ function on_decode_signals(resume)
           trs_clk = ScanaStudio.trs_get_before(ch_clk,cs_start_sample);
 
           //Reset data
-          data_multi_io = data_miso = data_mosi = 0;
-          bit_counter_multi_io = bit_counter = 0;
+          data_dual = data_quad = data_miso = data_mosi = 0;
+          bit_counter_dual = bit_counter_quad = bit_counter = 0;
           frame_counter++;
           clock_sample_points = []; //clear array
           //goto next state
@@ -390,7 +391,7 @@ function on_decode_signals(resume)
         }
         break;
       case 5:  //capture IO2 for Quad SPI mode
-        if (multi_io_mode != 2)
+        if (!quad_io)
         {
           state_machine += 2; //Skip
           break;
@@ -425,32 +426,30 @@ function on_decode_signals(resume)
         {
           data_mosi = (data_mosi*2) + mosi_bit;
           data_miso = (data_miso*2) + miso_bit;
-          if (multi_io_mode == 1)
+          if (dual_io)
           {
-              data_multi_io = (data_multi_io*4) + (miso_bit*2) + mosi_bit;
+              data_dual = (data_dual*4) + (miso_bit*2) + mosi_bit;
           }
-          else if (multi_io_mode == 2)
+          if (quad_io)
           {
-              data_multi_io = (data_multi_io*16) + (io3_bit*8) + (io2_bit*4) + (miso_bit*2) + mosi_bit;
+              data_quad = (data_quad*16) + (io3_bit*8) + (io2_bit*4) + (miso_bit*2) + mosi_bit;
           }
-
         }
         else
         {
           data_mosi += Math.pow(2, bit_counter) * mosi_bit;
           data_miso += Math.pow(2, bit_counter) * miso_bit;
-          if (multi_io_mode == 1)
+          if (dual_io)
           {
-              data_multi_io += (Math.pow(2, bit_counter_multi_io) * mosi_bit) + (Math.pow(2, bit_counter_multi_io+1) * miso_bit) ;
+              data_dual += (Math.pow(2, bit_counter_dual) * mosi_bit) + (Math.pow(2, bit_counter_dual+1) * miso_bit) ;
           }
-          else if (multi_io_mode == 2)
+          if (quad_io)
           {
-            data_multi_io += (Math.pow(2, bit_counter_multi_io) * mosi_bit)
-                           + (Math.pow(2, bit_counter_multi_io+1) * miso_bit)
-                           + (Math.pow(2, bit_counter_multi_io+2) * io2_bit)
-                           + (Math.pow(2, bit_counter_multi_io+3) * io3_bit) ;
+            data_quad += (Math.pow(2, bit_counter_quad) * mosi_bit)
+                           + (Math.pow(2, bit_counter_quad+1) * miso_bit)
+                           + (Math.pow(2, bit_counter_quad+2) * io2_bit)
+                           + (Math.pow(2, bit_counter_quad+3) * io3_bit) ;
           }
-
         }
 
         if (bit_counter == 0)
@@ -458,9 +457,14 @@ function on_decode_signals(resume)
           word_start_sample = trs_clk.sample_index;
         }
 
-        if (bit_counter_multi_io == 0)
+        if (bit_counter_dual == 0)
         {
-          word_start_sample_mio = trs_clk.sample_index;
+          word_start_sample_dual = trs_clk.sample_index;
+        }
+
+        if (bit_counter_quad == 0)
+        {
+          word_start_sample_quad = trs_clk.sample_index;
         }
 
         if (++bit_counter >= nbits)
@@ -500,28 +504,33 @@ function on_decode_signals(resume)
           data_miso = data_mosi = 0;
         }
 
-        if (multi_io_mode > 0)
+        if (dual_io)
         {
-            bit_counter_multi_io += multi_io_mode*2;
-            if (bit_counter_multi_io >= nbits)
+            bit_counter_dual += 2;
+            if (bit_counter_dual >= nbits)
             {
-              word_end_sample_mio = trs_clk.sample_index;
-              margin = 0.5 * (word_end_sample_mio - word_start_sample_mio) / (nbits/( multi_io_mode*2));
-              //ScanaStudio.console_info_msg("Build word DONE, word_start_sample="+word_start_sample+", word_end_sample="+word_end_sample);
+              word_end_sample_dual = trs_clk.sample_index;
+              margin = 0.5 * (word_end_sample_dual - word_start_sample_dual) / (nbits/(2));
               //add decoder item
-              ScanaStudio.dec_item_new(ch_cs,word_start_sample_mio-margin,word_end_sample_mio+margin);
+              ScanaStudio.dec_item_new(ch_clk,word_start_sample_dual-margin,word_end_sample_dual+margin);
+              add_spi_content_to_dec_item("DUAL IO: ",data_dual);
+              bit_counter_dual = 0;
+              data_dual = 0;
+            }
+        }
 
-              if (multi_io_mode == 1)
-              {
-                  add_spi_content_to_dec_item("DUAL IO: ",data_multi_io);
-              }
-              else if (multi_io_mode == 2){
-                add_spi_content_to_dec_item("QUAD IO: ",data_multi_io);
-              }
-
-
-              bit_counter_multi_io = 0;
-              data_multi_io = 0;
+        if (quad_io)
+        {
+            bit_counter_quad += 4;
+            if (bit_counter_quad >= nbits)
+            {
+              word_end_sample_quad = trs_clk.sample_index;
+              margin = 0.5 * (word_end_sample_quad - word_start_sample_quad) / (nbits/(4));
+              //add decoder item
+              ScanaStudio.dec_item_new(ch_cs,word_start_sample_quad-margin,word_end_sample_quad+margin);
+              add_spi_content_to_dec_item("QUAD IO: ",data_quad);
+              bit_counter_quad = 0;
+              data_quad = 0;
             }
         }
 
@@ -850,7 +859,8 @@ function on_build_demo_signals()
   var spi_builder = ScanaStudio.BuilderObject;
   var ch_clk = ScanaStudio.gui_get_value("ch_clk");
   var nbits = ScanaStudio.gui_get_value("nbits");
-  multi_io_mode = ScanaStudio.gui_get_value("multi_io_mode");
+  var quad_io = ScanaStudio.gui_get_value("quad_io");
+  var dual_io = ScanaStudio.gui_get_value("dual_io");
   spi_builder.config(
     ScanaStudio.gui_get_value("ch_mosi"),
     ScanaStudio.gui_get_value("ch_miso"),
@@ -869,14 +879,14 @@ function on_build_demo_signals()
     ScanaStudio.gui_get_value("ch_miso"),
     ScanaStudio.gui_get_value("ch_io2"),
     ScanaStudio.gui_get_value("ch_io3"),
-    ScanaStudio.gui_get_value("multi_io_mode")
+    ScanaStudio.gui_get_value("quad_io")
   );
 
   var random_mosi, random_miso, random_size, w;
   spi_builder.put_silence(10e-6);
 
   //Test dual/quad IO
-  if (multi_io_mode == 1)
+  if (dual_io)
   {
     spi_builder.put_start();
     spi_builder.put_word(0xBB,0);  //Fast read dual IO
@@ -894,7 +904,8 @@ function on_build_demo_signals()
     spi_builder.put_stop();
     spi_builder.put_silence(1e-6);
   }
-  else if (multi_io_mode == 2)
+
+  if (quad_io)
   {
     spi_builder.put_start();
     spi_builder.put_word(0xEB,0); //Fast read, quad io
@@ -966,7 +977,7 @@ ScanaStudio.BuilderObject = {
     ScanaStudio.builder_add_samples(this.ch_mosi,this.last_mosi,samples_count);
     ScanaStudio.builder_add_samples(this.ch_clk,this.last_clk,samples_count);
     ScanaStudio.builder_add_samples(this.ch_cs,this.last_cs,samples_count);
-    if (this.multi_io_mode == 2)
+    if (this.quad_io)
     {
       ScanaStudio.builder_add_samples(this.ch_io2,this.last_io2,samples_count);
       ScanaStudio.builder_add_samples(this.ch_io3,this.last_io3,samples_count);
@@ -1081,7 +1092,7 @@ ScanaStudio.BuilderObject = {
     ScanaStudio.builder_add_samples(this.ch_miso, b_miso, this.samples_per_half_clock);
     ScanaStudio.builder_add_samples(this.ch_clk, clk, this.samples_per_half_clock);
     ScanaStudio.builder_add_samples(this.ch_cs, cs, this.samples_per_half_clock);
-    if (this.multi_io_mode == 2)
+    if (this.quad_io)
     {
       ScanaStudio.builder_add_samples(this.ch_io2,this.last_io2,this.samples_per_half_clock);
       ScanaStudio.builder_add_samples(this.ch_io3,this.last_io3,this.samples_per_half_clock);
@@ -1097,7 +1108,7 @@ ScanaStudio.BuilderObject = {
     ScanaStudio.builder_add_samples(this.ch_io1, b_io1, this.samples_per_half_clock);
     ScanaStudio.builder_add_samples(this.ch_clk, clk, this.samples_per_half_clock);
     ScanaStudio.builder_add_samples(this.ch_cs, cs, this.samples_per_half_clock);
-    if (this.multi_io_mode == 2)
+    if (this.quad_io)
     {
       ScanaStudio.builder_add_samples(this.ch_io2,this.last_io2,this.samples_per_half_clock);
       ScanaStudio.builder_add_samples(this.ch_io3,this.last_io3,this.samples_per_half_clock);
@@ -1142,12 +1153,12 @@ ScanaStudio.BuilderObject = {
     this.last_cs = (~this.cspol & 0x1);
     //ScanaStudio.console_info_msg("this.last_cs=" + this.last_cs);
   },
-  config_multi_io : function (ch_io0,ch_io1,ch_io2,ch_io3,multi_io_mode)
+  config_multi_io : function (ch_io0,ch_io1,ch_io2,ch_io3,quad_io)
   {
     this.ch_io0 = ch_io0;
     this.ch_io1 = ch_io1;
     this.ch_io2 = ch_io2;
     this.ch_io3 = ch_io3;
-    this.multi_io_mode = multi_io_mode;
+    this.quad_io = quad_io;
   }
 };

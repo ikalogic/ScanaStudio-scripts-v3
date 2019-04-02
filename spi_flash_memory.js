@@ -34,36 +34,16 @@ function on_draw_gui_decoder()
 
   if (ScanaStudio.get_device_channels_count() > 4)
   {
-      ScanaStudio.gui_add_new_tab("multi_io", "Dual/Quad IO",false);
+      ScanaStudio.gui_add_new_tab("multi_io", "Quad IO",false);
+      ScanaStudio.gui_add_check_box("quad_io","Enable Quad IO SPI",false);
+      ScanaStudio.gui_add_ch_selector("ch_io2","IO 2","");
+      ScanaStudio.gui_add_ch_selector("ch_io3","IO 3","");
+      ScanaStudio.gui_add_info_label("IO0 is the MOSI line, IO1 is the MISO line.\n"
+                                    +"IO2 and IO3 lines need to be configured above.\n");
+    ScanaStudio.gui_end_tab();
   }
-  else
-  {
-    ScanaStudio.gui_add_new_tab("multi_io", "Dual IO",false);
-  }
 
-    ScanaStudio.gui_add_combo_box( "multi_io_mode", "Multiple IO mode" );
-  		ScanaStudio.gui_add_item_to_combo_box( "None, regular MISO/MOSI based SPI", true );
-  		ScanaStudio.gui_add_item_to_combo_box( "Dual IO" );
-      if (ScanaStudio.get_device_channels_count() > 4)
-      {
-          ScanaStudio.gui_add_item_to_combo_box( "Quad IO" );
-      }
 
-    if (ScanaStudio.get_device_channels_count() > 4)
-    {
-        ScanaStudio.gui_add_ch_selector("ch_io2","IO 2","");
-        ScanaStudio.gui_add_ch_selector("ch_io3","IO 3","");
-    }
-    else { //Prevent warnings if device has no enough channels for QUAD SPI
-      ScanaStudio.gui_add_hidden_field("ch_io2",0);
-      ScanaStudio.gui_add_hidden_field("ch_io3",0);
-    }
-
-    ScanaStudio.gui_add_info_label("IO0 is the MOSI line, IO1 is the MISO line.\n"
-                                  +"Decoded multi-io words will appear on CS line.\n"
-                                  +"Regular MOSI/MISO words will still appear on MOSI/MISO channels."
-                                  );
-  ScanaStudio.gui_end_tab();
 
   ScanaStudio.gui_add_new_tab("flash_format_tab","Display format options",false);
   gui_add_format_combo("flash_format_commands","Intruction format");
@@ -81,9 +61,9 @@ function on_draw_gui_decoder()
   ScanaStudio.gui_add_hidden_field("format_ascii","false");
   ScanaStudio.gui_add_hidden_field("format_dec","false");
   ScanaStudio.gui_add_hidden_field("format_bin","false");
-
   ScanaStudio.gui_add_hidden_field("cspol",0);
   ScanaStudio.gui_add_hidden_field("opt",0);
+  ScanaStudio.gui_add_hidden_field("dual_io",1); //Dual IO enabled by default
 }
 
 //GUI helper
@@ -105,17 +85,17 @@ function read_gui_values()
   ch_cs = ScanaStudio.gui_get_value("ch_cs");
   ch_io2 = ScanaStudio.gui_get_value("ch_io2");
   ch_io3 = ScanaStudio.gui_get_value("ch_io3");
-  multi_io_mode = Number(ScanaStudio.gui_get_value("multi_io_mode"));
+  quad_io = ScanaStudio.gui_get_value("quad_io");
   flash_format_commands = ScanaStudio.gui_get_value("flash_format_commands");
   flash_format_data = ScanaStudio.gui_get_value("flash_format_data");
   flash_format_address = ScanaStudio.gui_get_value("flash_format_address");
   nbits = ScanaStudio.gui_get_value("nbits");
 }
 //Constants
-var IO_MOSI = -1;
-var IO_MISO = 0;
-var IO_DUAL = 1;  //Same as GUI value for DUAL mode
-var IO_QUAD = 2;  //Same as GUI value for QUAD mode
+var IO_MOSI = 0;
+var IO_MISO = 1;
+var IO_DUAL = 2;
+var IO_QUAD = 3;
 var NO_PAYLOAD = -1;
 
 //Global variables
@@ -320,7 +300,7 @@ function on_build_demo_signals()
     ScanaStudio.gui_get_value("ch_miso"),
     ScanaStudio.gui_get_value("ch_io2"),
     ScanaStudio.gui_get_value("ch_io3"),
-    ScanaStudio.gui_get_value("multi_io_mode")
+    ScanaStudio.gui_get_value("quad_io")
   );
 
   var random_mosi, random_miso, random_d, random_size, w,instr,p;
@@ -337,7 +317,7 @@ function on_build_demo_signals()
     for (p = 1; p < commands[instr].length; p++)
     {
        //Not supported by device?
-      if (commands[instr][p].io_mode > multi_io_mode)
+      if ((commands[instr][p].io_mode == IO_QUAD) && (!quad_io))
       {
         commands[instr][0].payload_channel = -1; //Ignore any payload for that instruction
         break;
@@ -372,11 +352,11 @@ function on_build_demo_signals()
       {
         random_mosi = Math.floor(Math.random()*(Math.pow(2,nbits)));
         random_miso = Math.floor(Math.random()*(Math.pow(2,nbits)));
-        if (multi_io_mode == IO_QUAD)
+        if (commands[instr][0].payload_mode == IO_QUAD)
         {
           spi_builder.put_word_quad(random_mosi);
         }
-        else if (multi_io_mode == IO_DUAL)
+        else if (commands[instr][0].payload_mode == IO_DUAL)
         {
           spi_builder.put_word_dual(random_mosi);
         }
@@ -559,12 +539,12 @@ function build_commands_db()
   //-------------
 
   transaction = [];
-  transaction.push(new header_t(0x03,"RD","Read Data",ch_miso));
+  transaction.push(new header_t(0x03,"RD","Read Data",ch_miso,IO_MOSI));
   transaction.push(new parameter_t(3,IO_MOSI,"A","3 Address bytes",flash_format_address));
   commands.push(transaction);
 
   transaction = [];
-  transaction.push(new header_t(0x0B,"FRD","Fast Read Data",ch_miso));
+  transaction.push(new header_t(0x0B,"FRD","Fast Read Data",ch_miso,IO_MOSI));
   transaction.push(new parameter_t(3,IO_MOSI,"A","3 Address bytes",flash_format_address));
   transaction.push(new parameter_t(1,IO_MISO,"Dummy","1 Dummy byte",flash_format_data));
   commands.push(transaction);
@@ -572,7 +552,7 @@ function build_commands_db()
   //--------------
 
   transaction = [];
-  transaction.push(new header_t(0x02,"PP","Page Program",ch_mosi));
+  transaction.push(new header_t(0x02,"PP","Page Program",IO_MOSI));
   transaction.push(new parameter_t(3,IO_MOSI,"A","3 Address bytes",flash_format_address));
   commands.push(transaction);
 
@@ -635,7 +615,7 @@ function build_commands_db()
   //----------------
 
   transaction = [];
-  transaction.push(new header_t(0x5A,"RD SFDP","Read SFDP",ch_miso));
+  transaction.push(new header_t(0x5A,"RD SFDP","Read SFDP",IO_MISO));
   transaction.push(new parameter_t(3,IO_MOSI,"A","3 Address bytes",flash_format_address));
   transaction.push(new parameter_t(1,IO_MISO,"Dummy","1 Dummy bytes",flash_format_data));
   commands.push(transaction);
@@ -646,12 +626,12 @@ function build_commands_db()
   commands.push(transaction);
 
   transaction = [];
-  transaction.push(new header_t(0x42,"PSR","Page Security Register",ch_mosi));
+  transaction.push(new header_t(0x42,"PSR","Page Security Register",IO_MOSI));
   transaction.push(new parameter_t(3,IO_MOSI,"A","3 Address bytes",flash_format_address));
   commands.push(transaction);
 
   transaction = [];
-  transaction.push(new header_t(0x48,"RSR","Read security register",ch_miso));
+  transaction.push(new header_t(0x48,"RSR","Read security register",IO_MISO));
   transaction.push(new parameter_t(3,IO_MOSI,"A","3 Address bytes",flash_format_address));
   transaction.push(new parameter_t(1,IO_MISO,"Dummy","1 Dummy byte",flash_format_address));
   commands.push(transaction);
@@ -708,19 +688,19 @@ function build_commands_db()
   //------------------- DUAL/QUAD SPI Instructions
 
   transaction = [];
-  transaction.push(new header_t(0x3B,"FR2O","Fast read dual ouput",ch_cs));
+  transaction.push(new header_t(0x3B,"FR2O","Fast read dual ouput",IO_DUAL));
   transaction.push(new parameter_t(3,IO_MOSI,"A","3 Address bytes",flash_format_address));
   transaction.push(new parameter_t(2,IO_DUAL,"Dummy","2 Dummy bytes",flash_format_data));
   commands.push(transaction);
 
   transaction = [];
-  transaction.push(new header_t(0xBB,"FR2IO","Fast read dual I/O",ch_cs));
+  transaction.push(new header_t(0xBB,"FR2IO","Fast read dual I/O",IO_DUAL));
   transaction.push(new parameter_t(3,IO_DUAL,"A","3 Address bytes",flash_format_address));
   transaction.push(new parameter_t(1,IO_DUAL,"Dummy","1 Dummy byte",flash_format_data));
   commands.push(transaction);
 
   transaction = [];
-  transaction.push(new header_t(0x92,"MD2IO","Manufacturer/Device ID dual I/O",ch_cs));
+  transaction.push(new header_t(0x92,"MD2IO","Manufacturer/Device ID dual I/O",IO_DUAL));
   transaction.push(new parameter_t(3,IO_DUAL,"A","3 Address bytes",flash_format_address));
   transaction.push(new parameter_t(1,IO_DUAL,"Dummy","1 Dummy byte",flash_format_data));
   transaction.push(new parameter_t(1,IO_DUAL,"MFR ID","Manufacturer ID",flash_format_data));
@@ -728,45 +708,62 @@ function build_commands_db()
   commands.push(transaction);
 
   transaction = [];
-  transaction.push(new header_t(0x32,"4IPP","Quad Input Page Program",ch_cs));
+  transaction.push(new header_t(0x32,"4IPP","Quad Input Page Program",IO_QUAD));
   transaction.push(new parameter_t(3,IO_QUAD,"A","3 Address bytes",flash_format_address));
   commands.push(transaction);
 
   transaction = [];
-  transaction.push(new header_t(0x6B,"FR4O","Fast read Quad ouput",ch_cs));
+  transaction.push(new header_t(0x6B,"FR4O","Fast read Quad ouput",IO_QUAD));
   transaction.push(new parameter_t(3,IO_QUAD,"A","3 Address bytes",flash_format_address));
   transaction.push(new parameter_t(4,IO_QUAD,"Dummy","4 Dummy bytes",flash_format_data));
   commands.push(transaction);
 
   transaction = [];
-  transaction.push(new header_t(0x94,"MD4IO","Manufacturer/Device ID quad I/O",ch_cs));
-  transaction.push(new parameter_t(3,IO_DUAL,"A","3 Address bytes",flash_format_address));
-  transaction.push(new parameter_t(3,IO_DUAL,"Dummy","3 Dummy bytes",flash_format_data));
-  transaction.push(new parameter_t(1,IO_DUAL,"MFR ID","Manufacturer ID",flash_format_data));
-  transaction.push(new parameter_t(1,IO_DUAL,"DEV ID","Device ID",flash_format_data));
+  transaction.push(new header_t(0x94,"MD4IO","Manufacturer/Device ID quad I/O",IO_QUAD));
+  transaction.push(new parameter_t(3,IO_QUAD,"A","3 Address bytes",flash_format_address));
+  transaction.push(new parameter_t(3,IO_QUAD,"Dummy","3 Dummy bytes",flash_format_data));
+  transaction.push(new parameter_t(1,IO_QUAD,"MFR ID","Manufacturer ID",flash_format_data));
+  transaction.push(new parameter_t(1,IO_QUAD,"DEV ID","Device ID",flash_format_data));
   commands.push(transaction);
 
   transaction = [];
-  transaction.push(new header_t(0xEB,"FR4IO","Fast read quad I/O",ch_cs));
-  transaction.push(new parameter_t(3,IO_DUAL,"A","3 Address bytes",flash_format_address));
-  transaction.push(new parameter_t(1,IO_DUAL,"Dummy","3 Dummy bytes",flash_format_data));
+  transaction.push(new header_t(0xEB,"FR4IO","Fast read quad I/O",IO_QUAD));
+  transaction.push(new parameter_t(3,IO_QUAD,"A","3 Address bytes",flash_format_address));
+  transaction.push(new parameter_t(1,IO_QUAD,"Dummy","3 Dummy bytes",flash_format_data));
   commands.push(transaction);
 
   transaction = [];
-  transaction.push(new header_t(0x77,"SBW","Set burst wrap",ch_cs));
-  transaction.push(new parameter_t(3,IO_DUAL,"X","3 Dont't care bytes",flash_format_data));
-  transaction.push(new parameter_t(1,IO_DUAL,"Wrap","Wrap bits",flash_format_data));
+  transaction.push(new header_t(0x77,"SBW","Set burst wrap",IO_QUAD));
+  transaction.push(new parameter_t(3,IO_QUAD,"X","3 Dont't care bytes",flash_format_data));
+  transaction.push(new parameter_t(1,IO_QUAD,"Wrap","Wrap bits",flash_format_data));
   commands.push(transaction);
 
 }
 
-function header_t(code,sc,lc,pl)
+function header_t(code,sc,lc,pm)
 {
   this.code = code;
   this.short_caption = sc;
   this.long_caption = lc;
-  this.payload_channel = pl;
+  this.payload_mode = pm;
   this.format = flash_format_commands;
+
+  switch (pm) {
+    case IO_MOSI:
+      this.payload_channel = ch_mosi;
+      break;
+    case IO_MISO:
+      this.payload_channel = ch_miso;
+      break;
+    case IO_DUAL:
+      this.payload_channel = ch_clk;
+      break;
+    case IO_QUAD:
+      this.payload_channel = ch_cs;
+      break;
+    default:
+      break;
+  }
 }
 
 function parameter_t(len,io_mode,sc,lc,fmt)
@@ -784,6 +781,8 @@ function parameter_t(len,io_mode,sc,lc,fmt)
       this.source_channel = ch_miso;
       break;
     case IO_DUAL:
+      this.source_channel = ch_clk;
+      break;
     case IO_QUAD:
       this.source_channel = ch_cs;
       break;
