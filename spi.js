@@ -146,6 +146,39 @@ function on_draw_gui_decoder()
   ScanaStudio.gui_end_tab();
 }
 
+//Evaluate decoder GUI
+function on_eval_gui_decoder()
+{
+
+  spi_ch_list = [];
+  spi_ch_list.push(ScanaStudio.gui_get_value("ch_mosi"));
+  spi_ch_list.push(ScanaStudio.gui_get_value("ch_miso"));
+  spi_ch_list.push(ScanaStudio.gui_get_value("ch_clk"));
+  spi_ch_list.push(ScanaStudio.gui_get_value("ch_cs"));
+  if (ScanaStudio.get_device_channels_count() > 4)
+  {
+      spi_ch_list.push(ScanaStudio.gui_get_value("ch_io2"));
+      spi_ch_list.push(ScanaStudio.gui_get_value("ch_io3"));
+  }
+
+  ch_list = []; //Global
+  var duplicates = false;
+  var i;
+
+  for (i=0; i < spi_ch_list.length; i++)
+  {
+    if (ch_list[spi_ch_list[i]] == spi_ch_list[i])
+    {
+      return "Error: One or more channels are duplicates.";
+    }
+    else
+    {
+      ch_list[spi_ch_list[i]] = spi_ch_list[i];
+    }
+  }
+  return "" //All good.
+}
+
 
 //Global variables
 var sampling_rate;
@@ -169,7 +202,6 @@ var drw;
 var ch_mosi,ch_miso,ch_clk,ch_cs,bit_order;
 var format_hex,format_ascii,format_dec,format_bin;
 var cpol,cpha,nbits,cspol,opt,ch_io2,ch_io3;
-var configuraiton_valid;
 
 function on_decode_signals(resume)
 {
@@ -178,7 +210,6 @@ function on_decode_signals(resume)
   if (!resume) //If resume == false, it's the first call to this function.
   {
       //initialization code
-      configuraiton_valid = true;
       state_machine = 0;
       frame_counter = 0;
       cs_start_sample = 0;
@@ -202,25 +233,6 @@ function on_decode_signals(resume)
       opt = ScanaStudio.gui_get_value("opt");
       dual_io = ScanaStudio.gui_get_value("dual_io");
       quad_io = ScanaStudio.gui_get_value("quad_io");
-
-      //Do some sanity checks
-      if (ch_clk == ch_cs)
-      {
-        ScanaStudio.console_error_msg( "Error in SPI decoder configuration,"
-                                      +"CS and CLK lines must be different");
-        configuraiton_valid = false;
-      }
-      if (ch_mosi == ch_miso)
-      {
-        ScanaStudio.console_error_msg( "Error in SPI decoder configuration,"
-                                      +"MOSI and MISO lines must be different");
-        configuraiton_valid = false;
-      }
-
-      if (!configuraiton_valid)
-      {
-        return;
-      }
 
       //set clock active edge
     	if ((cpol == 0) && (cpha == 0)) clk_active_edge = 1;
