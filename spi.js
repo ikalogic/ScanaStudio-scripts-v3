@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Highly configurable SPI bus decoder
 </DESCRIPTION>
-<VERSION> 1.73 </VERSION>
+<VERSION> 1.74 </VERSION>
 <AUTHOR_NAME>  Vladislav Kosinov, Ibrahim Kamal </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/SPI-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+  V1.74: Added support for GUI evaluation
   V1.73: Added support for Dual/Quad SPI modes
   V1.72: Migrated to new V3 API
   V1.71: Fix bug that caused decodering to fail if CS is ignored.
@@ -123,6 +124,7 @@ function on_draw_gui_decoder()
   }
 
     ScanaStudio.gui_add_check_box("dual_io","Decode Dual IO SPI",false);
+
     if (ScanaStudio.get_device_channels_count() > 4)
     {
       ScanaStudio.gui_add_check_box("quad_io","Decode Quad IO SPI",false);
@@ -150,6 +152,8 @@ function on_draw_gui_decoder()
 function on_eval_gui_decoder()
 {
 
+  var instance_name = "SPI [";
+
   spi_ch_list = [];
   spi_ch_list.push(ScanaStudio.gui_get_value("ch_mosi"));
   spi_ch_list.push(ScanaStudio.gui_get_value("ch_miso"));
@@ -175,8 +179,18 @@ function on_eval_gui_decoder()
     {
       ch_list[spi_ch_list[i]] = spi_ch_list[i];
     }
+    instance_name += spi_ch_list[i].toString();
+    if (i < (spi_ch_list.length-1))
+    {
+      instance_name += ",";
+    }
   }
-  return "" //All good.
+
+  instance_name += "]";
+
+  ScanaStudio.set_script_instance_name(instance_name);
+
+  return ""; //All good.
 }
 
 
@@ -666,7 +680,7 @@ function on_draw_gui_trigger()
     ScanaStudio.gui_add_item_to_combo_box("MISO",false);
     ScanaStudio.gui_add_text_input("trig_byte","Trigger word value","0x0");
     ScanaStudio.gui_add_text_input("byte_pos","Word position in the frame","0")
-    ScanaStudio.gui_add_info_label("All text fields can accept decimal value (65), "
+    ScanaStudio.gui_add_info_label("All fields can accept decimal value (65), "
         + "hex value (0x41) or ASCII character ('A'). First word position in a frame is 0.\n"
         + "The exact position of the word must be known and specified."
       );
@@ -674,9 +688,28 @@ function on_draw_gui_trigger()
   ScanaStudio.gui_end_tab();
 }
 
+//Evaluate trigger GUI
+function on_eval_gui_trigger()
+{
+  if(ScanaStudio.gui_get_value("byte_pos") > 32)
+  {
+    return "Byte position need to be smaller than 32";
+  }
+  if (    (ScanaStudio.gui_get_value("trig_byte").search("'") >= 0)
+      &&  (ScanaStudio.gui_get_value("trig_byte").length  > 3))
+  {
+    return "Invalid trigger word, please type only one character, e.g. 'A'";
+  }
+  if (ScanaStudio.gui_get_value("trig_byte").search("\"") >= 0)
+  {
+    return "Trigger word field contains invalid characters";
+  }
+  return "" //All good.
+}
+
 function on_build_trigger()
 {
-  ScanaStudio.console_info_msg("on_build_trigger");
+  //ScanaStudio.console_info_msg("on_build_trigger");
   // read trigger GUI values
   var alt_any_byte = ScanaStudio.gui_get_value("alt_any_byte");
   var alt_specific_byte = ScanaStudio.gui_get_value("alt_specific_byte");
@@ -726,7 +759,6 @@ function on_build_trigger()
 
   spi_trig_steps.push(new SpiTrigStep(spi_step.mosi, spi_step.miso, spi_step.clk, spi_step.cs));
 
-  //todo: spi_step.cs = cspol.toString();
   if (cspol == 0)			// cspol: 0 - cs active low, 1 - cs active high
   {
     spi_step.cs = "0"; //low level
@@ -759,9 +791,9 @@ function on_build_trigger()
 		}
 	}
 
-  ScanaStudio.console_info_msg("alt_any_byte=" + alt_any_byte);
-  ScanaStudio.console_info_msg("alt_specific_byte=" + alt_specific_byte);
-  ScanaStudio.console_warning_msg("trig_channel=" + trig_channel);
+  //ScanaStudio.console_info_msg("alt_any_byte=" + alt_any_byte);
+  //ScanaStudio.console_info_msg("alt_specific_byte=" + alt_specific_byte);
+  //ScanaStudio.console_warning_msg("trig_channel=" + trig_channel);
   if (alt_any_byte)
   {
     spi_step.mosi = "X";
@@ -770,7 +802,7 @@ function on_build_trigger()
   	{
   		for (i = 0; i < nbits; i++)	// nbits: 1 - 128 bits in data byte
   		{
-        ScanaStudio.console_info_msg("pusing a new trig step");
+        //ScanaStudio.console_info_msg("pusing a new trig step");
   			spi_trig_steps.push(new SpiTrigStep(spi_step.mosi, spi_step.miso, spi_step.clk, spi_step.cs));
   		}
   	}
@@ -822,14 +854,14 @@ function on_build_trigger()
     }
   }
 
-  ScanaStudio.console_info_msg("spi_trig_steps.length = " + spi_trig_steps.length);
+  //ScanaStudio.console_info_msg("spi_trig_steps.length = " + spi_trig_steps.length);
 
 	for (i = 0; i < spi_trig_steps.length; i++)
 	{
 		ScanaStudio.flexitrig_append(trig_build_step(spi_trig_steps[i]), -1, -1);
 	}
 
-  ScanaStudio.flexitrig_print_steps();
+  //ScanaStudio.flexitrig_print_steps();
 
 	// flexitrig_print_steps();
 }
