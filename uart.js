@@ -4,12 +4,14 @@
 <DESCRIPTION>
 Serial UART (Universal asynchronous receiver/transmitter) Protocol Decoder.
 </DESCRIPTION>
-<VERSION> 1.46 </VERSION>
+<VERSION> 1.47 </VERSION>
 <AUTHOR_NAME>	Vladislav Kosinov, Ibrahim Kamal, Nicolas Bastit </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
+<HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/ </HELP_URL>
 <COPYRIGHT> Copyright 2019 Ikalogic SAS </COPYRIGHT>
 <LICENSE>	This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+  V1.47: Fixed freez condition, added trigger, added GUI validation.
   V1.46: Fixed a bug that caused start bit to be drawn at the end of a capture
 	V1.45: Migrated this script to new V3 API.
 	V1.44: Improved demo signals builder performance
@@ -41,10 +43,11 @@ Serial UART (Universal asynchronous receiver/transmitter) Protocol Decoder.
   Work in progress
   ================
   still Todo:
+    * Trigger sequences
+    * Write documentation
     * Hex View
     * Packet View
     * Sampling points
-    * Trigger sequences
 */
 
 
@@ -55,14 +58,14 @@ function on_draw_gui_decoder()
   ScanaStudio.gui_add_ch_selector("ch","Channel to decodee","UART");
   ScanaStudio.gui_add_baud_selector("baud","BAUD rate",9600);
 
-  ScanaStudio.gui_add_new_tab("format_tab","Output format",true);
+  ScanaStudio.gui_add_new_tab("Output format",true);
     ScanaStudio.gui_add_check_box("format_hex","HEX",true);
     ScanaStudio.gui_add_check_box("format_ascii","ASCII",true);
     ScanaStudio.gui_add_check_box("format_dec","Unsigned decimal",false);
     ScanaStudio.gui_add_check_box("format_bin","Binary",false);
   ScanaStudio.gui_end_tab();
 
-  ScanaStudio.gui_add_new_tab("advanced_tab","Advanced options",false);
+  ScanaStudio.gui_add_new_tab("Advanced options",false);
     ScanaStudio.gui_add_combo_box("nbits","Bits per transfer");
     for (i = 5; i < 17; i++)
     {
@@ -96,6 +99,31 @@ function on_draw_gui_decoder()
   ScanaStudio.gui_end_tab();
 }
 
+//Evaluate decoder GUI
+function on_eval_gui_decoder()
+{
+  ScanaStudio.set_script_instance_name("UART on CH"+(ScanaStudio.gui_get_value("ch")+1).toString());
+  return "" //All good.
+}
+
+function reload_dec_gui_values()
+{
+  // read GUI values using ScanaStudio.gui_get_value("ID");
+  channel =  Number(ScanaStudio.gui_get_value("ch"));
+  baud = Number(ScanaStudio.gui_get_value("baud"));
+  //nbits's 0 value corresponds to 5 bits per transfer
+  nbits = Number(ScanaStudio.gui_get_value("nbits")) + 5;
+  parity = Number(ScanaStudio.gui_get_value("parity"));
+  //Stop value is 1, 1.5 or 2)
+  stop = (Number(ScanaStudio.gui_get_value("stop"))*0.5) + 1;
+  order =  Number(ScanaStudio.gui_get_value("order"));
+  invert = Number(ScanaStudio.gui_get_value("invert"));
+  format_hex = Number(ScanaStudio.gui_get_value("format_hex"));
+  format_dec = Number(ScanaStudio.gui_get_value("format_dec"));
+  format_ascii = Number(ScanaStudio.gui_get_value("format_ascii"));
+  format_bin = Number(ScanaStudio.gui_get_value("format_bin"));
+}
+
 //Global variables
 //GUI values
 var channel,baud,nbits,parity,stop,order,invert;
@@ -124,22 +152,8 @@ function on_decode_signals(resume)
     state_machine = 0;
     cursor = 1;
     sampling_rate = ScanaStudio.get_capture_sample_rate();
-    // read GUI values using ScanaStudio.gui_get_value("ID");
-    channel =  Number(ScanaStudio.gui_get_value("ch"));
-    baud = Number(ScanaStudio.gui_get_value("baud"));
-    //nbits's 0 value corresponds to 5 bits per transfer
-    nbits = Number(ScanaStudio.gui_get_value("nbits")) + 5;
-    parity = Number(ScanaStudio.gui_get_value("parity"));
-    //Stop value is 1, 1.5 or 2)
-    stop = (Number(ScanaStudio.gui_get_value("stop"))*0.5) + 1;
-    order =  Number(ScanaStudio.gui_get_value("order"));
-    invert = Number(ScanaStudio.gui_get_value("invert"));
-    format_hex = Number(ScanaStudio.gui_get_value("format_hex"));
-    format_dec = Number(ScanaStudio.gui_get_value("format_dec"));
-    format_ascii = Number(ScanaStudio.gui_get_value("format_ascii"));
-    format_bin = Number(ScanaStudio.gui_get_value("format_bin"));
+    reload_dec_gui_values();
 
-    ScanaStudio.console_info_msg("********* UART decoder init on ch " + channel + "/" + parity);
     //Reset iterator
     ScanaStudio.trs_reset(channel);
 
@@ -160,7 +174,7 @@ function on_decode_signals(resume)
     }
 
     samples_per_bit =  Math.floor(sampling_rate / baud);
-    ScanaStudio.console_info_msg("samples_per_bit = " + samples_per_bit);
+    //ScanaStudio.console_info_msg("samples_per_bit = " + samples_per_bit);
     //Margin between decoder items
     margin = Math.floor(samples_per_bit / 20) + 1;
   }
@@ -171,7 +185,7 @@ function on_decode_signals(resume)
     {
       break;
     }
-
+    //ScanaStudio.console_info_msg("state_machine = " + state_machine);
     switch (state_machine)
     {
       case 0: //Search for next start bit's edge
@@ -296,6 +310,14 @@ function on_decode_signals(resume)
       default:
         state_machine = 0;
     }
+
+    //if we reach this point, it means there is no enough data to continue
+    //(even if we may have not reached the last transition)
+    //there is no sense to continue decoding.
+    if (state_machine == 2)
+    {
+      break;
+    }
   }
 }
 
@@ -371,11 +393,256 @@ function pad(num_str, size) {
     return num_str;
 }
 
+//Trigger sequence GUI
+function on_draw_gui_trigger()
+{
+  /*ScanaStudio.gui_add_new_selectable_containers_group("trig_alt","Select trigger type");
+    ScanaStudio.gui_add_new_container("Trigger on any valid frame",true);
+      ScanaStudio.gui_add_info_label("Trigger on any UART Frame. In other words,"+
+      "this alternative will trigger on any start bit");
+    ScanaStudio.gui_end_container();
+    ScanaStudio.gui_add_new_container("Trigger on specific word",false);
+      ScanaStudio.gui_add_info_label("Type decimal value (65), Hex value (0x41) or ASCII code ('A')");
+      ScanaStudio.gui_add_text_input("trig_byte","Trigger word","");
+    ScanaStudio.gui_end_container();
+    ScanaStudio.gui_add_new_container("Trigger on a character string",false);
+      ScanaStudio.gui_add_info_label("Type a character string to be used for trigger. E.g.: Hello World");
+      ScanaStudio.gui_add_text_input("trig_phrase","Trigger phrase","");
+    ScanaStudio.gui_end_container();
+  ScanaStudio.gui_end_selectable_containers_group();*/
+
+  ScanaStudio.gui_add_hidden_field("trig_alt",1);
+  ScanaStudio.gui_add_info_label("Type decimal value (65), Hex value (0x41) or ASCII code ('A')");
+  ScanaStudio.gui_add_text_input("trig_byte","Trigger word","");
+
+}
+
+//Evaluate trigger GUI
+function on_eval_gui_trigger()
+{
+  //TODO ...
+  return "" //All good.
+}
+
+function on_build_trigger()
+{
+  reload_dec_gui_values();
+  trig_alt = ScanaStudio.gui_get_value("trig_alt");
+  trig_byte = ScanaStudio.gui_get_value("trig_byte");
+  trig_phrase = ScanaStudio.gui_get_value("trig_phrase");
+
+  var c = 0;
+	var first_byte = true;
+	var total_size = 0;
+
+	if (trig_byte.charAt(0) == "'")
+	{
+		trig_byte = trig_byte.charCodeAt(1);
+	}
+	else
+	{
+		trig_byte = Number(trig_byte);
+	}
+
+	if (trig_alt == 0) //Trig on any byte
+	{
+		step = build_start_bit_step();
+    ScanaStudio.flexitrig_append(step,-1, -1); 	// Start edge
+	}
+	else if (trig_alt == 1) // trig on byte
+	{
+		build_trig_byte(trig_byte,true)
+	}
+	else //trig on phrase
+	{
+		for (c = 0; c < trig_phrase.length; c++)
+		{
+			if (c == 0) first_byte = true;
+			else first_byte = false;
+			total_size += build_trig_byte(trig_phrase.charCodeAt(c),first_byte);
+		}
+
+		if (total_size > 63)
+		{
+			ScanaStudio.console_error_msg("Trigger phrase too large, please use less characters.");
+		}
+	}
+
+  ScanaStudio.flexitrig_print_steps();
+}
+
+/*
+*/
+function build_trig_byte (new_byte, first)
+{
+	var lvl = [];
+	var i;
+	var total_steps = 0;
+	var b;
+	var par;
+	var step;
+	var bit_time = 1/baud;	// [s]
+	var bt_max = bit_time * 1.05;	// Allow 5% margin on bit time <-- this may be configurable later.
+	var bt_min = bit_time * 0.95;
+
+	trig_bit_sequence = [];
+
+	if (bt_max == bt_min)
+	{
+		if (bt_min > 0) bt_min--;
+		else bt_max++;
+	}
+
+	switch (invert)	 // First, build trigger bit sequence
+	{
+		case 0:
+			par = 0;
+			lvl[1] = 1;
+			lvl[0] = 0;
+			trig_bit_sequence[0] = 0;
+		break;
+
+		case 1:
+			par = 1;
+			lvl[1] = 0;
+			lvl[0] = 1;
+			trig_bit_sequence[0] = 1;
+		break;
+
+		case 2:
+			par = 1;
+			lvl[1] = 0;
+			lvl[0] = 1;
+			trig_bit_sequence[0] = 0;
+		break;
+	}
+
+	for (i = 0; i < nbits; i++)
+	{
+		if (order == 0) 	// LSB first
+		{
+			trig_bit_sequence.push(lvl[((new_byte >> i) & 0x1)]);
+		}
+		else
+		{
+			trig_bit_sequence.push(lvl[((new_byte >> nbits - i - 1) & 0x1)]);
+		}
+
+		par = par ^ lvl[((new_byte >> i) & 0x1)];
+	}
+
+	if (parity > 0)
+	{
+		switch(parity) //to be tested!
+		{
+			case 1: par = par ^ 1; break;
+			case 2: par = par ^ 0; break;
+		}
+
+		trig_bit_sequence.push(par);
+	}
+
+	trig_bit_sequence.push((~trig_bit_sequence[0]) & 0x1);	// add stop bit
+
+	step = build_step(0);	// Start bit
+
+	if (first) 	// For the very first byte, ignore previous stop byte
+	{
+		ScanaStudio.flexitrig_append(step, -1, -1); 	// Start edge
+	}
+	else
+	{
+		ScanaStudio.flexitrig_append(step, bt_min*stop, -1); 	// Start edge have to be at least "n stop bits" way from the last transition.
+	}
+
+	var last_lvl = trig_bit_sequence[0];
+	var last_index = 0;
+
+	for (i = 1; i < trig_bit_sequence.length; i++)
+	{
+		if (trig_bit_sequence[i] != last_lvl)
+		{
+			last_lvl = trig_bit_sequence[i];
+			step = build_step(i);
+			ScanaStudio.flexitrig_append(step,bt_min*(i-last_index),bt_max*(i-last_index));
+			last_index = i;
+			total_steps ++;
+		}
+	}
+
+	return total_steps;
+}
+
+
+/*
+*/
+function build_step (step_index)
+{
+	var step = "";
+	var i;
+	var step_ch_desc;
+
+	if (trig_bit_sequence[step_index] == 0)
+	{
+		step_ch_desc = "F";
+	}
+	else
+	{
+		step_ch_desc = "R";
+	}
+
+	for (i = 0; i < ScanaStudio.get_device_channels_count(); i++)
+	{
+		if (i == channel)
+		{
+			step = step_ch_desc + step;
+		}
+		else
+		{
+			step = "X" + step;
+		}
+	}
+
+	return step;
+}
+
+
+/*
+*/
+function build_start_bit_step()
+{
+	var step = "";
+	var start_bit_desc;
+
+	switch (invert)
+	{
+		case 0:
+		case 2: start_bit_desc = "F"; break;
+		case 1: start_bit_desc = "R"; break;
+	}
+
+	for (var i = 0; i < ScanaStudio.get_device_channels_count(); i++)
+	{
+		if (i == channel)
+		{
+			step = start_bit_desc + step;
+		}
+		else
+		{
+			step = "X" + step;
+		}
+	}
+
+	return step;
+}
+
 //Function called to generate demo siganls (when no physical device is attached)
 function on_build_demo_signals()
 {
   var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
+  var silence_period_samples = 1000 + (samples_to_build / 125);
   var uart_builder = ScanaStudio.BuilderObject;
+  reload_dec_gui_values();
   uart_builder.config(
     Number(ScanaStudio.gui_get_value("ch")),
     Number(ScanaStudio.gui_get_value("baud")),
@@ -388,11 +655,22 @@ function on_build_demo_signals()
   )
 
   uart_builder.put_silence(10);
-  uart_builder.put_c(0xAA);
-  uart_builder.put_silence(10);
-  uart_builder.put_c(0x55);
-  uart_builder.put_silence(10);
   uart_builder.put_str("Hello world, this is a test!");
+  counter = 0;
+  while(ScanaStudio.builder_get_samples_acc(channel) < samples_to_build)
+  {
+    random_size = Math.floor(Math.random()*10) + 1;
+    for (w = 0; w < random_size; w++)
+    {
+      uart_builder.put_c(counter);
+      counter++;
+      if (ScanaStudio.builder_get_samples_acc(channel) >= samples_to_build)
+      {
+        break;
+      }
+    }
+    uart_builder.put_silence_samples(silence_period_samples);
+  }
 }
 
 //Builder object that can be shared to other scripts
@@ -491,6 +769,11 @@ ScanaStudio.BuilderObject = {
   put_silence : function(characters)
   {
     ScanaStudio.builder_add_samples(this.channel, this.idle_level, this.samples_per_bit*characters);
+  },
+
+  put_silence_samples : function(samples)
+  {
+    ScanaStudio.builder_add_samples(this.channel, this.idle_level, samples);
   },
 
   config : function(channel,baud,nbits,parity,stop,order,invert,sample_rate)

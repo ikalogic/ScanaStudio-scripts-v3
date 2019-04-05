@@ -46,29 +46,34 @@ function on_draw_gui_signal_builder()
   ScanaStudio.get_device_n
   //Define decoder configuration GUI
   ScanaStudio.gui_add_ch_selector("channel","Target channel","FM");
-  ScanaStudio.gui_add_new_tab("option_simple","Fixed frequency",true)
-    ScanaStudio.gui_add_engineering_form_input_box("simple_freq_val","Frequency",min_mod_f,max_car_f,def_car_f,"Hz");
-    ScanaStudio.gui_add_info_label("Minimum: " + ScanaStudio.engineering_notation(min_mod_f,3) + "Hz\n"
-                                  +"Maximum: " + ScanaStudio.engineering_notation(max_car_f,3) + "Hz"
-                                  );
-  ScanaStudio.gui_end_tab();
-  ScanaStudio.gui_add_new_tab("option_modulation","Modulated frequency",false)
-    ScanaStudio.gui_add_combo_box("mod_type","Modulation type");
-      ScanaStudio.gui_add_item_to_combo_box("Sine",true);
-      ScanaStudio.gui_add_item_to_combo_box("Triangle",false);
-      ScanaStudio.gui_add_item_to_combo_box("SawTooth",false);
-      //ScanaStudio.gui_add_item_to_combo_box("Square",false); //TODO
-      //ScanaStudio.gui_add_item_to_combo_box("BFSK",false);  //TODO
-    ScanaStudio.gui_add_engineering_form_input_box("f_mod","Modulation frequency",min_mod_f,max_mod_f,def_mod_f,"Hz");
-    ScanaStudio.gui_add_engineering_form_input_box("ph_mod","Modulation phase",0,360,"0","DEG(°)");
-    ScanaStudio.gui_add_engineering_form_input_box("f_car_min","Carrier minimum (lower) frequency",min_mod_f,max_car_f,max_mod_f,"Hz");
-    ScanaStudio.gui_add_engineering_form_input_box("f_car_max","Carrier minimum (lower) frequency",min_mod_f,max_car_f,max_car_f,"Hz");
-    ScanaStudio.gui_add_info_label("Modulation frequency range:" + ScanaStudio.engineering_notation(min_mod_f,3) + "Hz to "
-                                  + ScanaStudio.engineering_notation(max_mod_f,3) + "Hz\n"
-                                  +"Max. carrier frequency:" + ScanaStudio.engineering_notation(min_mod_f,3) + "Hz\n"
-                                  + "Min. carrier frequency must be higher than modulation frequency."
-                                  );
-  ScanaStudio.gui_end_tab();
+
+  ScanaStudio.gui_add_new_selectable_containers_group("gen_type_group","Please select type of signals");
+    ScanaStudio.gui_add_new_container("Fixed frequency",true);
+      ScanaStudio.gui_add_engineering_form_input_box("simple_freq_val","Frequency",min_mod_f,max_car_f,def_car_f,"Hz");
+      ScanaStudio.gui_add_info_label("Minimum: " + ScanaStudio.engineering_notation(min_mod_f,3) + "Hz\n"
+                                      +"Maximum: " + ScanaStudio.engineering_notation(max_car_f,3) + "Hz"
+                                      );
+    ScanaStudio.gui_end_container();
+    ScanaStudio.gui_add_new_container("Modulated frequency",false);
+      ScanaStudio.gui_add_combo_box("mod_type","Modulation type");
+        ScanaStudio.gui_add_item_to_combo_box("Sine",true);
+        ScanaStudio.gui_add_item_to_combo_box("Triangle",false);
+        ScanaStudio.gui_add_item_to_combo_box("SawTooth",false);
+        //ScanaStudio.gui_add_item_to_combo_box("Square",false); //TODO
+        //ScanaStudio.gui_add_item_to_combo_box("BFSK",false);  //TODO
+      ScanaStudio.gui_add_engineering_form_input_box("f_mod","Modulation frequency",min_mod_f,max_mod_f,def_mod_f,"Hz");
+      ScanaStudio.gui_add_engineering_form_input_box("ph_mod","Modulation phase",0,360,"0","DEG(°)");
+      ScanaStudio.gui_add_engineering_form_input_box("f_car_min","Carrier minimum (lower) frequency",min_mod_f,max_car_f,max_mod_f,"Hz");
+      ScanaStudio.gui_add_engineering_form_input_box("f_car_max","Carrier minimum (lower) frequency",min_mod_f,max_car_f,max_car_f,"Hz");
+      ScanaStudio.gui_add_info_label("Modulation frequency range:" + ScanaStudio.engineering_notation(min_mod_f,3) + "Hz to "
+                                    + ScanaStudio.engineering_notation(max_mod_f,3) + "Hz\n"
+                                    +"Max. carrier frequency:" + ScanaStudio.engineering_notation(min_mod_f,3) + "Hz\n"
+                                    + "Min. carrier frequency must be higher than modulation frequency."
+                                    );
+    ScanaStudio.gui_end_container();
+  ScanaStudio.gui_end_selectable_containers_group();
+
+
 
   //Add other gui functions...
 }
@@ -93,15 +98,15 @@ function on_build_demo_signals()
 function on_build_signals()
 {
   //Todo: build the signals
-  ScanaStudio.console_info_msg("on_build_signals() called. F="+ScanaStudio.gui_get_value("simple_freq_val"));
+
   //Use the function below to get the number of samples to be built
   var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
   var fm_builder = ScanaStudio.BuilderObject;
-  option_simple = ScanaStudio.gui_get_value("option_simple");
+  gen_type_group = ScanaStudio.gui_get_value("gen_type_group");
+  ScanaStudio.console_info_msg("on_build_signals() called. gen_type_group="+gen_type_group);
   channel = ScanaStudio.gui_get_value("channel");
-  option_modulation = ScanaStudio.gui_get_value("option_modulation");
   mod_type = ScanaStudio.gui_get_value("mod_type");
-  if (option_simple)
+  if (gen_type_group == 0) //Simple fixed frequency.
   {
     //Here we use the sine modulator with a fixed carrier frequency
     //to achieve simple fixed frequency signal building
@@ -146,7 +151,7 @@ function on_build_signals()
   while ((ScanaStudio.builder_get_samples_acc(channel) < samples_to_build)
         && (ScanaStudio.abort_is_requested() == false) )
   {
-    if (option_simple)
+    if (gen_type_group == 0)
     {
       fm_builder.build_cycle_sine();
     }

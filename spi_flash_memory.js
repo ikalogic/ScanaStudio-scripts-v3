@@ -34,7 +34,7 @@ function on_draw_gui_decoder()
 
   if (ScanaStudio.get_device_channels_count() > 4)
   {
-      ScanaStudio.gui_add_new_tab("multi_io", "Quad IO",false);
+      ScanaStudio.gui_add_new_tab("Quad IO",false);
       ScanaStudio.gui_add_check_box("quad_io","Enable Quad IO SPI",false);
       ScanaStudio.gui_add_ch_selector("ch_io2","IO 2","");
       ScanaStudio.gui_add_ch_selector("ch_io3","IO 3","");
@@ -42,10 +42,16 @@ function on_draw_gui_decoder()
                                     +"IO2 and IO3 lines need to be configured above.\n");
     ScanaStudio.gui_end_tab();
   }
+  else
+  {
+    ScanaStudio.gui_add_hidden_field("quad_io",0);
+    ScanaStudio.gui_add_hidden_field("ch_io2",0);
+    ScanaStudio.gui_add_hidden_field("ch_io3",0);
+  }
 
 
 
-  ScanaStudio.gui_add_new_tab("flash_format_tab","Display format options",false);
+  ScanaStudio.gui_add_new_tab("Display format options",false);
   gui_add_format_combo("flash_format_commands","Intruction format");
   gui_add_format_combo("flash_format_address","Address format");
   gui_add_format_combo("flash_format_data","Data format");
