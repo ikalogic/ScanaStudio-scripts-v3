@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Highly configurable SPI bus decoder
 </DESCRIPTION>
-<VERSION> 1.74 </VERSION>
+<VERSION> 1.75 </VERSION>
 <AUTHOR_NAME>  Vladislav Kosinov, Ibrahim Kamal </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/SPI-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+  V1.75: Fixed bug in trigger sequence builder
   V1.74: Added support for GUI evaluation
   V1.73: Added support for Dual/Quad SPI modes
   V1.72: Migrated to new V3 API
@@ -75,7 +76,7 @@ function on_draw_gui_decoder()
 		ScanaStudio.gui_add_item_to_combo_box( "Most significant bit first (MSB)", true );
 		ScanaStudio.gui_add_item_to_combo_box( "Least significant bit first (LSB)" );
 
-  ScanaStudio.gui_add_new_tab("spi_mode_tab","SPI Mode configuration",false);
+  ScanaStudio.gui_add_new_tab("SPI Mode configuration",false);
     ScanaStudio.gui_add_combo_box( "cpol", "Clock polarity" );
   		ScanaStudio.gui_add_item_to_combo_box( "(CPOL = 0) clock LOW when inactive", true );
   		ScanaStudio.gui_add_item_to_combo_box( "(CPOL = 1) Clock HIGH when inactive" );
@@ -84,14 +85,14 @@ function on_draw_gui_decoder()
   		ScanaStudio.gui_add_item_to_combo_box( "(CPHA = 1) Data samples on trailing edge" );
   ScanaStudio.gui_end_tab();
 
-  ScanaStudio.gui_add_new_tab("format_tab","Output format",false);
+  ScanaStudio.gui_add_new_tab("Output format",false);
     ScanaStudio.gui_add_check_box("format_hex","HEX",true);
     ScanaStudio.gui_add_check_box("format_ascii","ASCII",false);
     ScanaStudio.gui_add_check_box("format_dec","Unsigned decimal",false);
     ScanaStudio.gui_add_check_box("format_bin","Binary",false);
   ScanaStudio.gui_end_tab();
 
-  ScanaStudio.gui_add_new_tab("advanced_tab","Advanced options",false);
+  ScanaStudio.gui_add_new_tab("Advanced options",false);
     ScanaStudio.gui_add_combo_box("nbits","Bits per word");
     for (i = 2; i < 65; i++)
     {
@@ -116,11 +117,11 @@ function on_draw_gui_decoder()
 
   if (ScanaStudio.get_device_channels_count() > 4)
   {
-      ScanaStudio.gui_add_new_tab("multi_io", "Dual/Quad IO",false);
+      ScanaStudio.gui_add_new_tab("Dual/Quad IO",false);
   }
   else
   {
-    ScanaStudio.gui_add_new_tab("multi_io", "Dual IO",false);
+    ScanaStudio.gui_add_new_tab("Dual IO",false);
   }
 
     ScanaStudio.gui_add_check_box("dual_io","Decode Dual IO SPI",false);
@@ -670,22 +671,22 @@ function on_draw_gui_trigger()
   ScanaStudio.gui_add_info_label("Currently SPI trigger only support standard MOSI/MISO signals, "
                                 +"Dual and Quad IO modes are not supported.");
 
-  ScanaStudio.gui_add_new_tab("alt_any_byte", "Trigger on a any word", true);
-    ScanaStudio.gui_add_info_label("Trigger on any SPI word, regardless of its value.");
-  ScanaStudio.gui_end_tab();
-
-	ScanaStudio.gui_add_new_tab("alt_specific_byte", "Trigger on word value", false);
-    ScanaStudio.gui_add_combo_box("trig_channel","Channel");
-    ScanaStudio.gui_add_item_to_combo_box("MOSI",true);
-    ScanaStudio.gui_add_item_to_combo_box("MISO",false);
-    ScanaStudio.gui_add_text_input("trig_byte","Trigger word value","0x0");
-    ScanaStudio.gui_add_text_input("byte_pos","Word position in the frame","0")
-    ScanaStudio.gui_add_info_label("All fields can accept decimal value (65), "
-        + "hex value (0x41) or ASCII character ('A'). First word position in a frame is 0.\n"
-        + "The exact position of the word must be known and specified."
-      );
-
-  ScanaStudio.gui_end_tab();
+  ScanaStudio.gui_add_new_selectable_containers_group("trig_alternative","Select trigger alternative");
+    ScanaStudio.gui_add_new_container("Trigger on a any word",false);
+      ScanaStudio.gui_add_info_label("Trigger on any SPI word, regardless of its value.");
+    ScanaStudio.gui_end_container();
+    ScanaStudio.gui_add_new_container("Trigger on word value",false);
+      ScanaStudio.gui_add_combo_box("trig_channel","Channel");
+      ScanaStudio.gui_add_item_to_combo_box("MOSI",true);
+      ScanaStudio.gui_add_item_to_combo_box("MISO",false);
+      ScanaStudio.gui_add_text_input("trig_byte","Trigger word value","0x0");
+      ScanaStudio.gui_add_text_input("byte_pos","Word position in the frame","0")
+      ScanaStudio.gui_add_info_label("All fields can accept decimal value (65), "
+          + "hex value (0x41) or ASCII character ('A'). First word position in a frame is 0.\n"
+          + "The exact position of the word must be known and specified."
+        );
+    ScanaStudio.gui_end_container();
+  ScanaStudio.gui_end_selectable_containers_group();
 }
 
 //Evaluate trigger GUI
@@ -744,7 +745,14 @@ function on_build_trigger()
 	}
 	else if (alt_specific_byte)
 	{
-		trig_byte = Number(trig_byte);
+    if (trig_byte.charAt(0) == "'")
+  	{
+  		trig_byte = trig_byte.charCodeAt(1);
+  	}
+  	else
+  	{
+  		trig_byte = Number(trig_byte);
+  	}
 		summary_text = "Trig on SPI byte: 0x" + trig_byte.toString(16);
 	}
 
