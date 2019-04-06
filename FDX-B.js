@@ -21,15 +21,31 @@ function on_draw_gui_decoder()
   ScanaStudio.gui_add_ch_selector("ch","Select channel to decode","FDX-B");
   ScanaStudio.gui_add_info_label("FDX-B is an Animal Identification data format. Carrier frequency is 134.2kHz while data bitrate is set at 134.2/32 = 4.19375kHz. This high level decoder uses Scanastudio's biphase encoding decoder. Refer to ISO 11784/5 for more information.")
 
+  ScanaStudio.gui_add_new_selectable_containers_group("th_source","Select timing source");
+    ScanaStudio.gui_add_new_container("Use FDX-B standard biphase encoding baudrate",false);
+      ScanaStudio.gui_add_info_label("(1/(134.2kHz/32))*3/4 => 178.84 µs pulse width threshold");
+    ScanaStudio.gui_end_container();
+    ScanaStudio.gui_add_new_container("Use external clock source",false);
+      ScanaStudio.gui_add_ch_selector("ch_clk","Select clock source","FDX-B clock");
+      ScanaStudio.gui_add_info_label("Threshold pulse width will be calculated by dividing clock frequency by 32, as stated by the FDX-B standard\nNot implemented yet");
+    ScanaStudio.gui_end_container();
+  ScanaStudio.gui_end_selectable_containers_group();
   //Add hidden elements for the FDX-B decoder
   ScanaStudio.gui_add_hidden_field("th","178.83755588673621460506706408346e-6"); // (1/(134.2kHz/32))*3/4 => refer to biphase encoding
 }
 
-var states = {"waiting_header":1, "getting_array":2, "checking":3, "parsing":4};
+var states = {"waiting_header":1, "getting_data":2, "checking":3, "parsing":4};
 var state_machine;
+
+//header
 var last_11_bits;
 var header_cnt;
 var header = 1024;
+
+//data
+var data;
+var data_cnt;
+
 
 function on_decode_signals(resume)
 {
@@ -65,15 +81,25 @@ function on_decode_signals(resume)
         {
           ScanaStudio.dec_item_new(ch,biphase_items[i-10].start_sample_index,biphase_items[i].end_sample_index);
           ScanaStudio.dec_item_add_content("Header (‭010000000000‬)");
+          ScanaStudio.dec_item_add_content("Header");
           header_cnt = 0;
           last_11_bits = 0;
-          state_machine = "getting_array";
+          data_cnt = 0;
+          data = [];
           ScanaStudio.console_info_msg("Found header at "+ScanaStudio.engineering_notation(biphase_items[i].end_sample_index/sampling_rate,3)+" s");
+          state_machine = "getting_data";
         }
         header_cnt++;
         break;
-      case "getting_array":
-        //ScanaStudio.console_info_msg("Getting array");
+      case "getting_data":
+        data[data_cnt] = biphase_items[i].content;
+        if (data_cnt >= 117-1)
+        {
+          ScanaStudio.dec_item_new(ch,biphase_items[i-117+1].start_sample_index,biphase_items[i].end_sample_index);
+          ScanaStudio.dec_item_add_content("Data");
+          state_machine = "waiting_header";
+        }
+        data_cnt++;
         break;
       case "checking":
         //ScanaStudio.console_info_msg("Checking parity");
