@@ -34,17 +34,20 @@ function on_draw_gui_decoder()
   ScanaStudio.gui_add_hidden_field("th","178.83755588673621460506706408346e-6"); // (1/(134.2kHz/32))*3/4 => refer to biphase encoding
 }
 
-var states = {"waiting_header":1, "getting_data":2, "checking":3, "parsing":4};
+var states = {"waiting_header":1, "getting_data":2, "checking":3, "parsing":4, "optional_data":5};
 var state_machine;
 
 //header
 var last_11_bits;
 var header_cnt;
 var header = 1024;
+var data_len = 10*9;
 
 //data
 var data;
 var data_cnt;
+var data_without_control_bits;
+var data_without_control_bits_cnt;
 
 
 function on_decode_signals(resume)
@@ -93,16 +96,37 @@ function on_decode_signals(resume)
         break;
       case "getting_data":
         data[data_cnt] = biphase_items[i].content;
-        if (data_cnt >= 117-1)
+        if (data_cnt >= data_len-1)
         {
-          ScanaStudio.dec_item_new(ch,biphase_items[i-117+1].start_sample_index,biphase_items[i].end_sample_index);
+          ScanaStudio.dec_item_new(ch,biphase_items[i-data_len+1].start_sample_index,biphase_items[i].end_sample_index);
           ScanaStudio.dec_item_add_content("Data");
-          state_machine = "waiting_header";
+          data_without_control_bits_cnt = 0;
+          data_without_control_bits = [];
+          state_machine = "checking";
         }
         data_cnt++;
         break;
       case "checking":
-        //ScanaStudio.console_info_msg("Checking parity");
+        var ok = true;
+
+        //Checking control bits and remove them
+        for (j = 0; j < data_len; j++)
+        {
+          if ((j % 9 == 0) || (j == 0))
+          {
+            if (data[j] != "1")
+            {
+              ok = false;
+              ScanaStudio.console_warning_msg("Corrupted message: wrong control bit");
+              state_machine = "waiting_header";
+              break;
+            }
+          }
+          else
+          {
+            data_without_control_bits[data_without_control_bits_cnt++] = data[j];
+          }
+        }
         break;
       case "parsing":
         //ScanaStudio.console_info_msg("Parsing data");
