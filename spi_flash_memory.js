@@ -18,7 +18,6 @@ V0.1:  Initial release.
 /*
   TODO:
   ~~~~
-  * Write documentation
   * Recognize different MAN ID
   * status register bitmapping
 */
