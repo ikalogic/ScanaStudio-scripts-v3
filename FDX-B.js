@@ -42,13 +42,15 @@ var last_11_bits;
 var header_cnt;
 var header = 1024;
 var data_len = 10*9;
+var data_len_without_control_bits = 10*8;
 
 //data
 var data;
 var data_cnt;
 var data_without_control_bits;
 var data_without_control_bits_cnt;
-
+var bytes;
+var bytes_cnt;
 
 function on_decode_signals(resume)
 {
@@ -102,6 +104,8 @@ function on_decode_signals(resume)
           ScanaStudio.dec_item_add_content("Data");
           data_without_control_bits_cnt = 0;
           data_without_control_bits = [];
+          bytes = [];
+          bytes_cnt = 0;
           state_machine = "checking";
         }
         data_cnt++;
@@ -127,6 +131,21 @@ function on_decode_signals(resume)
             data_without_control_bits[data_without_control_bits_cnt++] = data[j];
           }
         }
+
+        //Group bits by bytes
+        for (j = 0; j < data_len_without_control_bits; j+=8)
+        {
+          binary_str = "";
+          for (k = 0; k < 8; k++)
+          {
+            binary_str += data_without_control_bits[j+k];
+          }
+          bytes[j/8] = parseInt(binary_str, 2);
+          ScanaStudio.console_info_msg("bytes[" + (j/8) + "] = " + binary_str + " = " + bytes[j/8]);
+        }
+
+
+        state_machine = "waiting_header";
         break;
       case "parsing":
         //ScanaStudio.console_info_msg("Parsing data");
