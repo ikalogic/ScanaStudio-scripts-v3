@@ -37,15 +37,18 @@ function on_draw_gui_decoder() {
   ScanaStudio.gui_add_ch_selector("ch", "Select channel to decode", "FDX-B");
   ScanaStudio.gui_add_info_label("FDX-B is an Animal Identification data format. Carrier frequency is 134.2kHz while data bitrate is set at 134.2/32 = 4.19375kHz. This high level decoder uses Scanastudio's biphase encoding decoder. Refer to ISO 11784/5 for more information.")
 
-  ScanaStudio.gui_add_new_selectable_containers_group("th_source", "Select timing source");
-  ScanaStudio.gui_add_new_container("Use FDX-B standard biphase encoding baudrate", false);
-  ScanaStudio.gui_add_info_label("(1/(134.2kHz/32))*3/4 => 178.84 µs pulse width threshold");
-  ScanaStudio.gui_end_container();
-  ScanaStudio.gui_add_new_container("Use external clock source", false);
-  ScanaStudio.gui_add_ch_selector("ch_clk", "Select clock source", "FDX-B clock");
-  ScanaStudio.gui_add_info_label("Threshold pulse width will be calculated by dividing clock frequency by 32, as stated by the FDX-B standard\nNot implemented yet");
-  ScanaStudio.gui_end_container();
-  ScanaStudio.gui_end_selectable_containers_group();
+  ScanaStudio.gui_add_check_box("override_extended_data_bit", "Override data extended bit", 0);
+  ScanaStudio.gui_add_info_label("Some tags do not set the data extended bit properly. By checking the box, you ensure ScanaStudio will read the extended data. Do not select this option if you don't know what you are doing.");
+
+  // ScanaStudio.gui_add_new_selectable_containers_group("th_source", "Select timing source");
+  // ScanaStudio.gui_add_new_container("Use FDX-B standard biphase encoding baudrate", false);
+  // ScanaStudio.gui_add_info_label("(1/(134.2kHz/32))*3/4 => 178.84 µs pulse width threshold");
+  // ScanaStudio.gui_end_container();
+  // ScanaStudio.gui_add_new_container("Use external clock source", false);
+  // ScanaStudio.gui_add_ch_selector("ch_clk", "Select clock source", "FDX-B clock");
+  // ScanaStudio.gui_add_info_label("Threshold pulse width will be calculated by dividing clock frequency by 32, as stated by the FDX-B standard\nNot implemented yet");
+  // ScanaStudio.gui_end_container();
+  // ScanaStudio.gui_end_selectable_containers_group();
   //Add hidden elements for the FDX-B decoder
   var carrier_frequency = 134.2e3;
   var pulse_width = (1 / (carrier_frequency / 32)) * 3 / 4; //=> refer to biphase encoding
@@ -82,6 +85,7 @@ var data_without_control_bits_cnt;
 var extended_data_without_control_bits;
 var extended_data_without_control_bits_cnt;
 var bytes;
+var override_extended_data_bit;
 
 //items
 var tag_number_and_country_idx;
@@ -130,6 +134,7 @@ function on_decode_signals(resume) {
     sampling_rate = ScanaStudio.get_capture_sample_rate();
     ch = ScanaStudio.gui_get_value("ch");
     th = ScanaStudio.gui_get_value("th");
+    override_extended_data_bit = ScanaStudio.gui_get_value("override_extended_data_bit");
     last_11_bits = 0;
     header_cnt = 0;
     state_machine = "waiting_header";
@@ -159,7 +164,7 @@ function on_decode_signals(resume) {
           data_cnt = 0;
           data = [];
           tag_number_and_country_idx = i + 1;
-          ScanaStudio.console_info_msg("Found header at " + ScanaStudio.engineering_notation(biphase_items[i].end_sample_index / sampling_rate, 3) + " s");
+          //ScanaStudio.console_info_msg("Found header at " + ScanaStudio.engineering_notation(biphase_items[i].end_sample_index / sampling_rate, 3) + " s");
           state_machine = "getting_data";
         }
         header_cnt++;
@@ -185,7 +190,7 @@ function on_decode_signals(resume) {
           if ((j % 9 == 0) || (j == 0)) {
             if (data[j] != "1") {
               ok = false;
-              ScanaStudio.console_warning_msg("Corrupted message: wrong control bit");
+              ScanaStudio.console_warning_msg("Corrupted message: wrong control bit", biphase_items[tag_number_and_country_idx + j].start_sample_index);
               state_machine = "waiting_header";
 
               ScanaStudio.dec_item_new(ch, biphase_items[tag_number_and_country_idx + j].start_sample_index, biphase_items[tag_number_and_country_idx + j].end_sample_index);
@@ -199,7 +204,7 @@ function on_decode_signals(resume) {
           }
         }
         if (ok) {
-          ScanaStudio.console_info_msg("Control bits OK");
+          //ScanaStudio.console_info_msg("Control bits OK");
         }
 
         //Group bits by bytes
@@ -220,13 +225,12 @@ function on_decode_signals(resume) {
           var read_crc = (bytes[8] << 8) | (bytes[9]);
 
           if (computed_crc == read_crc) {
-            ScanaStudio.console_info_msg("Valid FDX-B frame (CRC = 0x" + read_crc.toString(16) + ")");
+            //ScanaStudio.console_info_msg("Valid FDX-B frame (CRC = 0x" + read_crc.toString(16) + ")");
 
           } else {
             ok = false;
             ScanaStudio.console_warning_msg("Corrupted message: wrong CRC", biphase_items[tag_number_and_country_idx + crc_offset].start_sample_index);
-            ScanaStudio.console_info_msg("Computed CRC16-CCITT of incoming data is 0x" + computed_crc.toString(16));
-            ScanaStudio.console_info_msg("CRC read from the data is 0x" + read_crc.toString(16));
+            ScanaStudio.console_info_msg("Computed CRC16-CCITT of incoming data is 0x" + computed_crc.toString(16) + " whereas CRC read from the data is 0x" + read_crc.toString(16));
 
             ScanaStudio.dec_item_new(ch, biphase_items[tag_number_and_country_idx + crc_offset].start_sample_index, biphase_items[tag_number_and_country_idx + crc_offset + 16].end_sample_index);
             ScanaStudio.dec_item_add_content("BAD CRC: computed CRC16-CCITT = 0x" + computed_crc.toString(16) + "| CRC read = 0x" + read_crc.toString(16));
@@ -269,6 +273,7 @@ function on_decode_signals(resume) {
         var status_bit = (bytes[6] >> 7) & 1;
         var animal_bit = bytes[7] & 1;
         ScanaStudio.dec_item_new(ch, biphase_items[tag_number_and_country_idx + flags_offset].start_sample_index, biphase_items[tag_number_and_country_idx + crc_offset - 1].end_sample_index);
+        ScanaStudio.dec_item_add_content("Flags: Status (data extended) bit = " + status_bit + " | Animal bit = " + animal_bit);
         ScanaStudio.dec_item_add_content("Flags: Status bit = " + status_bit + " | Animal bit = " + animal_bit);
         ScanaStudio.dec_item_add_content("Flags");
 
@@ -278,13 +283,16 @@ function on_decode_signals(resume) {
           ScanaStudio.dec_item_add_content("CRC OK ( = 0x" + read_crc.toString(16) + " )");
           ScanaStudio.dec_item_add_content("CRC OK");
           ScanaStudio.dec_item_add_content("CRC");
+
+          ScanaStudio.console_info_msg("Successfully read FDX-B tag. Country code = " + resultCountry + " | ID = " + resultID, biphase_items[tag_number_and_country_idx + crc_offset].start_sample_index)
         }
-        if (status_bit) {
-          state_machine = "waiting_header";
-        } else {
+        if (status_bit || override_extended_data_bit) {
           state_machine = "getting_extended_data";
           data_cnt = 0;
           data = [];
+
+        } else {
+          state_machine = "waiting_header";
         }
         break;
 
@@ -305,12 +313,12 @@ function on_decode_signals(resume) {
         for (j = 0; j < extended_data_len; j++) {
           if ((j % 9 == 0) || (j == 0)) {
             if (data[j] != "1") {
-              ScanaStudio.console_warning_msg("Corrupted message: wrong control bit");
+              ScanaStudio.console_warning_msg("Corrupted message: wrong control bit", biphase_items[tag_number_and_country_idx + extra_data_offset + j].start_sample_index);
 
               ScanaStudio.dec_item_new(ch, biphase_items[tag_number_and_country_idx + extra_data_offset + j].start_sample_index, biphase_items[tag_number_and_country_idx + extra_data_offset + j].end_sample_index);
               ScanaStudio.dec_item_add_content("Bad control bit!");
               ScanaStudio.dec_item_add_content("Bad!");
-
+              ok = false;
               state_machine = "waiting_header";
               break;
             }
@@ -318,32 +326,33 @@ function on_decode_signals(resume) {
             extended_data_without_control_bits[extended_data_without_control_bits_cnt++] = data[j];
           }
         }
-
-        ScanaStudio.console_info_msg("Got " + extended_data_without_control_bits_cnt + " bits of extended data");
-        //Group bits by bytes
-        for (j = 0; j < extended_data_without_control_bits_cnt; j += 8) {
-          binary_str = "";
-          for (k = 0; k < 8; k++) {
-            binary_str += extended_data_without_control_bits[j + k];
+        if (ok) {
+          //ScanaStudio.console_info_msg("Got " + extended_data_without_control_bits_cnt + " bits of extended data");
+          //Group bits by bytes
+          for (j = 0; j < extended_data_without_control_bits_cnt; j += 8) {
+            binary_str = "";
+            for (k = 0; k < 8; k++) {
+              binary_str += extended_data_without_control_bits[j + k];
+            }
+            bytes[j / 8] = parseInt(binary_str, 2);
+            //ScanaStudio.console_info_msg("Extended_bytes[" + (j / 8) + "] = " + binary_str + " = " + bytes[j / 8]);
           }
-          bytes[j / 8] = parseInt(binary_str, 2);
-          //ScanaStudio.console_info_msg("Extended_bytes[" + (j / 8) + "] = " + binary_str + " = " + bytes[j / 8]);
+
+          //calculating extended data
+          //Reverse bits order
+          var l;
+          var edata = [0, 0, 0, 0];
+          for (l = 0; l < 3; l++) {
+            edata[l] = byte_reverse(bytes[l]);
+            //ScanaStudio.console_info_msg("Extended_reversed_bytes = " + edata[l].toString(2));
+          }
+
+          var resultdata = array_to_int(edata);
+
+          ScanaStudio.dec_item_new(ch, biphase_items[tag_number_and_country_idx + extra_data_offset].start_sample_index, biphase_items[tag_number_and_country_idx + extra_data_offset + extended_data_len - 1].end_sample_index);
+          ScanaStudio.dec_item_add_content("Extended data = 0x" + resultdata.toString(16));
+          ScanaStudio.dec_item_add_content("Extended data");
         }
-
-        //calculating extended data
-        //Reverse bits order
-        var l;
-        var edata = [0, 0, 0, 0];
-        for (l = 0; l < 3; l++) {
-          edata[l] = byte_reverse(bytes[l]);
-          //ScanaStudio.console_info_msg("Extended_reversed_bytes = " + edata[l].toString(2));
-        }
-
-        var resultdata = array_to_int(edata);
-
-        ScanaStudio.dec_item_new(ch, biphase_items[tag_number_and_country_idx + extra_data_offset].start_sample_index, biphase_items[tag_number_and_country_idx + extra_data_offset + extended_data_len - 1].end_sample_index);
-        ScanaStudio.dec_item_add_content("Extended data = 0x" + resultdata.toString(16));
-        ScanaStudio.dec_item_add_content("Extended data");
         state_machine = "waiting_header"
         break;
     }

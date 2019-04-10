@@ -48,7 +48,7 @@ function on_decode_signals(resume)
       last_zero_start_cnt = -1;
       trscnt = 0;
       ScanaStudio.console_info_msg("Biphase Encoding decoder initialized");
-      ScanaStudio.console_info_msg("Decoding channel "+ch+1);
+      ScanaStudio.console_info_msg("Decoding channel "+(ch+1));
       ScanaStudio.console_info_msg("Threshold pulse width = "+ScanaStudio.engineering_notation(th,3)+"s");
 
       ScanaStudio.trs_reset(ch); //reset the trs iterator.
