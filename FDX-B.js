@@ -79,8 +79,9 @@ var data;
 var data_cnt;
 var data_without_control_bits;
 var data_without_control_bits_cnt;
+var extended_data_without_control_bits;
+var extended_data_without_control_bits_cnt;
 var bytes;
-var bytes_cnt;
 
 //items
 var tag_number_and_country_idx;
@@ -135,9 +136,9 @@ function on_decode_signals(resume) {
   }
   var biphase_items = ScanaStudio.pre_decode("biphase_encoding.js", resume);
 
-  var i;
-  for (i = 0; i < biphase_items.length; i++) {
-
+  var i = 0;
+  //for (i = 0; i < biphase_items.length; i++) {
+  while (i < biphase_items.length) {
     switch (state_machine) {
       case "waiting_header":
         if (header_cnt >= 11) {
@@ -151,7 +152,7 @@ function on_decode_signals(resume) {
         last_11_bits = (last_11_bits << 1) + Number(biphase_items[i].content);
         if (last_11_bits == header) {
           ScanaStudio.dec_item_new(ch, biphase_items[i - 10].start_sample_index, biphase_items[i].end_sample_index);
-          ScanaStudio.dec_item_add_content("Header (‭010000000000‬)");
+          ScanaStudio.dec_item_add_content("Header (‭10000000000‬)");
           ScanaStudio.dec_item_add_content("Header");
           header_cnt = 0;
           last_11_bits = 0;
@@ -162,6 +163,7 @@ function on_decode_signals(resume) {
           state_machine = "getting_data";
         }
         header_cnt++;
+        i++;
         break;
 
       case "getting_data":
@@ -170,10 +172,10 @@ function on_decode_signals(resume) {
           data_without_control_bits_cnt = 0;
           data_without_control_bits = [];
           bytes = [];
-          bytes_cnt = 0;
           state_machine = "checking";
         }
         data_cnt++;
+        i++;
         break;
 
       case "checking":
@@ -288,35 +290,61 @@ function on_decode_signals(resume) {
 
       case "getting_extended_data":
         data[data_cnt] = biphase_items[i].content;
-        ScanaStudio.console_info_msg("extended_data[" + data_cnt + "] = " + data[data_cnt]);
+        //ScanaStudio.console_info_msg("extended_data[" + data_cnt + "] = " + data[data_cnt]);
         if (data_cnt >= extended_data_len - 1) {
-          extended_data_len_without_control_bits_cnt = 0;
-          extended_data_len_without_control_bits = [];
+          extended_data_without_control_bits_cnt = 0;
+          extended_data_without_control_bits = [];
           bytes = [];
-          bytes_cnt = 0;
           state_machine = "parsing_extended_data";
         }
         data_cnt++;
+        i++;
         break;
 
       case "parsing_extended_data":
         for (j = 0; j < extended_data_len; j++) {
           if ((j % 9 == 0) || (j == 0)) {
-            //ScanaStudio.console_info_msg("extended_data["+j+"] = "+ data[j]);
-            // if (data[j] != "1") {
-            //   ScanaStudio.console_warning_msg("Corrupted message: wrong control bit");
-            //   state_machine = "waiting_header";
-            //
-            //   ScanaStudio.dec_item_new(ch, biphase_items[tag_number_and_country_idx + extra_data_offset + j].start_sample_index, biphase_items[tag_number_and_country_idx + extra_data_offset + j].end_sample_index);
-            //   ScanaStudio.dec_item_add_content("Bad control bit!");
-            //   ScanaStudio.dec_item_add_content("Bad!");
-            //
-            //   break;
-            // }
+            if (data[j] != "1") {
+              ScanaStudio.console_warning_msg("Corrupted message: wrong control bit");
+
+              ScanaStudio.dec_item_new(ch, biphase_items[tag_number_and_country_idx + extra_data_offset + j].start_sample_index, biphase_items[tag_number_and_country_idx + extra_data_offset + j].end_sample_index);
+              ScanaStudio.dec_item_add_content("Bad control bit!");
+              ScanaStudio.dec_item_add_content("Bad!");
+
+              state_machine = "waiting_header";
+              break;
+            }
           } else {
-            data_without_control_bits[data_without_control_bits_cnt++] = data[j];
+            extended_data_without_control_bits[extended_data_without_control_bits_cnt++] = data[j];
           }
         }
+
+        ScanaStudio.console_info_msg("Got " + extended_data_without_control_bits_cnt + " bits of extended data");
+        //Group bits by bytes
+        for (j = 0; j < extended_data_without_control_bits_cnt; j += 8) {
+          binary_str = "";
+          for (k = 0; k < 8; k++) {
+            binary_str += extended_data_without_control_bits[j + k];
+          }
+          bytes[j / 8] = parseInt(binary_str, 2);
+          //ScanaStudio.console_info_msg("Extended_bytes[" + (j / 8) + "] = " + binary_str + " = " + bytes[j / 8]);
+        }
+
+        //calculating extended data
+        //Reverse bits order
+        var l;
+        var edata = [0, 0, 0, 0];
+        for (l = 0; l < 3; l++) {
+          edata[l] = byte_reverse(bytes[l]);
+          //ScanaStudio.console_info_msg("Extended_reversed_bytes = " + edata[l].toString(2));
+        }
+
+        var resultdata = array_to_int(edata);
+
+        ScanaStudio.dec_item_new(ch, biphase_items[tag_number_and_country_idx + extra_data_offset].start_sample_index, biphase_items[tag_number_and_country_idx + extra_data_offset + extended_data_len - 1].end_sample_index);
+        ScanaStudio.dec_item_add_content("Extended data = 0x" + resultdata.toString(16));
+        ScanaStudio.dec_item_add_content("Extended data");
+        state_machine = "waiting_header"
         break;
     }
   }
