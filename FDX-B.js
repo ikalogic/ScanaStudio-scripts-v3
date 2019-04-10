@@ -57,18 +57,24 @@ var states = {
   "getting_data": 2,
   "checking": 3,
   "parsing": 4,
-  "extended_data": 5
+  "getting_extended_data": 5,
+  "parsing_extended_data": 6
 };
 var state_machine;
 
-//header
-var last_11_bits;
-var header_cnt;
+//Constants
 var header = 1024;
 var data_len = 10 * 9;
 var data_len_without_control_bits = 10 * 8;
+var extended_data_len = 3 * 9;
+var extended_data_len_without_control_bits = 3 * 8;
+var flags_offset = 6 * 9;
+var crc_offset = 8 * 9;
+var extra_data_offset = 10 * 9;
 
-//data
+//variables
+var last_11_bits;
+var header_cnt;
 var data;
 var data_cnt;
 var data_without_control_bits;
@@ -78,9 +84,6 @@ var bytes_cnt;
 
 //items
 var tag_number_and_country_idx;
-var flags_offset = 6 * 9;
-var crc_offset = 8 * 9;
-var extra_data_offset = 10 * 9;
 
 function array_to_int(array) {
   var buf = 0;
@@ -132,8 +135,9 @@ function on_decode_signals(resume) {
   }
   var biphase_items = ScanaStudio.pre_decode("biphase_encoding.js", resume);
 
+  var i;
   for (i = 0; i < biphase_items.length; i++) {
-    var i;
+
     switch (state_machine) {
       case "waiting_header":
         if (header_cnt >= 11) {
@@ -204,7 +208,7 @@ function on_decode_signals(resume) {
             binary_str += data_without_control_bits[j + k];
           }
           bytes[j / 8] = parseInt(binary_str, 2);
-          ScanaStudio.console_info_msg("bytes[" + (j / 8) + "] = " + binary_str + " = " + bytes[j / 8]);
+          //ScanaStudio.console_info_msg("bytes[" + (j / 8) + "] = " + binary_str + " = " + bytes[j / 8]);
         }
 
         //Check CRC
@@ -260,27 +264,59 @@ function on_decode_signals(resume) {
         ScanaStudio.dec_item_add_content("ID + Country code");
 
         //Read Animal & Status bit
-        var status_bit = bytes[6] & 1;
-        var animal_bit = (bytes[7] & 128) >> 7;
+        var status_bit = (bytes[6] >> 7) & 1;
+        var animal_bit = bytes[7] & 1;
         ScanaStudio.dec_item_new(ch, biphase_items[tag_number_and_country_idx + flags_offset].start_sample_index, biphase_items[tag_number_and_country_idx + crc_offset - 1].end_sample_index);
         ScanaStudio.dec_item_add_content("Flags: Status bit = " + status_bit + " | Animal bit = " + animal_bit);
         ScanaStudio.dec_item_add_content("Flags");
 
         //Display CRC
         if (ok) {
-          ScanaStudio.dec_item_new(ch, biphase_items[tag_number_and_country_idx + crc_offset].start_sample_index, biphase_items[tag_number_and_country_idx + crc_offset + 16].end_sample_index);
+          ScanaStudio.dec_item_new(ch, biphase_items[tag_number_and_country_idx + crc_offset].start_sample_index, biphase_items[tag_number_and_country_idx + extra_data_offset - 1].end_sample_index);
           ScanaStudio.dec_item_add_content("CRC OK ( = 0x" + read_crc.toString(16) + " )");
           ScanaStudio.dec_item_add_content("CRC OK");
           ScanaStudio.dec_item_add_content("CRC");
         }
-        if (!status_bit) {
+        if (status_bit) {
           state_machine = "waiting_header";
         } else {
-          state_machine = "extended_data";
+          state_machine = "getting_extended_data";
+          data_cnt = 0;
+          data = [];
         }
         break;
 
-      case extended_data:
+      case "getting_extended_data":
+        data[data_cnt] = biphase_items[i].content;
+        ScanaStudio.console_info_msg("extended_data[" + data_cnt + "] = " + data[data_cnt]);
+        if (data_cnt >= extended_data_len - 1) {
+          extended_data_len_without_control_bits_cnt = 0;
+          extended_data_len_without_control_bits = [];
+          bytes = [];
+          bytes_cnt = 0;
+          state_machine = "parsing_extended_data";
+        }
+        data_cnt++;
+        break;
+
+      case "parsing_extended_data":
+        for (j = 0; j < extended_data_len; j++) {
+          if ((j % 9 == 0) || (j == 0)) {
+            //ScanaStudio.console_info_msg("extended_data["+j+"] = "+ data[j]);
+            // if (data[j] != "1") {
+            //   ScanaStudio.console_warning_msg("Corrupted message: wrong control bit");
+            //   state_machine = "waiting_header";
+            //
+            //   ScanaStudio.dec_item_new(ch, biphase_items[tag_number_and_country_idx + extra_data_offset + j].start_sample_index, biphase_items[tag_number_and_country_idx + extra_data_offset + j].end_sample_index);
+            //   ScanaStudio.dec_item_add_content("Bad control bit!");
+            //   ScanaStudio.dec_item_add_content("Bad!");
+            //
+            //   break;
+            // }
+          } else {
+            data_without_control_bits[data_without_control_bits_cnt++] = data[j];
+          }
+        }
         break;
     }
   }
