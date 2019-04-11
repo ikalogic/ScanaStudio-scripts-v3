@@ -40,15 +40,6 @@ function on_draw_gui_decoder() {
   ScanaStudio.gui_add_check_box("override_extended_data_bit", "Override data extended bit", 0);
   ScanaStudio.gui_add_info_label("Some tags do not set the data extended bit properly. By checking the box, you ensure ScanaStudio will read the extended data. Do not select this option if you don't know what you are doing.");
 
-  // ScanaStudio.gui_add_new_selectable_containers_group("th_source", "Select timing source");
-  // ScanaStudio.gui_add_new_container("Use FDX-B standard biphase encoding baudrate", false);
-  // ScanaStudio.gui_add_info_label("(1/(134.2kHz/32))*3/4 => 178.84 µs pulse width threshold");
-  // ScanaStudio.gui_end_container();
-  // ScanaStudio.gui_add_new_container("Use external clock source", false);
-  // ScanaStudio.gui_add_ch_selector("ch_clk", "Select clock source", "FDX-B clock");
-  // ScanaStudio.gui_add_info_label("Threshold pulse width will be calculated by dividing clock frequency by 32, as stated by the FDX-B standard\nNot implemented yet");
-  // ScanaStudio.gui_end_container();
-  // ScanaStudio.gui_end_selectable_containers_group();
   //Add hidden elements for the FDX-B decoder
   var carrier_frequency = 134.2e3;
   var pulse_width = (1 / (carrier_frequency / 32)) * 3 / 4; //=> refer to biphase encoding
@@ -56,6 +47,7 @@ function on_draw_gui_decoder() {
 }
 
 var states = {
+  "reset": 0,
   "waiting_header": 1,
   "getting_data": 2,
   "checking": 3,
@@ -89,6 +81,7 @@ var override_extended_data_bit;
 
 //items
 var tag_number_and_country_idx;
+var biphase_items
 
 function array_to_int(array) {
   var buf = 0;
@@ -137,14 +130,22 @@ function on_decode_signals(resume) {
     override_extended_data_bit = ScanaStudio.gui_get_value("override_extended_data_bit");
     last_11_bits = 0;
     header_cnt = 0;
-    state_machine = "waiting_header";
+    biphase_items = [];
+    state_machine = "reset";
   }
-  var biphase_items = ScanaStudio.pre_decode("biphase_encoding.js", resume);
+  //var biphase_items_dec = ScanaStudio.pre_decode("biphase_encoding.js", resume);
+  biphase_items = biphase_items.concat(ScanaStudio.pre_decode("biphase_encoding.js", resume));
+  if (biphase_items.length < 2+14*9) return;
 
   var i = 0;
-  //for (i = 0; i < biphase_items.length; i++) {
   while (i < biphase_items.length) {
     switch (state_machine) {
+      case "reset":
+        biphase_items = biphase_items.slice(i,biphase_items.length)
+        i = 0;
+        state_machine = "waiting_header";
+        break;
+
       case "waiting_header":
         if (header_cnt >= 11) {
           //remove first bit
@@ -191,7 +192,7 @@ function on_decode_signals(resume) {
             if (data[j] != "1") {
               ok = false;
               ScanaStudio.console_warning_msg("Corrupted message: wrong control bit", biphase_items[tag_number_and_country_idx + j].start_sample_index);
-              state_machine = "waiting_header";
+              state_machine = "reset";
 
               ScanaStudio.dec_item_new(ch, biphase_items[tag_number_and_country_idx + j].start_sample_index, biphase_items[tag_number_and_country_idx + j].end_sample_index);
               ScanaStudio.dec_item_add_content("Bad control bit!");
@@ -233,11 +234,12 @@ function on_decode_signals(resume) {
             ScanaStudio.console_info_msg("Computed CRC16-CCITT of incoming data is 0x" + computed_crc.toString(16) + " whereas CRC read from the data is 0x" + read_crc.toString(16));
 
             ScanaStudio.dec_item_new(ch, biphase_items[tag_number_and_country_idx + crc_offset].start_sample_index, biphase_items[tag_number_and_country_idx + crc_offset + 16].end_sample_index);
-            ScanaStudio.dec_item_add_content("BAD CRC: computed CRC16-CCITT = 0x" + computed_crc.toString(16) + "| CRC read = 0x" + read_crc.toString(16));
+            ScanaStudio.dec_item_add_content("BAD CRC: computed CRC16-CCITT = 0x" + computed_crc.toString(16) + " | CRC read = 0x" + read_crc.toString(16));
+            ScanaStudio.dec_item_add_content("BAD CRC!");
           }
         }
         if (ok) state_machine = "parsing";
-        else state_machine = "waiting_header";
+        else state_machine = "reset";
         break;
 
       case "parsing":
@@ -292,7 +294,7 @@ function on_decode_signals(resume) {
           data = [];
 
         } else {
-          state_machine = "waiting_header";
+          state_machine = "reset";
         }
         break;
 
@@ -319,7 +321,7 @@ function on_decode_signals(resume) {
               ScanaStudio.dec_item_add_content("Bad control bit!");
               ScanaStudio.dec_item_add_content("Bad!");
               ok = false;
-              state_machine = "waiting_header";
+              state_machine = "reset";
               break;
             }
           } else {
@@ -353,7 +355,7 @@ function on_decode_signals(resume) {
           ScanaStudio.dec_item_add_content("Extended data = 0x" + resultdata.toString(16));
           ScanaStudio.dec_item_add_content("Extended data");
         }
-        state_machine = "waiting_header"
+        state_machine = "reset"
         break;
     }
   }
