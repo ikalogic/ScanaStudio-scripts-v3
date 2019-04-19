@@ -4,14 +4,15 @@
 <DESCRIPTION>
 Serial UART (Universal asynchronous receiver/transmitter) Protocol Decoder.
 </DESCRIPTION>
-<VERSION> 1.47 </VERSION>
+<VERSION> 1.48 </VERSION>
 <AUTHOR_NAME>	Vladislav Kosinov, Ibrahim Kamal, Nicolas Bastit </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
-<HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/ </HELP_URL>
+<HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/UART-ScanaStudio-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright 2019 Ikalogic SAS </COPYRIGHT>
 <LICENSE>	This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-  V1.47: Fixed freez condition, added trigger, added GUI validation.
+  V1.48: Added trigger, added GUI validation
+  V1.47: Fixed freez condition.
   V1.46: Fixed a bug that caused start bit to be drawn at the end of a capture
 	V1.45: Migrated this script to new V3 API.
 	V1.44: Improved demo signals builder performance
@@ -43,11 +44,11 @@ Serial UART (Universal asynchronous receiver/transmitter) Protocol Decoder.
   Work in progress
   ================
   still Todo:
-    * Trigger sequences
+    * Test Trigger sequences
     * Write documentation
     * Hex View
-    * Packet View
     * Sampling points
+    * Packet View
 */
 
 
@@ -136,6 +137,7 @@ var trs;
 var cursor; //just a variable holding the sample_index of a virtual cursor
 var samples_per_bit;
 var margin;
+var transfer_value; //Must be global
 
 function on_decode_signals(resume)
 {
@@ -143,7 +145,7 @@ function on_decode_signals(resume)
   var stop_bits_counter;
   var bit_value;
   var parity_value;
-  var transfer_value;
+
   var stop_bits_ok;
   if (!resume) //If resume == false, it's the first call to this function.
   {
@@ -219,6 +221,11 @@ function on_decode_signals(resume)
           }
           transfer_value = 0;
           state_machine++;
+
+          //ScanaStudio.console_info_msg("Start of data",cursor);
+        }
+        else {
+          //ScanaStudio.console_info_msg("Waiting for start bit",ScanaStudio.get_available_samples(channel));
         }
       case 2:
         //Wait until there is enough samples to capture a whole word
@@ -303,8 +310,13 @@ function on_decode_signals(resume)
 
             ScanaStudio.dec_item_emphasize_error(); //Ensure it stands out as an error!
           }
-          cursor += ((samples_per_bit*stop));
+          cursor += ((samples_per_bit*stop)/2);
+          //ScanaStudio.console_info_msg("Cursor set",cursor);
           state_machine = 0; //rewind to first state: wait for start bit.
+        }
+        else
+        {
+          //ScanaStudio.console_info_msg("Waiting for data",ScanaStudio.get_available_samples(channel));
         }
         break;
       default:
@@ -377,8 +389,12 @@ function add_uart_dec_item(ch, start_edge, value)
     //Add sample points
     for (b = 1; b < nbits; b++) //Start at 1 to skip start bit
     {
-      //TODO
+      ScanaStudio.dec_item_add_sample_point(samples_per_bit*(nbits+0.5),"P");
     }
+
+    if (value > 255) value = 255;
+    if (value < 0) value = 255;
+    ScanaStudio.hex_view_add_byte(ch,start_edge,start_edge + (nbits * samples_per_bit) ,value);
   }
 
 }
@@ -396,36 +412,53 @@ function pad(num_str, size) {
 //Trigger sequence GUI
 function on_draw_gui_trigger()
 {
-  /*ScanaStudio.gui_add_new_selectable_containers_group("trig_alt","Select trigger type");
+  ScanaStudio.gui_add_new_selectable_containers_group("trig_alt","Select trigger type");
     ScanaStudio.gui_add_new_container("Trigger on any valid frame",true);
       ScanaStudio.gui_add_info_label("Trigger on any UART Frame. In other words,"+
       "this alternative will trigger on any start bit");
     ScanaStudio.gui_end_container();
     ScanaStudio.gui_add_new_container("Trigger on specific word",false);
-      ScanaStudio.gui_add_info_label("Type decimal value (65), Hex value (0x41) or ASCII code ('A')");
+      ScanaStudio.gui_add_info_label("Type decimal value (65), Hex value (0x41) or ASCII character ('A')");
       ScanaStudio.gui_add_text_input("trig_byte","Trigger word","");
     ScanaStudio.gui_end_container();
-    ScanaStudio.gui_add_new_container("Trigger on a character string",false);
+    ScanaStudio.gui_add_new_container("Trigger on a characters string",false);
       ScanaStudio.gui_add_info_label("Type a character string to be used for trigger. E.g.: Hello World");
       ScanaStudio.gui_add_text_input("trig_phrase","Trigger phrase","");
     ScanaStudio.gui_end_container();
-  ScanaStudio.gui_end_selectable_containers_group();*/
-
-  ScanaStudio.gui_add_hidden_field("trig_alt",1);
-  ScanaStudio.gui_add_info_label("Type decimal value (65), Hex value (0x41) or ASCII code ('A')");
-  ScanaStudio.gui_add_text_input("trig_byte","Trigger word","");
-
+  ScanaStudio.gui_end_selectable_containers_group();
 }
 
 //Evaluate trigger GUI
 function on_eval_gui_trigger()
 {
-  //TODO ...
+  trig_alt = ScanaStudio.gui_get_value("trig_alt");
+  trig_byte = ScanaStudio.gui_get_value("trig_byte");
+
+  if (trig_alt == 1)
+  {
+    if (trig_byte.length == 0)
+    {
+      return "Please specify trigger byte";
+    }
+    else if (isNaN(trig_byte))
+    {
+      if ((trig_byte.charAt(0) == "'") && (trig_byte.length < 3))
+      {
+        return "Invalid character"
+      }
+      if (trig_byte.length > 3)
+      {
+        return "Invalid trigger byte: Please enter only one character, e.g. 'a'";
+      }
+    }
+  }
   return "" //All good.
 }
 
 function on_build_trigger()
 {
+
+  ScanaStudio.flexitrig_set_async_mode();
   reload_dec_gui_values();
   trig_alt = ScanaStudio.gui_get_value("trig_alt");
   trig_byte = ScanaStudio.gui_get_value("trig_byte");
@@ -482,8 +515,8 @@ function build_trig_byte (new_byte, first)
 	var par;
 	var step;
 	var bit_time = 1/baud;	// [s]
-	var bt_max = bit_time * 1.05;	// Allow 5% margin on bit time <-- this may be configurable later.
-	var bt_min = bit_time * 0.95;
+	var bt_max = bit_time * 1.15;	// Allow 15% margin on bit time <-- this may be configurable later.
+	var bt_min = bit_time * 0.85;
 
 	trig_bit_sequence = [];
 
