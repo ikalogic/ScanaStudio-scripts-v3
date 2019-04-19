@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Frequency modulation logic signal generator
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> https://wwww.ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/Frequency-modulation-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.2:  Fixed mistakes in error messages.
 V0.1:  Initial release.
 </RELEASE_NOTES>
 */
@@ -43,7 +44,6 @@ function on_draw_gui_signal_builder()
     ScanaStudio.console_error_msg("GUI ERROR: Sampling rate is too low");
     return;
   }
-  ScanaStudio.get_device_n
   //Define decoder configuration GUI
   ScanaStudio.gui_add_ch_selector("channel","Target channel","FM");
 
@@ -72,10 +72,6 @@ function on_draw_gui_signal_builder()
                                     );
     ScanaStudio.gui_end_container();
   ScanaStudio.gui_end_selectable_containers_group();
-
-
-
-  //Add other gui functions...
 }
 
 //Function called to generate demo siganls (when no physical device is attached)
@@ -97,8 +93,6 @@ function on_build_demo_signals()
 //Function called to build siganls (to be generate by capable device)
 function on_build_signals()
 {
-  //Todo: build the signals
-
   //Use the function below to get the number of samples to be built
   var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
   var fm_builder = ScanaStudio.BuilderObject;
@@ -201,7 +195,7 @@ ScanaStudio.BuilderObject = {
     {
       if (this.modulation.length > 0)
       {
-          ScanaStudio.console_error_msg("Please run configure_triangle() function before using build_cycle_sine()");
+          ScanaStudio.console_error_msg("Please run configure_triangle() function before using build_cycle_triangle()");
           this.modulation = ""; //don't display this message more than once
           return;
       }
@@ -223,7 +217,7 @@ ScanaStudio.BuilderObject = {
     {
       if (this.modulation.length > 0)
       {
-          ScanaStudio.console_error_msg("Please run configure_triangle() function before using build_cycle_sine()");
+          ScanaStudio.console_error_msg("Please run configure_sawtooth() function before using build_cycle_sawtooth()");
           this.modulation = ""; //don't display this message more than once
           return;
       }
