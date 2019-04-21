@@ -6,7 +6,7 @@
 <VERSION> 0.0 </VERSION>
 <AUTHOR_NAME> Ibrahim Kamal </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
-<HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
+<HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/1-Wire-bus-analyzer-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
