@@ -4,13 +4,14 @@
 <DESCRIPTION>
 Serial UART (Universal asynchronous receiver/transmitter) Protocol Decoder.
 </DESCRIPTION>
-<VERSION> 1.48 </VERSION>
+<VERSION> 1.49 </VERSION>
 <AUTHOR_NAME>	Vladislav Kosinov, Ibrahim Kamal, Nicolas Bastit </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/UART-ScanaStudio-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright 2019 Ikalogic SAS </COPYRIGHT>
 <LICENSE>	This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+  V1.49: Fixed sampling points drawing
   V1.48: Added trigger, added GUI validation
   V1.47: Fixed freez condition.
   V1.46: Fixed a bug that caused start bit to be drawn at the end of a capture
@@ -46,7 +47,6 @@ Serial UART (Universal asynchronous receiver/transmitter) Protocol Decoder.
   still Todo:
     * Test Trigger sequences
     * Write documentation
-    * Hex View
     * Sampling points
     * Packet View
 */
@@ -387,9 +387,9 @@ function add_uart_dec_item(ch, start_edge, value)
     }
     ScanaStudio.dec_item_add_content(content);
     //Add sample points
-    for (b = 1; b < nbits; b++) //Start at 1 to skip start bit
+    for (b = 0; b < nbits; b++) //Start at 1 to skip start bit
     {
-      ScanaStudio.dec_item_add_sample_point(samples_per_bit*(nbits+0.5),"P");
+      ScanaStudio.dec_item_add_sample_point(start_edge + ((b+0.5) * samples_per_bit),"P");
     }
 
     if (value > 255) value = 255;
