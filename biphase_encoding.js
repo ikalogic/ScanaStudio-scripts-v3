@@ -27,6 +27,7 @@ function on_draw_gui_decoder() {
 
 //Evaluate decoder GUI
 function on_eval_gui_decoder() {
+  ScanaStudio.set_script_instance_name("Biphase encoding on CH"+(ScanaStudio.gui_get_value("ch")+1).toString());
   return "" //All good.
 }
 
