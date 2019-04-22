@@ -3,13 +3,14 @@
 <DESCRIPTION>
 1-Wire protocol analyzer. Decodes Reset, presence and byte fields.
 </DESCRIPTION>
-<VERSION> 0.0 </VERSION>
+<VERSION> 0.1 </VERSION>
 <AUTHOR_NAME> Ibrahim Kamal </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/1-Wire-bus-analyzer-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.1:  Fixed sampling point position for presence pulse.
 V0.0:  Initial release.
 </RELEASE_NOTES>
 */
@@ -206,10 +207,12 @@ function on_decode_signals(resume)
         trs = ScanaStudio.trs_get_next(ch);
         if (trs.value == 1)
         {
+          ScanaStudio.dec_item_new(ch,last_falling_edge,trs.sample_index);
+          ScanaStudio.dec_item_add_sample_point(last_rising_edge+presence_sampling_point,"D");
           last_rising_edge = trs.sample_index;
           device_present = true;
           state_machine = 0;
-          ScanaStudio.dec_item_new(ch,last_falling_edge,last_rising_edge);
+
           if (ScanaStudio.is_pre_decoding())
           {
             ScanaStudio.dec_item_add_content("P");
@@ -219,7 +222,7 @@ function on_decode_signals(resume)
             ScanaStudio.dec_item_add_content("Presence pulse");
             ScanaStudio.dec_item_add_content("Presence");
             ScanaStudio.dec_item_add_content("P");
-            ScanaStudio.dec_item_add_sample_point(last_falling_edge+presence_sampling_point,"D");
+
           }
         }
       default:
