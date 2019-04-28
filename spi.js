@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Highly configurable SPI bus decoder
 </DESCRIPTION>
-<VERSION> 1.75 </VERSION>
+<VERSION> 1.76 </VERSION>
 <AUTHOR_NAME>  Vladislav Kosinov, Ibrahim Kamal </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/SPI-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+  V1.76: Fixed bug in binary format display
   V1.75: Fixed bug in trigger sequence builder
   V1.74: Added support for GUI evaluation
   V1.73: Added support for Dual/Quad SPI modes
@@ -642,20 +643,14 @@ function pad(num_str, size) {
 function to_binary_str(value, size)
 {
   var i;
-  var str = "";
-  for (i = 0; i < Math.ceil(size/4); i++)
+  var str = pad(value.toString(2),size);
+  var ret = "";
+  for (i = 0; i < str.length; i+= 4)
   {
-      if (str != "")
-      {
-        str += " "
-      }
-      else
-      {
-        str += "0b"
-      }
-      str += pad(((value >> (i*4)) & 0xF).toString(2),4);
+    ret += str.slice(i,(i+4)) + " ";
   }
-  return str;
+  ret += str.slice(i);
+  return ret;
 }
 
 /*
