@@ -269,11 +269,11 @@ function on_decode_signals(resume)
       //define sample point drawing depending on clock polarity
       if (cpol)
       {
-        drw = "U";
+        drw = "D";
       }
       else
       {
-        drw = "D";
+        drw = "U";
       }
 
       //ScanaStudio.console_info_msg("SPI decoder started");
