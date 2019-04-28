@@ -22,6 +22,7 @@ Todo
 * test special addresses (hs mode, 10bit, etc..)
 * Documentation
 * add support for pre-decode
+* Add hex view support
 */
 
 //Decoder GUI
@@ -343,8 +344,10 @@ function add_sample_points()
   }
 }
 
-
-
+/*
+  Helper function to convert data to formated text
+  according to formating options set by the user
+*/
 function format_content(data,data_format,size_bits)
 {
   switch (data_format) {
@@ -364,6 +367,9 @@ function format_content(data,data_format,size_bits)
   }
 }
 
+/* Helper fonction to convert value to binary, including 0-padding
+  and groupping by 4-bits packets
+*/
 function to_binary_str(value, size)
 {
   var i;
