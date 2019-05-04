@@ -3,14 +3,15 @@
 <DESCRIPTION>
 I2C support for ScanaStudio.
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.1:  Initial release.
+V0.2: Added support for 10b addresses, added support for pre-decoding.
+V0.1: Initial release.
 </RELEASE_NOTES>
 */
 
@@ -18,10 +19,7 @@ V0.1:  Initial release.
 /*
 Todo
 ~~~~
-* add an option to support 10 bits addressing or not (to be SM bus compliant)
-* test special addresses (hs mode, 10bit, etc..)
 * Documentation
-* add support for pre-decode
 * Add hex view support
 */
 
@@ -44,6 +42,7 @@ function on_draw_gui_decoder()
       ScanaStudio.gui_add_item_to_combo_box("Binary",false);
       ScanaStudio.gui_add_item_to_combo_box("Decimal",false);
       ScanaStudio.gui_add_item_to_combo_box("ASCII",false);
+    ScanaStudio.gui_add_check_box("support_10b_add","Support 10 bit addresses",true);
   ScanaStudio.gui_end_tab();
 }
 
@@ -231,6 +230,14 @@ function process_i2c_bit(value,sample_index)
       {
         i2c_byte_margin = (sample_index - start_sample)/16;
         ScanaStudio.dec_item_new(ch_sda,start_sample-i2c_byte_margin,sample_index+i2c_byte_margin);
+
+        if (ScanaStudio.is_pre_decoding() == true)
+        {
+          ScanaStudio.dec_item_add_content("0x"+byte.toString(16));
+          bit_counter = 0;
+          frame_state = I2C.ACK;
+          break;
+        }
         if (byte == 0) //General call
         {
           operation_str = "General call address ";
@@ -323,9 +330,16 @@ function process_i2c_bit(value,sample_index)
       {
         i2c_byte_margin = (sample_index - start_sample)/16;
         ScanaStudio.dec_item_new(ch_sda,start_sample-i2c_byte_margin,sample_index+i2c_byte_margin);
-        ScanaStudio.dec_item_add_content("DATA = " + format_content(byte,data_format,8));
-        ScanaStudio.dec_item_add_content(format_content(byte,data_format,8));
-        add_sample_points();
+        if (ScanaStudio.is_pre_decoding() == true)
+        {
+          ScanaStudio.dec_item_add_content("0x"+byte.toString(16));
+        }
+        else
+        {
+          ScanaStudio.dec_item_add_content("DATA = " + format_content(byte,data_format,8));
+          ScanaStudio.dec_item_add_content(format_content(byte,data_format,8));
+          add_sample_points();
+        }
         bit_counter = 0;
         frame_state = I2C.ACK;
       }
