@@ -3,13 +3,14 @@
 <DESCRIPTION>
 I2C support for ScanaStudio.
 </DESCRIPTION>
-<VERSION> 0.2 </VERSION>
+<VERSION> 0.3 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.3: Better demo mode generator
 V0.2: Added support for 10b addresses, added support for pre-decoding.
 V0.1: Initial release.
 </RELEASE_NOTES>
@@ -17,10 +18,11 @@ V0.1: Initial release.
 
 
 /*
-Todo
-~~~~
+Future releases
+~~~~~~~~~~~~~~~~
 * Documentation
 * Add hex view support
+* Add packet view support
 */
 
 //Decoder GUI
@@ -42,7 +44,6 @@ function on_draw_gui_decoder()
       ScanaStudio.gui_add_item_to_combo_box("Binary",false);
       ScanaStudio.gui_add_item_to_combo_box("Decimal",false);
       ScanaStudio.gui_add_item_to_combo_box("ASCII",false);
-    ScanaStudio.gui_add_check_box("support_10b_add","Support 10 bit addresses",true);
   ScanaStudio.gui_end_tab();
 }
 
@@ -202,12 +203,10 @@ function process_i2c_bit(value,sample_index)
       {
         ScanaStudio.dec_item_add_content("NACK");
         ScanaStudio.dec_item_add_content("N");
-        ScanaStudio.dec_item_emphasize_warning();
       }
       else {
         ScanaStudio.dec_item_add_content("ACK");
         ScanaStudio.dec_item_add_content("A");
-        ScanaStudio.dec_item_emphasize_success();
       }
       add_sample_points();
       if (hs_mode)
@@ -230,10 +229,9 @@ function process_i2c_bit(value,sample_index)
       {
         i2c_byte_margin = (sample_index - start_sample)/16;
         ScanaStudio.dec_item_new(ch_sda,start_sample-i2c_byte_margin,sample_index+i2c_byte_margin);
-
         if (ScanaStudio.is_pre_decoding() == true)
         {
-          ScanaStudio.dec_item_add_content("0x"+byte.toString(16));
+          ScanaStudio.dec_item_add_content("0x" + byte.toString(16));
           bit_counter = 0;
           frame_state = I2C.ACK;
           break;
@@ -251,12 +249,12 @@ function process_i2c_bit(value,sample_index)
         else if ((byte>>1) == 1) //CBUS
         {
           operation_str = "CBUS address ";
-          operation_str_short = "C ";
+          operation_str_short = "CBUS ";
         }
         else if (((byte>>1) == 2) || ((byte>>1) == 3) || ((byte>>3) == 0x1F)) //Reserved
         {
           operation_str = "Reserved address ";
-          operation_str_short = "R ";
+          operation_str_short = "RES ";
           ScanaStudio.dec_item_emphasize_warning();
         }
         else if ((byte>>3) == 1) //HS-mode master code
@@ -283,28 +281,31 @@ function process_i2c_bit(value,sample_index)
         else if (byte & 0x1)
         {
           operation_str = "Read from address ";
-          operation_str_short = "R ";
+          operation_str_short = "RD ";
         }
         else
         {
           operation_str = "Write to address ";
-          operation_str_short = "W ";
+          operation_str_short = "WR ";
         }
 
         if (address_opt == 0) //7 bit standard address convention
         {
-          ScanaStudio.dec_item_add_content(operation_str + format_content(byte >> 1,address_format,7) + " - R/W = " + (byte & 0x1).toString());
-          ScanaStudio.dec_item_add_content(operation_str + format_content(byte >> 1,address_format,7));
-          ScanaStudio.dec_item_add_content(operation_str_short + format_content(byte >> 1,address_format,7));
-          ScanaStudio.dec_item_add_content(format_content(byte >> 1,address_format,7));
+          add_len = 7
+          add_shift = 1;
         }
         else
         {
-          ScanaStudio.dec_item_add_content(operation_str + format_content(byte,address_format,8)+ " - R/W = " + (byte & 0x1).toString());
-          ScanaStudio.dec_item_add_content(operation_str + format_content(byte,address_format,8));
-          ScanaStudio.dec_item_add_content(operation_str_short + format_content(byte,address_format,8));
-          ScanaStudio.dec_item_add_content(format_content(byte,address_format,8));
+          add_len = 8;
+          add_shift = 0;
         }
+
+
+        ScanaStudio.dec_item_add_content(operation_str + format_content(byte >> add_shift,address_format,add_len) + " - R/W = " + (byte & 0x1).toString());
+        ScanaStudio.dec_item_add_content(operation_str + format_content(byte >> add_shift,address_format,add_len));
+        ScanaStudio.dec_item_add_content(operation_str_short + format_content(byte >> add_shift,address_format,add_len));
+        ScanaStudio.dec_item_add_content(format_content(byte >> add_shift,address_format,add_len));
+
 
         add_sample_points();
         bit_counter = 0;
@@ -332,7 +333,7 @@ function process_i2c_bit(value,sample_index)
         ScanaStudio.dec_item_new(ch_sda,start_sample-i2c_byte_margin,sample_index+i2c_byte_margin);
         if (ScanaStudio.is_pre_decoding() == true)
         {
-          ScanaStudio.dec_item_add_content("0x"+byte.toString(16));
+          ScanaStudio.dec_item_add_content("0x" + byte.toString(16));
         }
         else
         {
@@ -414,23 +415,29 @@ function on_build_demo_signals()
   var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
   var i2c_builder = ScanaStudio.BuilderObject;
   var sample_rate = ScanaStudio.builder_get_sample_rate();
-  ScanaStudio.builder_add_cycles(2,0.6,10,50000);
-  i2c_builder.config(1,0,100e3);
-  i2c_builder.put_silence(1e-3*sample_rate);
+  ch_sda = ScanaStudio.gui_get_value("ch_sda");
+  ch_scl = ScanaStudio.gui_get_value("ch_scl");
+  i2c_f = ScanaStudio.builder_get_sample_rate()/100;
+  var silence_period = (samples_to_build / (125));
+  if (i2c_f < 1) i2c_f = 1;
+  if (i2c_f > 100e3) i2c_f = 100e3;
+
+  i2c_builder.config(ch_scl,ch_sda,i2c_f);
+  i2c_builder.put_silence(silence_period);
 
   i2c_builder.put_start();
   i2c_builder.put_byte(0xF7,0); //10b address
   i2c_builder.put_byte(0xFF,0);
   i2c_builder.put_byte(0x55,1);
   i2c_builder.put_stop();
-  i2c_builder.put_silence(10e-5*sample_rate);
+  i2c_builder.put_silence(silence_period);
 
   i2c_builder.put_start();
   i2c_builder.put_byte(0x00,0); //General call address
   i2c_builder.put_byte(0xA1,0);
   i2c_builder.put_byte(0x55,1);
   i2c_builder.put_stop();
-  i2c_builder.put_silence(10e-5*sample_rate);
+  i2c_builder.put_silence(silence_period);
 
   i2c_builder.put_start();
   i2c_builder.put_byte(0x01,0); //Star byte call address
@@ -438,7 +445,7 @@ function on_build_demo_signals()
   i2c_builder.put_byte(0xA1,0);
   i2c_builder.put_byte(0x55,1);
   i2c_builder.put_stop();
-  i2c_builder.put_silence(10e-5*sample_rate);
+  i2c_builder.put_silence(silence_period);
 
   i2c_builder.put_start();
   i2c_builder.put_byte(0x08,0); //HS mode
@@ -446,32 +453,36 @@ function on_build_demo_signals()
   i2c_builder.put_byte(0xA1,0);
   i2c_builder.put_byte(0x55,1);
   i2c_builder.put_stop();
-  i2c_builder.put_silence(10e-5*sample_rate);
+  i2c_builder.put_silence(silence_period);
 
   i2c_builder.put_start();
   i2c_builder.put_byte(0x07,0); //RFU
   i2c_builder.put_byte(0xA1,0);
   i2c_builder.put_byte(0x55,1);
   i2c_builder.put_stop();
-  i2c_builder.put_silence(10e-5*sample_rate);
+  i2c_builder.put_silence(silence_period);
 
-  i2c_builder.put_start();
-  i2c_builder.put_byte(0x55,1);
-  i2c_builder.put_byte(0x55,1);
-  i2c_builder.put_byte(0x55,1);
-  i2c_builder.put_byte(0x55,1);
-  i2c_builder.put_byte(0x55,1);
-  i2c_builder.put_byte(0x55,1);
-  i2c_builder.put_byte(0x55,1);
-  i2c_builder.put_byte(0xD1,1);
-  i2c_builder.put_byte(0xD2,1);
-  i2c_builder.put_byte(0xD3,1);
-  i2c_builder.put_stop();
-  i2c_builder.put_silence(150e-5*sample_rate);
-  i2c_builder.put_start();
-  i2c_builder.put_byte(0x55,1);
-  i2c_builder.put_stop();
-  //Todo: build the demo signals
+  while (ScanaStudio.builder_get_samples_acc(ch_scl) < samples_to_build)
+  {
+    i2c_builder.put_silence(silence_period);
+    i2c_builder.put_start();
+    var random_size = Math.floor(Math.random()*10) + 1;
+    var w;
+    for (w = 0; w < random_size; w++)
+    {
+      random_data = Math.round(Math.random()*256);
+      if (w == random_size-1)
+      {
+        ack = 1;
+      }
+      else
+      {
+        ack = 0;
+      }
+      i2c_builder.put_byte(random_data,ack);
+    }
+    i2c_builder.put_stop();
+  }
 }
 
 
