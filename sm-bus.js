@@ -171,6 +171,16 @@ function process_sm_item(item)
           operation_str_short = "! HS ";
           ScanaStudio.dec_item_emphasize_warning();
         }
+        else if ((byte >> 1) == 0x8)  //SMBus Host
+        {
+          operation_str = "SMBus host address ";
+          operation_str_short = "HOST ";
+        }
+        else if ((byte >> 1) == 0xC)  //SMBus Alert response
+        {
+          operation_str = "SMBus Alert response address ";
+          operation_str_short = "ALERT ";
+        }
         else if ((byte >> 3) == 0x1E) //10 bit (extended) address
         {
           add_10b = true;
