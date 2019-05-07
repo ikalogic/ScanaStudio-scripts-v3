@@ -3,20 +3,23 @@
 <DESCRIPTION>
 System Management Bus (SMBus) protocol analyzer.
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.1:  Initial release.
+V0.2: Added pre-decoding support
+V0.1: Initial release.
 </RELEASE_NOTES>
 */
 
 /*
 Future releases
 ~~~~~~~~~~~~~~~~
+* Detect SMBus host address (when the slave is alerting the host)
+* Add pre-decoding support (done, to be tested)
 * Write online documentation
 * Add hex view support
 * Add packet view support
@@ -31,7 +34,6 @@ var SMB =
 //Decoder GUI
 function on_draw_gui_decoder()
 {
-  //Define decoder configuration GUI
   ScanaStudio.gui_add_ch_selector("ch_sda","SMBDAT Channel","SMBDAT");
   ScanaStudio.gui_add_ch_selector("ch_scl","SMBCLK Channel","SMBCLK");
 
@@ -73,6 +75,7 @@ function on_decode_signals(resume)
   }
 
   var i2c_items = ScanaStudio.pre_decode("i2c.js",resume);
+
   var i = 0;
   //ScanaStudio.console_info_msg("I2C items="+i2c_items.length);
   for (i = 0; i < i2c_items.length; i++)
@@ -207,11 +210,17 @@ function process_sm_item(item)
           add_shift = 0;
         }
 
-
-        ScanaStudio.dec_item_add_content(operation_str + format_content(byte >> add_shift,address_format,add_len) + " - R/W = " + (byte & 0x1).toString());
-        ScanaStudio.dec_item_add_content(operation_str + format_content(byte >> add_shift,address_format,add_len));
-        ScanaStudio.dec_item_add_content(operation_str_short + format_content(byte >> add_shift,address_format,add_len));
-        ScanaStudio.dec_item_add_content(format_content(byte >> add_shift,address_format,add_len));
+        if (ScanaStudio.is_pre_decoding() == true)
+        {
+          ScanaStudio.dec_item_add_content(operation_str_short + ":" + format_content(byte >> add_shift,address_format,add_len) + " - R/W = " + (byte & 0x1).toString());
+        }
+        else
+        {
+          ScanaStudio.dec_item_add_content(operation_str + format_content(byte >> add_shift,address_format,add_len) + " - R/W = " + (byte & 0x1).toString());
+          ScanaStudio.dec_item_add_content(operation_str + format_content(byte >> add_shift,address_format,add_len));
+          ScanaStudio.dec_item_add_content(operation_str_short + format_content(byte >> add_shift,address_format,add_len));
+          ScanaStudio.dec_item_add_content(format_content(byte >> add_shift,address_format,add_len));
+        }
 
         frame_state = SMB.DATA;
 
@@ -222,7 +231,6 @@ function process_sm_item(item)
         if (item.pec == true)
         {
           title = "PEC = ";
-          //ScanaStudio.console_info_msg("CRC calculated as 0x" + crc8_get().toString(16) + " should be = 0x" + byte.toString(16));
           if (byte == crc8_get())
           {
             ScanaStudio.dec_item_add_content("PEC = " + format_content(byte,data_format,8) + " OK!");
@@ -255,6 +263,7 @@ function process_sm_item(item)
 //Function called to generate demo siganls (when no physical device is attached)
 function on_build_demo_signals()
 {
+
   //Use the function below to get the number of samples to be built
   var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
   i2c_builder = ScanaStudio.load_builder_object("i2c.js");
