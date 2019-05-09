@@ -158,19 +158,6 @@ function process_sm_item(item)
           operation_str = "CBUS address ";
           operation_str_short = "CBUS ";
         }
-        else if (((byte>>1) == 2) || ((byte>>1) == 3) || ((byte>>3) == 0x1F)) //Reserved
-        {
-          operation_str = "Reserved address ";
-          operation_str_short = "RES ";
-          ScanaStudio.dec_item_emphasize_warning();
-        }
-        else if ((byte>>3) == 1) //HS-mode master code
-        {
-          hs_mode = true;
-          operation_str = "NOT SUPPORTED: HS-Mode master code ";
-          operation_str_short = "! HS ";
-          ScanaStudio.dec_item_emphasize_warning();
-        }
         else if ((byte >> 1) == 0x8)  //SMBus Host
         {
           operation_str = "SMBus host address ";
@@ -180,6 +167,13 @@ function process_sm_item(item)
         {
           operation_str = "SMBus Alert response address ";
           operation_str_short = "ALERT ";
+        }
+        else if ((byte>>3) == 1) //HS-mode master code
+        {
+          hs_mode = true;
+          operation_str = "NOT SUPPORTED: HS-Mode master code ";
+          operation_str_short = "! HS ";
+          ScanaStudio.dec_item_emphasize_warning();
         }
         else if ((byte >> 3) == 0x1E) //10 bit (extended) address
         {
@@ -197,6 +191,12 @@ function process_sm_item(item)
             operation_str_short = "! 10W ";
             ScanaStudio.dec_item_emphasize_warning();
           }
+        }
+        else if (((byte>>1) == 2) || ((byte>>1) == 3) || ((byte>>3) == 0x1F)) //Reserved
+        {
+          operation_str = "Reserved address ";
+          operation_str_short = "RES ";
+          ScanaStudio.dec_item_emphasize_warning();
         }
         else if (byte & 0x1)
         {
