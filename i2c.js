@@ -3,13 +3,14 @@
 <DESCRIPTION>
 I2C support for ScanaStudio.
 </DESCRIPTION>
-<VERSION> 0.3 </VERSION>
+<VERSION> 0.4 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.4: Fixed warnings in script log when decoding random (non-I2C) signals
 V0.3: Better demo mode generator
 V0.2: Added support for 10b addresses, added support for pre-decoding.
 V0.1: Initial release.
@@ -125,11 +126,14 @@ function on_decode_signals(resume)
               i2c_condition_width = (trs_scl.sample_index - last_trs_sda.sample_index)*0.75;
               if (last_trs_sda.sample_index - i2c_condition_width <= last_dec_item_end_sample)
               {
+                  i2c_condition_width = 2;
                   ScanaStudio.dec_item_new(ch_sda,last_dec_item_end_sample+1,last_dec_item_end_sample + i2c_condition_width);
+                  last_dec_item_end_sample += i2c_condition_width;
               }
               else
               {
                 ScanaStudio.dec_item_new(ch_sda,last_trs_sda.sample_index - i2c_condition_width,last_trs_sda.sample_index + i2c_condition_width);
+                last_dec_item_end_sample = last_trs_sda.sample_index + i2c_condition_width;
               }
 
               if (packet_started)
@@ -155,13 +159,24 @@ function on_decode_signals(resume)
             else
             {
               i2c_condition_width = (last_trs_sda.sample_index-last_trs_scl.sample_index)*0.75;
-              ScanaStudio.dec_item_new(ch_sda,last_trs_sda.sample_index - i2c_condition_width,last_trs_sda.sample_index + i2c_condition_width);
+
+              if (last_trs_sda.sample_index - i2c_condition_width <= last_dec_item_end_sample)
+              {
+                  i2c_condition_width = 2;
+                  ScanaStudio.dec_item_new(ch_sda,last_dec_item_end_sample+1,last_dec_item_end_sample + i2c_condition_width);
+                  last_dec_item_end_sample += i2c_condition_width;
+              }
+              else
+              {
+                ScanaStudio.dec_item_new(ch_sda,last_trs_sda.sample_index - i2c_condition_width,last_trs_sda.sample_index + i2c_condition_width);
+                last_dec_item_end_sample = last_trs_sda.sample_index + i2c_condition_width;
+              }
+
               ScanaStudio.dec_item_add_content("STOP");
               ScanaStudio.dec_item_add_content("P");
               //ScanaStudio.console_error_msg("STOP found!",last_trs_sda.sample_index);
               hs_mode = false;
               packet_started = false;
-              last_dec_item_end_sample = last_trs_sda.sample_index + i2c_condition_width;
             }
           }
         }
@@ -198,7 +213,19 @@ function process_i2c_bit(value,sample_index)
   switch (frame_state) {
     case I2C.ACK:
       //ScanaStudio.console_info_msg("ACK sample = " + start_sample);
-      ScanaStudio.dec_item_new(ch_sda,start_sample-i2c_byte_margin*0.5,start_sample+i2c_byte_margin*0.5);
+
+      if (start_sample-i2c_byte_margin*0.5 <= last_dec_item_end_sample)
+      {
+        ScanaStudio.dec_item_new(ch_sda,last_dec_item_end_sample+1,last_dec_item_end_sample + i2c_byte_margin*0.5);
+        last_dec_item_end_sample += i2c_byte_margin*0.5;
+      }
+      else
+      {
+        ScanaStudio.dec_item_new(ch_sda,start_sample-i2c_byte_margin*0.5,start_sample+i2c_byte_margin*0.5);
+        last_dec_item_end_sample = start_sample+i2c_byte_margin*0.5;
+      }
+
+
       if (value == 1)
       {
         ScanaStudio.dec_item_add_content("NACK");
@@ -228,7 +255,18 @@ function process_i2c_bit(value,sample_index)
       if (bit_counter >= 8)
       {
         i2c_byte_margin = (sample_index - start_sample)/16;
-        ScanaStudio.dec_item_new(ch_sda,start_sample-i2c_byte_margin,sample_index+i2c_byte_margin);
+        if ((start_sample-i2c_byte_margin) <= last_dec_item_end_sample)
+        {
+          ScanaStudio.dec_item_new(ch_sda,last_dec_item_end_sample+1,last_dec_item_end_sample + i2c_byte_margin);
+          last_dec_item_end_sample += i2c_byte_margin;
+        }
+        else
+        {
+          ScanaStudio.dec_item_new(ch_sda,start_sample-i2c_byte_margin,sample_index+i2c_byte_margin);
+          last_dec_item_end_sample = sample_index+i2c_byte_margin;
+        }
+
+
         if (ScanaStudio.is_pre_decoding() == true)
         {
           ScanaStudio.dec_item_add_content("0x" + byte.toString(16));
@@ -317,7 +355,19 @@ function process_i2c_bit(value,sample_index)
       {
         ext_add = (ext_add << 8) + byte;
         i2c_byte_margin = (sample_index - start_sample)/16;
-        ScanaStudio.dec_item_new(ch_sda,start_sample-i2c_byte_margin,sample_index+i2c_byte_margin);
+
+        if (start_sample-i2c_byte_margin <= last_dec_item_end_sample)
+        {
+          ScanaStudio.dec_item_new(ch_sda,last_dec_item_end_sample+1,last_dec_item_end_sample + i2c_byte_margin);
+          last_dec_item_end_sample += i2c_byte_margin;
+        }
+        else
+        {
+          ScanaStudio.dec_item_new(ch_sda,start_sample-i2c_byte_margin,sample_index+i2c_byte_margin);
+          last_dec_item_end_sample = start_sample+i2c_byte_margin;
+        }
+
+
         ScanaStudio.dec_item_add_content("10 bit address = " + format_content(ext_add,address_format,10));
         ScanaStudio.dec_item_add_content("10b add. = " + format_content(ext_add,address_format,10));
         ScanaStudio.dec_item_add_content(format_content(ext_add,address_format,10));
@@ -330,7 +380,18 @@ function process_i2c_bit(value,sample_index)
       if (bit_counter >= 8)
       {
         i2c_byte_margin = (sample_index - start_sample)/16;
-        ScanaStudio.dec_item_new(ch_sda,start_sample-i2c_byte_margin,sample_index+i2c_byte_margin);
+
+        if (start_sample-i2c_byte_margin <= last_dec_item_end_sample)
+        {
+          ScanaStudio.dec_item_new(ch_sda,last_dec_item_end_sample+1,last_dec_item_end_sample + i2c_byte_margin);
+          last_dec_item_end_sample += i2c_byte_margin;
+        }
+        else
+        {
+          ScanaStudio.dec_item_new(ch_sda,start_sample-i2c_byte_margin,sample_index+i2c_byte_margin);
+          last_dec_item_end_sample = start_sample+i2c_byte_margin;
+        }
+
         if (ScanaStudio.is_pre_decoding() == true)
         {
           ScanaStudio.dec_item_add_content("0x" + byte.toString(16));
