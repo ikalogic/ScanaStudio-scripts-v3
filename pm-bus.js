@@ -15,9 +15,19 @@ V0.1:  Initial release.
 */
 
 /*
+	Note:
+	======
+	The PM bus analyzer script is based on the I2C script (not the SMBus script).
+
+	This was decided to allows faster decoding process. Using the SMBus script instead
+	(that is based on I2C script) would provide very little added value as compared
+	to the processing overhead it will bring.
+*/
+
+/*
 Future releases
 ~~~~~~~~~~~~~~~~
-* Add pre-decoding support (done, to be tested)
+* Add pre-decoding support
 * Write online documentation
 * Add hex view support
 * Add packet view support
