@@ -575,7 +575,6 @@ function on_decode_signals(resume)
 function add_spi_content_to_dec_item(header,value)
 {
   var content,b;
-  var prev_content = "";
   if (ScanaStudio.is_pre_decoding())
   {
     //in case tbis decoder is called by another decoder,
