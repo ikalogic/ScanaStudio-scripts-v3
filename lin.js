@@ -3,14 +3,15 @@
 <DESCRIPTION>
 LIN (Local Interconnect Network) protocol analyzer
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Vladislav Kosinov </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL, Vladislav Kosinov </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.1:  Initial release.
+V0.2: Added decoder GUI validation function
+V0.1: Initial release.
 </RELEASE_NOTES>
 */
 
@@ -65,6 +66,14 @@ ScanaStudio.gui_add_new_tab("Advanced options",false);
       ScanaStudio.gui_add_item_to_combo_box("Binary",false);
       ScanaStudio.gui_add_item_to_combo_box("Decimal",false);
   ScanaStudio.gui_end_tab();
+}
+
+//Evaluate decoder GUI
+function on_eval_gui_decoder()
+{
+  ch_lin = ScanaStudio.gui_get_value("ch_lin");
+  ScanaStudio.set_script_instance_name("LIN on Ch: " + (ch_lin+1).toString());
+  return "" //All good.
 }
 
 //Global variables
