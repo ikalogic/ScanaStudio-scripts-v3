@@ -3,21 +3,20 @@
 <DESCRIPTION>
 CAN bus protocol analyzer
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Nicolas Bastit </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com, n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.2:  Added error detection, GUI validation, fixed bit stuffing errors.
 V0.1:  Initial release.
 </RELEASE_NOTES>
 */
 
 /*
-// TODO: add GUI validation to prohibit incompatible bitrate and sample rate
-// TODO: add option to select display format for data/ID, etc..
-// TODO: Handle error states
+// TODO in future releases
 // documentation
 // Hex and Packet view
 */
@@ -29,9 +28,48 @@ function on_draw_gui_decoder()
   //Define decoder configuration GUI
   ScanaStudio.gui_add_ch_selector("ch","CAN Channel","CAN");
   ScanaStudio.gui_add_engineering_form_input_box("rate","Bit rate",100,1e6,125e3,"Bit/s");
-  ScanaStudio.gui_add_new_tab("Advanced options",true);
+  ScanaStudio.gui_add_new_tab("CAN FD options",false);
     ScanaStudio.gui_add_engineering_form_input_box("rate_fd","CAN-FD bit rate",100,20e6,2e6,"Bit/s");
+    ScanaStudio.gui_add_info_label("If you're not using CAN-FD, you can just ignore this setting.");
   ScanaStudio.gui_end_tab();
+  ScanaStudio.gui_add_new_tab("Display options",false);
+    ScanaStudio.gui_add_combo_box("id_format","ID display format");
+      ScanaStudio.gui_add_item_to_combo_box("HEX",true);
+      ScanaStudio.gui_add_item_to_combo_box("Binary",false);
+      ScanaStudio.gui_add_item_to_combo_box("Decimal",false);
+    ScanaStudio.gui_add_combo_box("data_format","Data display format");
+      ScanaStudio.gui_add_item_to_combo_box("HEX",true);
+      ScanaStudio.gui_add_item_to_combo_box("Binary",false);
+      ScanaStudio.gui_add_item_to_combo_box("Decimal",false);
+    ScanaStudio.gui_add_combo_box("crc_format","CRC display format");
+      ScanaStudio.gui_add_item_to_combo_box("HEX",true);
+      ScanaStudio.gui_add_item_to_combo_box("Binary",false);
+      ScanaStudio.gui_add_item_to_combo_box("Decimal",false);
+  ScanaStudio.gui_end_tab();
+}
+
+//Evaluate decoder GUI
+function on_eval_gui_decoder()
+{
+  sampling_rate = ScanaStudio.get_capture_sample_rate();
+  var max_rate = sampling_rate/8; //We need at least that much points per bit period for correct decoding
+  rate = ScanaStudio.gui_get_value("rate");
+  rate_fd = ScanaStudio.gui_get_value("rate_fd");
+  if (rate > max_rate)
+  {
+    return ("Selected bit rate of " + ScanaStudio.engineering_notation(rate,5) + "Hz"
+            + " is too high compared to device sampling rate of " + ScanaStudio.engineering_notation(sampling_rate,5) + "Hz\n"
+            + "(Maximum allowable bit rate is " + ScanaStudio.engineering_notation(max_rate,5) + "Hz"
+          );
+  }
+  if (rate_fd > max_rate)
+  {
+    return ("Selected FD bit rate of " + ScanaStudio.engineering_notation(rate_fd,5) + "Hz"
+            + " is too high compared to device sampling rate of " + ScanaStudio.engineering_notation(sampling_rate,5) + "Hz\n"
+            + "(Maximum allowable bit rate is " + ScanaStudio.engineering_notation(max_rate,5) + "Hz"
+          );
+  }
+  return "" //All good.
 }
 
 //Global variables
@@ -52,7 +90,7 @@ var dec_item_margin = 1;
 var done = false;
 /*
 
-
+Bit flow through the decoder:
 [Samples]---->[bits]--┯----->[destuff]-------┯---->[process bits]
                       |                      |
                       └----->[CRC_FD calc]   └---->[CRC_STD calc]
@@ -71,6 +109,9 @@ function on_decode_signals(resume)
       ch = ScanaStudio.gui_get_value("ch");
       rate = ScanaStudio.gui_get_value("rate");
       rate_fd = ScanaStudio.gui_get_value("rate_fd");
+      id_format = ScanaStudio.gui_get_value("id_format");
+      data_format = ScanaStudio.gui_get_value("data_format");
+      crc_format = ScanaStudio.gui_get_value("crc_format");
       samples_per_bit_std =  Math.floor(sampling_rate / rate);
 
       //Pinpoint exact sampling point (CAN Spec page 28)
@@ -146,13 +187,14 @@ function on_decode_signals(resume)
               switch_to_high_baud_rate = false;
               switch_to_std_baud_rate = false;
               can_state_machine = CAN.SEEK_IDLE;
+
               //scanastudio.console_info_msg("More than 6 recessive bits, error! ",cursor);
               break;
             }
           }*/
 
           same_bit_value_counter++;
-          if (same_bit_value_counter > 15)
+          if ((same_bit_value_counter > 6) && (can_state_machine != CAN.SEEK_CRC))
           {
             same_bit_value_counter = 0;
             cursor = prev_cursor;
@@ -267,6 +309,8 @@ var can_byte_counter;
 var can_base_id;
 var is_can_fd_frame;
 var is_fd_mode;
+var last_packet_boudry; //TODO
+var last_processed_bit;
 function can_process_bit(b,sample_point,is_stuffed_bit)
 {
   var i;
@@ -274,6 +318,17 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
   {
     is_stuffed_bit = false; //SOF can never be a stuffed bit.
   }
+  if (is_stuffed_bit && (last_processed_bit == b)) //Bit stuffing error!
+  {
+    ScanaStudio.dec_item_new( ch,
+                                  sample_point - sample_point_offset_std + dec_item_margin,
+                                  sample_point - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
+    ScanaStudio.dec_item_add_content("Stuffing error");
+    ScanaStudio.dec_item_add_content("Error");
+    ScanaStudio.dec_item_add_content("!E");
+    ScanaStudio.dec_item_emphasize_error();
+  }
+  last_processed_bit = b;
   crc_acc(b,is_stuffed_bit);
   if (is_stuffed_bit)
   {
@@ -332,8 +387,8 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         ScanaStudio.dec_item_new( ch,
                                   can_base_id.start - sample_point_offset_std + dec_item_margin,
                                   can_base_id.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
-        ScanaStudio.dec_item_add_content("Base ID = 0x" + can_base_id.value.toString(16));
-        ScanaStudio.dec_item_add_content("0x" + can_base_id.value.toString(16));
+        ScanaStudio.dec_item_add_content("Base ID = " + format_content(can_base_id.value,id_format,11));
+        ScanaStudio.dec_item_add_content(format_content(can_base_id.value,id_format,11));
         add_can_bits_sampling_points(can_bits,0,11);
 
         //RTR / R1 field
@@ -411,9 +466,9 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         ScanaStudio.dec_item_new( ch,
                                   can_id_ext.start - sample_point_offset_std + dec_item_margin,
                                   can_id_ext.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
-        ScanaStudio.dec_item_add_content("Full Extended ID = 0x" + can_full_id.toString(16) + " (" + can_base_id.value.toString(16) + " + " + can_id_ext.value.toString(16) + ")");
-        ScanaStudio.dec_item_add_content("Full ID = 0x" + can_full_id.toString(16));
-        ScanaStudio.dec_item_add_content("0x"+can_full_id.toString(16));
+        ScanaStudio.dec_item_add_content("Full Extended ID = "+  format_content(can_full_id,id_format,29) + " (" + format_content(can_base_id.value,id_format,11) + " + " + format_content(can_id_ext.value,id_format,18) + ")");
+        ScanaStudio.dec_item_add_content("Full ID " + format_content(can_full_id,id_format,29));
+        ScanaStudio.dec_item_add_content(format_content(can_full_id,id_format,29));
         ScanaStudio.dec_item_add_content("ID Ext.");
         add_can_bits_sampling_points(can_bits,0,18);
 
@@ -530,8 +585,8 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         if (can_brs.value == 1)
         {
           ScanaStudio.dec_item_new( ch,
-                                    can_brs.start - sample_point_offset_std + (samples_per_brs_bit/12),
-                                    can_brs.end - sample_point_offset_std + samples_per_brs_bit - (samples_per_brs_bit/12));
+                                    can_brs.start - sample_point_offset_std + (samples_per_brs_bit/50),
+                                    can_brs.end - sample_point_offset_std + samples_per_brs_bit - (samples_per_brs_bit/50));
           ScanaStudio.dec_item_add_content("BRS = 1 (Switching bit rate)");
           ScanaStudio.dec_item_add_content("BRS = 1");
           //scanastudio.console_info_msg("Switching to high bit rate on next bit, at cursor = " + sample_point,sample_point);
@@ -613,9 +668,8 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         ScanaStudio.dec_item_new( ch,
                                   can_data.start - sample_point_offset + dec_item_margin,
                                   can_data.end - sample_point_offset + samples_per_bit - dec_item_margin);
-        ScanaStudio.dec_item_add_content("DATA = 0x" + can_data.value.toString(16));
-        ScanaStudio.dec_item_add_content("0x" + can_data.value.toString(16));
-        ScanaStudio.dec_item_add_content(can_data.value.toString(16));
+        ScanaStudio.dec_item_add_content("DATA = " + format_content(can_data.value,data_format,8));
+        ScanaStudio.dec_item_add_content(format_content(can_data.value,data_format,8));
         add_can_bits_sampling_points(can_bits,0,8);
         can_byte_counter++;
         can_bits = [];
@@ -657,15 +711,14 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         if (can_crc.value == recalculated_crc)
         {
           ScanaStudio.dec_item_emphasize_success();
-          ScanaStudio.dec_item_add_content("CRC = 0x" + can_crc.value.toString(16) + " OK!");
+          ScanaStudio.dec_item_add_content("CRC = " + format_content(can_crc.value,data_format,crc_len) + " OK!");
         }
         else
         {
           ScanaStudio.dec_item_emphasize_warning();
-          ScanaStudio.dec_item_add_content("CRC = 0x" + can_crc.value.toString(16) + ", should be 0x" + recalculated_crc.toString(16));
+          ScanaStudio.dec_item_add_content("CRC = " + format_content(can_crc.value,data_format,crc_len) + ", should be 0x" + recalculated_crc.toString(16));
         }
-        ScanaStudio.dec_item_add_content("0x" + can_crc.value.toString(16));
-        ScanaStudio.dec_item_add_content(can_crc.value.toString(16));
+        ScanaStudio.dec_item_add_content(format_content(can_crc.value,data_format,crc_len));
         add_can_bits_sampling_points(can_bits,0,crc_len);
         can_bits = [];
         can_state_machine = CAN.SEEK_CRC_DEL;
@@ -1404,4 +1457,54 @@ function get_dlc(data_len)
   }
 
   return dlc;
+}
+
+
+/*
+  Helper function to convert data to formated text
+  according to formating options set by the user
+*/
+function format_content(data,data_format,size_bits)
+{
+  switch (data_format) {
+    case 0: //HEX
+      return "0x" + pad(data.toString(16),Math.ceil(size_bits/4));
+      break;
+    case 1: //Binary
+      return to_binary_str(data,size_bits);
+      break;
+    case 2: // Dec
+      return data.toString(10);
+      break;
+    case 3: //ASCII
+      return " '" + String.fromCharCode(data) + "'"
+      break;
+    default:
+  }
+}
+
+/* Helper fonction to convert value to binary, including 0-padding
+  and groupping by 4-bits packets
+*/
+function to_binary_str(value, size)
+{
+  var i;
+  var str = pad(value.toString(2),size);
+  var ret = "";
+  for (i = 0; i < str.length; i+= 4)
+  {
+    ret += str.slice(i,(i+4)) + " ";
+  }
+  ret = "0b" + ret + str.slice(i);
+  return ret;
+}
+
+/*  A helper function add leading "0"s to numbers
+      Parameters
+        * num_str: A string of the number to be be 0-padded
+        * size: The total wanted size of the output string
+*/
+function pad(num_str, size) {
+    while (num_str.length < size) num_str = "0" + num_str;
+    return num_str;
 }
