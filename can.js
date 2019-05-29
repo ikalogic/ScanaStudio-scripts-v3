@@ -44,7 +44,7 @@ var stuff_mode = 0; //0: off, 1: std bit stuffing, 2: FD CRC bit stuffing
 var samples_per_bit,samples_per_bit_std,samples_per_bit_fd,sample_point_offset;
 var sample_point_offset_std,sample_point_offset_fd;
 var fd_mode = false;
-var bit_to_process,current_bit_value,recessive_bits_counter,same_bit_value_counter;
+var bit_to_process,current_bit_value,dominant_bits_counter,same_bit_value_counter;
 var switch_to_high_baud_rate = false;
 var switch_to_std_baud_rate = false;
 var crc_len = 15;
@@ -84,7 +84,7 @@ function on_decode_signals(resume)
       fd_mode = false;
       stuff_mode = 1;
       current_bit_value = 0;
-      recessive_bits_counter = 1;
+      dominant_bits_counter = 1;
       bit_to_process = 0;
       same_bit_value_counter = 0;
       crc_reset();
@@ -110,12 +110,10 @@ function on_decode_signals(resume)
           cursor = trs.sample_index;
           if (fd_mode) //Flexible datarate CAN
           {
-            //ScanaStudio.console_info_msg("FD resync ",cursor);
             samples_per_bit = samples_per_bit_fd;
             sample_point_offset = sample_point_offset_fd;
             ScanaStudio.bit_sampler_init(ch,cursor+sample_point_offset_fd,samples_per_bit);
             cursor += sample_point_offset_fd;
-            //ScanaStudio.console_info_msg("bit sampler initialzed",cursor);
           }
           else  //standard CAN
           {
@@ -123,11 +121,12 @@ function on_decode_signals(resume)
             sample_point_offset = sample_point_offset_std;
             ScanaStudio.bit_sampler_init(ch,cursor+sample_point_offset_std,samples_per_bit);
             cursor += sample_point_offset_std;
+            //scanastudio.console_info_msg("Resync at transtion ",cursor);
           }
           dec_item_margin = samples_per_bit / 8;
           current_bit_value = trs.value;
           prev_cursor = cursor;
-          recessive_bits_counter = 0;
+          dominant_bits_counter = 0;
           same_bit_value_counter = 0;
           state_machine++;
         }
@@ -135,25 +134,23 @@ function on_decode_signals(resume)
       case 1: //process bits until there is a change
         if (ScanaStudio.get_available_samples(ch) > (cursor + samples_per_bit))
         {
-          //ScanaStudio.console_info_msg("fetching bit");
           bit_to_process = ScanaStudio.bit_sampler_next(ch)
-          if (bit_to_process == 1) //TODO Remove this block
+          /*if ((bit_to_process == 0) && (can_state_machine != CAN.SEEK_CRC)) //TODO Remove this block
           {
-            if (recessive_bits_counter++ > 6)
+            dominant_bits_counter++
+            if (dominant_bits_counter > 6)
             {
               cursor = prev_cursor;
               state_machine = 0;
               fd_mode = false;
               switch_to_high_baud_rate = false;
               switch_to_std_baud_rate = false;
-              can_state_machine = CAN.SEEK_SOF;
-              crc_reset();
+              can_state_machine = CAN.SEEK_IDLE;
               //scanastudio.console_info_msg("More than 6 recessive bits, error! ",cursor);
               break;
             }
-          }
+          }*/
 
-          //ScanaStudio.console_info_msg("same_bit_value_counter="+same_bit_value_counter,cursor);
           same_bit_value_counter++;
           if (same_bit_value_counter > 15)
           {
@@ -163,7 +160,15 @@ function on_decode_signals(resume)
             fd_mode = false;
             switch_to_high_baud_rate = false;
             switch_to_std_baud_rate = false;
-            can_state_machine = CAN.SEEK_IDLE;
+            if (bit_to_process == 1)
+            {
+              can_state_machine = CAN.SEEK_SOF;
+            }
+            else
+            {
+                can_state_machine = CAN.SEEK_IDLE;
+            }
+
             break;
           }
 
@@ -247,9 +252,8 @@ var CAN =
   SEEK_SOF         : 10,
   SEEK_BASE_ID     : 20,
   SEEK_FD_R0_BRS   : 30,
-	SEEK_DLC         : 40,
+	SEEK_CAN_DLC         : 40,
   SEEK_FD_ESI_DLC  : 50,
-  SEEK_DLC_FD2     : 60,
   SEEK_IDE         : 70,
   SEEK_DATA        : 80,
   SEEK_CRC         : 90,
@@ -266,9 +270,11 @@ var is_fd_mode;
 function can_process_bit(b,sample_point,is_stuffed_bit)
 {
   var i;
+  if (can_state_machine == CAN.SEEK_SOF)
+  {
+    is_stuffed_bit = false; //SOF can never be a stuffed bit.
+  }
   crc_acc(b,is_stuffed_bit);
-  //TODO: don't calculate CRC on CRC field
-  //TODO append bit to CAN FD crc calculator here
   if (is_stuffed_bit)
   {
     can_bits.push([sample_point,"X",b]);
@@ -277,7 +283,7 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
   }
   can_bits.push([sample_point,"U",b]);
   //ScanaStudio.console_info_msg( b +" bit",sample_point);
-  //TODO append bit to std crc calculator here
+
   switch (can_state_machine) {
     case CAN.SEEK_IDLE:
       if (b == 1)
@@ -288,10 +294,11 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
     case CAN.SEEK_SOF: //Seek SOF
       if (b == 0)
       {
+        stuff_mode = 1;
+        stuffing_reset();
+        stuffing_check(0);
         crc_reset();
         crc_acc(0,false);
-        //ScanaStudio.console_info_msg("sample_point",sample_point);
-        //ScanaStudio.console_info_msg("sample_point_offset_std = " + sample_point_offset_std);
         //Add start bit item
         ScanaStudio.dec_item_new( ch,
                                   sample_point - sample_point_offset_std + dec_item_margin,
@@ -339,7 +346,7 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
           if (can_r0.value == 0)
           {
             ScanaStudio.dec_item_add_content("RTR");
-            can_state_machine = CAN.SEEK_DLC;
+            can_state_machine = CAN.SEEK_CAN_DLC;
           }
           else
           {
@@ -464,13 +471,13 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
           ScanaStudio.dec_item_add_content("R0 = " + can_r0.value.toString());
           ScanaStudio.dec_item_add_content("R0");
 
-          can_state_machine = CAN.SEEK_DLC;
+          can_state_machine = CAN.SEEK_CAN_DLC;
           can_destuffed_bit_counter = 0;
           can_bits = [];
         }
       }
       break;
-    case CAN.SEEK_DLC:
+    case CAN.SEEK_CAN_DLC:
       can_destuffed_bit_counter++;
       if (can_destuffed_bit_counter == 4)
       {
@@ -491,6 +498,15 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         }
         else
         {
+          stuff_mode = 0; //No more bit stuffing after this point for CAN frames
+          if (is_can_fd_frame)
+          {
+            recalculated_crc = crc_calc(crc_bits_all,crc_len)
+          }
+          else
+          {
+            recalculated_crc = crc_calc(crc_bits_destuffed,crc_len)
+          }
           can_state_machine = CAN.SEEK_CRC;
         }
         can_byte_counter = 0;
@@ -538,7 +554,6 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
       }
       break;
     case CAN.SEEK_FD_ESI_DLC:
-      //ScanaStudio.console_info_msg("TP, can_bits len= " + can_bits.length,sample_point);
       can_destuffed_bit_counter++;
       if (can_destuffed_bit_counter == 5)
       {
@@ -572,6 +587,15 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         }
         else
         {
+          stuff_mode = 2;
+          if (is_can_fd_frame)
+          {
+            recalculated_crc = crc_calc(crc_bits_all,crc_len)
+          }
+          else
+          {
+            recalculated_crc = crc_calc(crc_bits_destuffed,crc_len)
+          }
           can_state_machine = CAN.SEEK_CRC;
         }
         can_byte_counter = 0;
@@ -621,6 +645,7 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
       break;
     case CAN.SEEK_CRC:
       can_destuffed_bit_counter++;
+      //ScanaStudio.console_info_msg("CRC bits..."+can_destuffed_bit_counter+"/"+crc_len,sample_point);
       if (can_destuffed_bit_counter == crc_len)
       {
         can_destuffed_bit_counter = 0;
@@ -843,19 +868,65 @@ function on_build_demo_signals()
   //Use the function below to get the number of samples to be built
   var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
   sampling_rate = ScanaStudio.get_capture_sample_rate();
+  var silence_period_samples = 1000 + (samples_to_build / 125);
   var builder = ScanaStudio.BuilderObject;
+  ch = ScanaStudio.gui_get_value("ch");
+  rate = ScanaStudio.gui_get_value("rate");
+  rate_fd = ScanaStudio.gui_get_value("rate_fd");
 
-  builder.configure(0,125e3,2e6,sampling_rate);
+  builder.configure(ch,rate,rate_fd,sampling_rate);
   builder.put_silence(1e3);
-  //builder.put_can_frame(0x1,[1,2,3]);
-  builder.put_can_frame(0x0202,[0x23,0x24,0x25,0x26,0x29,0x30,0x0,0x0]);
-  builder.put_silence(1e3);
-  //builder.put_can_ext_frame(0x5500AA,[0x23,0x24,0x25,0x26,0x29,0x30,0x0,0x0]);
-  builder.put_can_fd_frame(0x0202,[0x23,0x24,0x25,0x26,0x29,0x30,0x0,0x0]);
-  builder.put_silence(1e3);
-  builder.put_can_fd_ext_frame(0x0202,[0x23,0x24,0x25,0x26,0x29,0x30,0x0,0x0,0x23,0x24,0x25,0x26,0x29,0x30,0x0,0x0,0x23,0x24,0x25,0x26]);
+  //builder.put_can_ext_frame(0x69F,build_sample_data(64));
+  builder.put_silence(100e3);
+  builder.put_can_frame(0x69F,[0,1]);
+  //builder.put_silence(10e3);
+  //return;
+  while (ScanaStudio.builder_get_samples_acc(ch) < samples_to_build)
+  {
+    random_frame_type = Math.floor(Math.random()*3.9);
+    switch (random_frame_type)
+    {
+      case 0:
+        random_id = Math.floor(Math.random()*(0x7FF));
+        random_len = Math.floor(Math.random()*(8.9));
+        sample_data = build_sample_data(random_len);
+        builder.put_can_frame(random_id,sample_data);
+        break;
+      case 1:
+        random_id = Math.floor(Math.random()*(Math.pow(2,29)));
+        random_len = Math.floor(Math.random()*(8.9));
+        sample_data = build_sample_data(random_len);
+        builder.put_can_ext_frame(random_id,sample_data);
+        break;
+      case 2:
+        random_id = Math.floor(Math.random()*(0x7FF));
+        random_len = get_data_len(Math.floor(Math.random()*(15.9)));
+        sample_data = build_sample_data(random_len);
+        builder.put_can_fd_frame(random_id,sample_data);
+        break;
+      case 3:
+        random_id = Math.floor(Math.random()*(Math.pow(2,29)));
+        random_len = get_data_len(Math.floor(Math.random()*(15.9)));
+        sample_data = build_sample_data(random_len);
+        builder.put_can_fd_ext_frame(random_id,sample_data);
+        break;
+      default:
+    }
+    builder.put_silence(silence_period_samples);
+  }
+
 }
 
+function build_sample_data(len)
+{
+  sample_data = [];
+  var i = 0;
+  for (i = 0; i < len; i++)
+  {
+    sample_data.push(Math.floor(Math.random()*0xFF));
+  }
+  return sample_data;
+}
 
 
 //Builder object that can be shared to other scripts
@@ -866,7 +937,6 @@ ScanaStudio.BuilderObject = {
 	put_can_frame : function(id,data_array)
   {
     var i,crc;
-    //ScanaStudio.console_info_msg("put_can_frame, data len = "+data_array.length);
     stuffing_reset();
     crc_reset();
     this.stuffing_mode(1); //Standard bit stuffing
@@ -894,11 +964,12 @@ ScanaStudio.BuilderObject = {
     this.put_bit(1); //CRC DEL
     this.put_bit(0); //ACK
     this.put_bit(1); //ACK DEL
+    this.put_bit(1); //EOF
+    this.put_bit(1); //Interframe Space
   },
   put_can_fd_frame : function(id,data_array)
   {
     var i,crc;
-    //ScanaStudio.console_info_msg("put_can_frame, data len = "+data_array.length);
     stuffing_reset();
     crc_reset();
     this.stuffing_mode(1); //Standard bit stuffing
@@ -922,13 +993,15 @@ ScanaStudio.BuilderObject = {
     this.put_word(crc,crc_get_len(data_array.length)); //CRC
     this.put_fd_crc_del(1); //CRC DEL
     this.bitrate_std(); //Switch back to standard bit rate
+    this.stuffing_mode(0);
     this.put_bit(0); //ACK
     this.put_bit(1); //ACK DEL
+    this.put_bit(1); //EOF
+    this.put_bit(1); //Interframe Space
   },
   put_can_ext_frame : function(id,data_array)
   {
     var i,crc;
-    //ScanaStudio.console_info_msg("put_can_ext_frame, data len = "+data_array.length);
     stuffing_reset();
     crc_reset();
     this.stuffing_mode(1); //Standard bit stuffing
@@ -960,11 +1033,12 @@ ScanaStudio.BuilderObject = {
     this.put_bit(1); //CRC DEL
     this.put_bit(0); //ACK
     this.put_bit(1); //ACK DEL
+    this.put_bit(1); //EOF
+    this.put_bit(1); //Interframe Space
   },
   put_can_fd_ext_frame : function(id,data_array)
   {
     var i,crc;
-    //ScanaStudio.console_info_msg("put_can_ext_frame, data len = "+data_array.length);
     stuffing_reset();
     crc_reset();
     this.stuffing_mode(1); //Standard bit stuffing
@@ -990,13 +1064,15 @@ ScanaStudio.BuilderObject = {
     this.put_word(crc,crc_get_len(data_array.length)); //CRC
     this.put_fd_crc_del(1); //CRC DEL
     this.bitrate_std(); //Switch back to standard bit rate
+    this.stuffing_mode(0);
     this.put_bit(0); //ACK
     this.put_bit(1); //ACK DEL
+    this.put_bit(1); //EOF
+    this.put_bit(1); //Interframe Space
   },
   put_word : function(words,len)
   {
     var i;
-    //ScanaStudio.console_info_msg("****** putting word: 0x" + words.toString(16)+", len = "+len);
     for (i = (len-1); i >= 0; i--)
     {
       this.put_bit((words >> i) & 0x1);
@@ -1011,7 +1087,7 @@ ScanaStudio.BuilderObject = {
     var sb = -1; //assume there is not bit stuffing
     if (this.stuffing == 1)
     {
-      sb = stuffing_check(b);
+      sb = stuffing_build(b);
     }
     else if (this.stuffing == 2)
     {
@@ -1019,11 +1095,11 @@ ScanaStudio.BuilderObject = {
     }
     if (sb >= 0) //add stuffed bit if needed
     {
-      //ScanaStudio.console_info_msg("Adding stuffed bit " + sb);
+      //ScanaStudio.console_info_msg("*SB="+sb);
       crc_acc(sb,true);
       ScanaStudio.builder_add_samples(this.channel,sb,this.samples_per_bit);
     }
-    //ScanaStudio.console_info_msg("Adding " + b);
+    //ScanaStudio.console_info_msg("B="+b + ", stuff_count=" + stuff_counter);
     crc_acc(b,false);
     ScanaStudio.builder_add_samples(this.channel,b,this.samples_per_bit);
   },
@@ -1032,7 +1108,7 @@ ScanaStudio.BuilderObject = {
     var sb = -1; //assume there is not bit stuffing
     if (this.stuffing == 1)
     {
-      sb = stuffing_check(b);
+      sb = stuffing_build(b);
     }
     else if (this.stuffing == 2)
     {
@@ -1051,7 +1127,7 @@ ScanaStudio.BuilderObject = {
     var sb = -1; //assume there is not bit stuffing
     if (this.stuffing == 1)
     {
-      sb = stuffing_check(b);
+      sb = stuffing_build(b);
     }
     else if (this.stuffing == 2)
     {
@@ -1084,7 +1160,6 @@ ScanaStudio.BuilderObject = {
     this.samples_per_bit_fd = sample_rate/bitrate_fd;
     this.samples_per_brs_bit = (this.samples_per_bit_std*11/15) + (this.samples_per_bit_fd*4/10);
     this.samples_per_fd_crc_del_bit = (this.samples_per_bit_fd*6/10) + (this.samples_per_bit_std*4/15);
-    //ScanaStudio.console_info_msg("samples_per_brs_bit = " + this.samples_per_brs_bit);
     this.bitrate_std();
   }
 };
@@ -1102,6 +1177,32 @@ var stuff_counter = 0;
 var stuff_crc_counter = 0;
 var stuff_last_bit;
 var stuff_first_crc_bit = true;
+function stuffing_build(b)
+{
+  var ret = -1;
+
+  if (stuff_counter >= 5)
+  {
+    ret =  (!stuff_last_bit) & 0x1;
+    stuff_counter = 1;
+    if (ret == b)
+    {
+      stuff_counter++;
+    }
+  }
+  else if (b == stuff_last_bit)
+  {
+      stuff_counter++;
+  }
+  else
+  {
+    stuff_counter = 1;
+  }
+
+  stuff_last_bit = b;
+  return ret;
+}
+
 function stuffing_check(b)
 {
   var ret = -1;
@@ -1110,6 +1211,9 @@ function stuffing_check(b)
   {
     ret =  (!stuff_last_bit) & 0x1;
     stuff_counter = 0;
+  }
+  else
+  {
   }
   if (b != stuff_last_bit)
   {
@@ -1127,10 +1231,8 @@ function stuffing_build_fd_crc(b)
 {
   var ret = -1;
   stuff_crc_counter++;
-  //ScanaStudio.console_info_msg("FD CRC stuff_crc_counter="+stuff_crc_counter);
   if ((stuff_crc_counter >= 4) || (stuff_first_crc_bit))
   {
-    //ScanaStudio.console_info_msg("FD CRC stuffed bit detected, stuff_crc_counter="+stuff_crc_counter);
     ret =  (!stuff_last_bit) & 0x1;
     stuff_crc_counter = 0;
     stuff_first_crc_bit = false;
@@ -1144,10 +1246,8 @@ function stuffing_check_fd_crc(b)
 {
   var ret = -1;
   stuff_crc_counter++;
-  //ScanaStudio.console_info_msg("FD CRC stuff_crc_counter="+stuff_crc_counter);
   if ((stuff_crc_counter >= 5) || (stuff_first_crc_bit))
   {
-    //ScanaStudio.console_info_msg("FD CRC stuffed bit detected, stuff_crc_counter="+stuff_crc_counter);
     ret =  (!stuff_last_bit) & 0x1;
     stuff_crc_counter = 0;
     stuff_first_crc_bit = false;
@@ -1159,7 +1259,6 @@ function stuffing_check_fd_crc(b)
 
 function stuffing_reset()
 {
-  //ScanaStudio.console_info_msg("Stuffing reset");
   stuff_crc_counter = 0;
   stuff_counter = 0;
   stuff_first_crc_bit = true;
@@ -1234,8 +1333,6 @@ function crc_calc(bits,crc_len)
     }
     crc &= ~(1 << (crc_len));
   }
-  //ScanaStudio.console_info_msg("seq="+bits_sequence);
-  //ScanaStudio.console_info_msg("crc="+crc.toString(16));
   return crc;
 }
 
