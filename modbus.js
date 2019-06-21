@@ -103,7 +103,6 @@ function reload_dec_gui_values()
 
 function on_eval_gui_decoder()
 {
-    ScanaStudio.console_info_msg(Number(ScanaStudio.gui_get_value("baud")*8) + " " + (ScanaStudio.get_capture_sample_rate()));
     if(Number(ScanaStudio.gui_get_value("baud")*8) >= (ScanaStudio.get_capture_sample_rate()) )
     {
         return "Selected bauderate is too high compared to the sampling rate you chose. Bauderate should be at least 8 times lower than the sampling rate.";
