@@ -101,6 +101,25 @@ function reload_dec_gui_values()
 }
 
 
+function on_eval_gui_decoder()
+{
+    ScanaStudio.console_info_msg(Number(ScanaStudio.gui_get_value("baud")*8) + " " + (ScanaStudio.get_capture_sample_rate()));
+    if(Number(ScanaStudio.gui_get_value("baud")*8) >= (ScanaStudio.get_capture_sample_rate()) )
+    {
+        return "Selected bauderate is too high compared to the sampling rate you chose. Bauderate should be at least 8 times lower than the sampling rate.";
+    }
+
+    if(Number(ScanaStudio.gui_get_value("baud")) == 0)
+    {
+        return "Selected bauderate can't be null.";
+    }
+
+    ScanaStudio.set_script_instance_name("MODBUS on CH"+(ScanaStudio.gui_get_value("ch")+1).toString());
+    return "";
+}
+
+
+
 const   ENUM_STATE_SOF = 0,
         ENUM_STATE_SLAVE_ADDR = 1,
         ENUM_STATE_FUNCTION = 2,
@@ -282,9 +301,16 @@ function on_decode_signals_RTU_mode(uart_items)
                 {
                     if(too_short_silent == false)
                     {
-                        if(uart_items[i-1].end_sample_index > trs.sample_index)
+                        if(i>=1)
                         {
-                            trs.sample_index = uart_items[i-1].end_sample_index + 1.5*sample_per_bits;
+                            if(uart_items[i-1].end_sample_index > trs.sample_index)
+                            {
+                                trs.sample_index = uart_items[i-1].end_sample_index + 1.5*sample_per_bits;
+                            }
+                        }
+                        else
+                        {
+                            trs.sample_index = 0;
                         }
                         too_short_silent = true;
                         ScanaStudio.packet_view_add_packet( true,
@@ -2432,13 +2458,6 @@ function on_build_demo_signals()
 
     // my_builder.modbus_RTU_write_data([4,1,0,10,0,13]);
 	// my_builder.modbus_ASCII_write_data("F7031389000A");
-}
-
-
-//Trigger sequence GUI
-function on_draw_gui_trigger()
-{
-  //Add gui functions...
 }
 
 
