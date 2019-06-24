@@ -12,7 +12,7 @@ of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
 V0.0:  Initial release.
 </RELEASE_NOTES>
-<HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/UART-ScanaStudio-script-documentation </HELP_URL>
+<HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/MODBUS-ScanaStudio-script-documentation </HELP_URL>
 */
 
 
@@ -2181,7 +2181,6 @@ function on_decode_signals(resume)
 function on_build_demo_signals()
 {
     var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
-    var silence_period_samples = 1000 + (samples_to_build / 125);
     var uart_builder = ScanaStudio.load_builder_object("uart.js");
     reload_dec_gui_values();
     uart_builder.config(
