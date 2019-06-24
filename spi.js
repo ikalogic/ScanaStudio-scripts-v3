@@ -181,7 +181,7 @@ function on_eval_gui_decoder()
     {
       ch_list[spi_ch_list[i]] = spi_ch_list[i];
     }
-    instance_name += spi_ch_list[i].toString();
+    instance_name += (spi_ch_list[i]+1).toString();
     if (i < (spi_ch_list.length-1))
     {
       instance_name += ",";
