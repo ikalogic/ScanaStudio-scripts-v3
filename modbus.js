@@ -2205,7 +2205,6 @@ function on_build_demo_signals()
         var rng_addr = Math.floor(Math.random()*255) + 1;
         var rng_fct = Math.floor(Math.random()*10) + 1;
         var rng_request_answer = Math.floor(Math.random()*2);
-        var rng_error_crc = Math.floor(Math.random()*20);
         var rng_ex_report = Math.floor(Math.random()*10);
 
         if(rng_fct>=7)
@@ -2213,7 +2212,7 @@ function on_build_demo_signals()
 
         if(rng_mode == 0) //RTU
         {
-            my_builder.put_silence(Math.floor(Math.random()*10) + 0);
+            my_builder.put_silence(Math.floor(Math.random()*6.5) + 3.5);
 
 
             var RTU_data = [];
@@ -2301,27 +2300,11 @@ function on_build_demo_signals()
                 RTU_data.push(rng_ex);
             }
 
-
-            if(rng_error_crc>=1)
-            {
-                my_builder.modbus_RTU_write_data(RTU_data);
-            }
-            else// fake crc error
-            {
-                var crc = crc_calculation(RTU_data) + 1;
-                var inc = 0;
-            	for(inc=0;inc<RTU_data.length;inc++)
-            	{
-            		my_builder.uart_builder.put_c(RTU_data[inc]);
-            	};
-
-            	my_builder.uart_builder.put_c(crc&0xff);
-            	my_builder.uart_builder.put_c(crc>>8);
-            }
+            my_builder.modbus_RTU_write_data(RTU_data);
         }
         else //ASCII
         {
-            my_builder.put_silence(Math.floor(Math.random()*10) + 0);
+            my_builder.put_silence(Math.floor(Math.random()*5) + 0);
             var ASCII_data = "";
 
             ASCII_data += dec_to_str(rng_addr, "");
@@ -2414,48 +2397,9 @@ function on_build_demo_signals()
                 ASCII_data += dec_to_str(rng_ex, "");
             }
 
-            if(rng_error_crc>=1)
-            {
-                my_builder.modbus_ASCII_write_data(ASCII_data);
-            }
-            else// fake Lrc error
-            {
-                var i;
-            	var lrc=0;
-            	var temp = ":";
-
-            	for(i=0;i<ASCII_data.length-1;i+=2)
-            	{
-            		temp += ASCII_data[i] + ASCII_data[i+1];
-            		if(ASCII_data.charCodeAt(i) < 58)
-            			lrc+= (ASCII_data.charCodeAt(i) - 0x30)*16;
-            		else
-            			lrc+= (ASCII_data.charCodeAt(i) - 55)*16;
-            		if(ASCII_data.charCodeAt(i+1) < 58)
-            			lrc+= ASCII_data.charCodeAt(i+1) - 0x30;
-            		else
-            			lrc+= ASCII_data.charCodeAt(i+1) - 55;
-            	}
-
-            	lrc = (-lrc)%256;
-            	lrc = 256+lrc;
-                lrc = lrc+1;
-
-            	if (lrc < 0x10)
-            	{
-            		temp += "0";
-            	}
-
-            	temp += lrc.toString(16).toUpperCase() + "\r\n";
-
-            	my_builder.uart_builder.put_str(temp);
-            }
+            my_builder.modbus_ASCII_write_data(ASCII_data);
         }
-
     }//end while
-
-    // my_builder.modbus_RTU_write_data([4,1,0,10,0,13]);
-	// my_builder.modbus_ASCII_write_data("F7031389000A");
 }
 
 
