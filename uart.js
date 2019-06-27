@@ -56,7 +56,7 @@ still Todo:
 function on_draw_gui_decoder()
 {
     var i;
-    ScanaStudio.gui_add_ch_selector("ch","Channel to decodee","UART");
+    ScanaStudio.gui_add_ch_selector("ch","Channel to decode","UART");
     ScanaStudio.gui_add_baud_selector("baud","BAUD rate",9600);
 
     ScanaStudio.gui_add_new_tab("Output format",true);

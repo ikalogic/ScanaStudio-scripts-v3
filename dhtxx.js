@@ -18,7 +18,7 @@ V0.0:  Initial release.
 
 function on_draw_gui_decoder()
 {
-    ScanaStudio.gui_add_ch_selector("ch","Channel to decodee","DHTxx");
+    ScanaStudio.gui_add_ch_selector("ch","Channel to decode","DHTxx");
 
     ScanaStudio.gui_add_combo_box("sensor", "Sensor");
         ScanaStudio.gui_add_item_to_combo_box("DHT11", true);
@@ -103,7 +103,7 @@ var frame = [];
 
 function reload_dec_gui_values()
 {
-    channel = Number(ScanaStudio.gui_get_value("ch") )
+    channel = Number(ScanaStudio.gui_get_value("ch") );
     if( Number(ScanaStudio.gui_get_value("sensor")) == 0 )
     {
         DHTxx = DHT11;
