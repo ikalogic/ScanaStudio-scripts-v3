@@ -86,7 +86,7 @@ const   COLOR_T_RH      = "#33FFFF",
         COLOR_T_ERROR   = "#FF0000",
         COLOR_C_ERROR   = "#FF8080",
         COLOR_T_WARNING = "#FF6633",
-        COLOR_C_WARNING = "#FF8653",
+        COLOR_C_WARNING = "#FF8653";
 
 var DHTxx = DHT11;
 var temperature_unit;
