@@ -18,6 +18,7 @@ V0.1:  Initial release.
 /*
 // TODO in future releases
 // documentation
+// Add trigger support
 // Hex and Packet view
 */
 
