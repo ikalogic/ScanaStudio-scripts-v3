@@ -80,15 +80,13 @@ function on_eval_gui_decoder()
 }
 
 var channel;
-var state_machine;
-var cnt_channel;
 var trs;
 var last_trs;
-var current_i;
-var select_decoder;
-var last_break;
-var alt_color;
+var trame = [];
+var trame_started;
+var trame_ended;
 //for the next release
+// var select_decoder;
 // var list_channel = [];
 // var i_ch;
 
@@ -142,12 +140,6 @@ function reload_dec_gui_values()
     // }
 }
 
-var trame = [];
-var trame_started;
-var trame_ended;
-var trs;
-var last_trs;
-
 
 function on_decode_signals(resume)
 {
@@ -177,16 +169,6 @@ function on_decode_signals(resume)
             uart_items.splice(j,1);
         }
     }
-
-    // for(var j=0; j<uart_items.length; j++)
-    // {
-    //     ScanaStudio.dec_item_new(channel,uart_items[j].start_sample_index,uart_items[j].end_sample_index);
-    //     ScanaStudio.dec_item_add_content(uart_items[j].content);
-    // }
-    // return;
-    //
-    // if(uart_items.length)
-    //     ScanaStudio.console_info_msg("end",uart_items[0].start_sample_index);
 
     for(var j=0; (j<uart_items.length) && (!ScanaStudio.abort_is_requested()); j++)
     {
