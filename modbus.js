@@ -12,7 +12,7 @@ of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
 V0.0:  Initial release.
 </RELEASE_NOTES>
-<HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/MODBUS-ScanaStudio-script-documentation </HELP_URL>
+<HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 */
 
 
@@ -58,16 +58,14 @@ V0.0:  Initial release.
 
 var channel,baud,mode,parity,stop,invert,order;
 var state_machine;
-var trs;
-var trame = [];
 var current_fct;
 var current_i_fct;
 var current_byte_cnt;
-var current_i_crc;
-var current_i_eof;
-var too_short_silent;
-var i;
-var need_reinit_state_machine;
+var trame = [];
+var trame_started;
+var trame_ended;
+var last_item_end;
+var available_samples;
 
 
 function reload_dec_gui_values()
@@ -125,6 +123,7 @@ const   ENUM_STATE_SOF = 0,
         ENUM_STATE_AFTER_FUNCTION = 3,
         ENUM_STATE_CRC = 4,
         ENUM_STATE_LRC = 5,
+        ENUM_STATE_EOF = 6,
         ENUM_STATE_UNDEFINED = 10,
 
 
@@ -180,934 +179,902 @@ function on_decode_signals_RTU_mode(uart_items)
         }
     }
 
+    // for(j=0; j<uart_items.length; j++)
+    // {
+    //     ScanaStudio.dec_item_new(channel,uart_items[j].start_sample_index,uart_items[j].end_sample_index);
+    //     ScanaStudio.dec_item_add_content(uart_items[j].content);
+    // }
+    // return;
+
     var sample_per_bits = ScanaStudio.get_capture_sample_rate() / baud;
-
-    for(i=0; (i<uart_items.length)&&(!ScanaStudio.abort_is_requested()); i++)
+    for(j=0; (j<uart_items.length) && (!ScanaStudio.abort_is_requested()); j++)
     {
-        if(i>=1)//this silence time reinit state_machine
+        if(!trame_started)
         {
-            if( (uart_items[i].start_sample_index - 1*sample_per_bits - 1.5*11*sample_per_bits) >= (uart_items[i-1].end_sample_index + 2*sample_per_bits) )
+            trame = [];
+            if(j==0)
             {
-                if((state_machine == ENUM_STATE_AFTER_FUNCTION)&&(current_byte_cnt!=-1))
-                {
-                    switch(current_fct)
-                    {
-                        case FCT_READ_COIL_STATUS:
-                        case FCT_READ_INPUT_STATUS:
-                        case FCT_READ_HOLDING_REGISTERS:
-                        case FCT_READ_INPUT_REGISTERS:
-                            {
-                                if(current_i_eof == -1)
-                                {
-                                    current_i_eof = i;
-                                }
-
-                                if((current_i_eof-current_i_fct-2 == 5) && (current_i_eof != -1) && (current_byte_cnt != 3))
-                                {
-                                    i = current_i_fct + 5;
-                                    current_byte_cnt = -1;
-                                }
-                                else if((current_i_eof != -1) && !need_reinit_state_machine)
-                                {
-                                    need_reinit_state_machine = true;
-                                    i = current_i_fct +1;
-                                }
-                                else
-                                {
-                                    i = current_i_fct ;
-                                    state_machine = ENUM_STATE_UNDEFINED;
-                                    break;
-                                }
-                                state_machine = ENUM_STATE_AFTER_FUNCTION;
-                                break;
-                            }
-                        case FCT_WRITE_MULTIPLE_COILS:
-                        case FCT_WRITE_MULTIPLE_REGISTERS:
-                            {
-                                i = current_i_fct + 5;
-                                current_byte_cnt = -2;
-                                state_machine = ENUM_STATE_AFTER_FUNCTION;
-                                break;
-                            }
-                        default:
-                            {
-                                if(current_i_eof == -1)
-                                {
-                                    current_i_eof = i;
-                                    i = current_i_fct + 1;
-                                }
-                                state_machine = ENUM_STATE_AFTER_FUNCTION;
-                                break;
-                            }
-                    }
-                }
-                else
-                {
-                    state_machine = ENUM_STATE_SOF;
-                }
+                trame_started = true;
+            }
+            else if( (uart_items[j].start_sample_index - 1*sample_per_bits - 1.5*11*sample_per_bits) >= (uart_items[j-1].end_sample_index + 2*sample_per_bits) )
+            {
+                trame_started = true;
+                last_item_end = uart_items[j-1].end_sample_index;
             }
         }
 
-        switch(state_machine)
+        if(trame_started)
         {
-            case ENUM_STATE_SOF: //SOF needs 3.5 char of silents, usualy, 1 char is 11 bits
+            if(j==uart_items.length-1)
             {
-                trs = ScanaStudio.trs_get_before(channel, uart_items[i].start_sample_index - 1.5*sample_per_bits);
-                trame = [];
-                current_fct = -1;
-                current_i_fct = -1;
-                current_byte_cnt = -1;
-                current_i_crc = -1;
-                current_i_eof = -1;
-                need_reinit_state_machine = false;
-
-                if(uart_items[i].start_sample_index - trs.sample_index > 3.5*11*sample_per_bits)//normal silence
-                {// SOF detected
-                    ScanaStudio.dec_item_new( channel,
-                                            uart_items[i].start_sample_index - 3.5*11*sample_per_bits - 1.5*sample_per_bits,
-                                            uart_items[i].start_sample_index - 1.5*sample_per_bits);
-                    ScanaStudio.dec_item_add_content( "Start Of Frame" );
-                    ScanaStudio.dec_item_add_content( "SOF" );
-
-                    state_machine = ENUM_STATE_SLAVE_ADDR;
-                }
-                else if(uart_items[i].start_sample_index - trs.sample_index > 1.5*11*sample_per_bits)//minimum silence for end of frame
+                if(uart_items[j].end_sample_index + 2*sample_per_bits <= available_samples-1.5*11*sample_per_bits )
                 {
-                    if(uart_items[i-1].end_sample_index > trs.sample_index)
-                    {
-                        trs.sample_index = uart_items[i-1].end_sample_index + 1.5*sample_per_bits;
-                    }
-
-                    ScanaStudio.packet_view_add_packet( true,
-                                                        channel,
-                                                        trs.sample_index,
-                                                        uart_items[i].start_sample_index - 1.5*sample_per_bits,
-                                                        "SOF Warning",
-                                                        "Too short silence",
-                                                        COLOR_T_ERROR,
-                                                        COLOR_C_ERROR);
-
-                    ScanaStudio.dec_item_new( channel,
-                                            trs.sample_index,
-                                            uart_items[i].start_sample_index - 1.5*sample_per_bits);
-                    ScanaStudio.dec_item_add_content( "Start Of Frame Warning" );
-                    ScanaStudio.dec_item_add_content( "!SOF" );
-                    ScanaStudio.dec_item_emphasize_warning();
-
-                    state_machine = ENUM_STATE_SLAVE_ADDR;
+                    trame_ended = true;
                 }
-                else
+            }
+            else
+            {
+                if( (uart_items[j+1].start_sample_index - 1*sample_per_bits - 1.5*11*sample_per_bits) >= (uart_items[j].end_sample_index + 2*sample_per_bits) )
                 {
-                    if(too_short_silent == false)
+                    trame_ended = true;
+                }
+            }
+
+            trame.push(uart_items[j]);
+
+            if(trame_ended)//decode trame
+            {
+                trame_ended = false;
+                trame_started = false;
+
+                var i=0;
+                var fct_code = 0x00;
+                var request = false;
+                var response = false;
+                var error = false;
+                var crc_reached = false;
+                state_machine = ENUM_STATE_SLAVE_ADDR;
+                for(i=0; (i<trame.length) && (!ScanaStudio.abort_is_requested()); i++)
+                {
+                    switch(state_machine)
                     {
-                        if(i>=1)
+                        case ENUM_STATE_SLAVE_ADDR:
                         {
-                            if(uart_items[i-1].end_sample_index > trs.sample_index)
+                            if(last_item_end + 2*sample_per_bits + 3*11*sample_per_bits >= trame[i].start_sample_index - 1*sample_per_bits)
                             {
-                                trs.sample_index = uart_items[i-1].end_sample_index + 1.5*sample_per_bits;
+                                ScanaStudio.dec_item_new( channel,
+                                                        last_item_end + 2*sample_per_bits,
+                                                        trame[i].start_sample_index - 1*sample_per_bits);
+                                ScanaStudio.dec_item_add_content( "Too short Start Of Frame" );
+                                ScanaStudio.dec_item_add_content( "!Start Of Frame" );
+                                ScanaStudio.dec_item_add_content( "!SOF" );
+                                ScanaStudio.dec_item_emphasize_warning();
                             }
-                        }
-                        else
-                        {
-                            trs.sample_index = 0;
-                        }
-                        too_short_silent = true;
-                        ScanaStudio.packet_view_add_packet( true,
-                                                            channel,
-                                                            trs.sample_index,
-                                                            uart_items[i].start_sample_index,
-                                                            "SOF Error",
-                                                            "Way too short silence !",
-                                                            COLOR_T_ERROR,
-                                                            COLOR_T_ERROR);
-
-                        ScanaStudio.dec_item_new( channel,
-                                                trs.sample_index,
-                                                uart_items[i].start_sample_index - 1.5*sample_per_bits);
-                        ScanaStudio.dec_item_add_content( "ERROR !!! Start of Frame unrecognized" );
-                        ScanaStudio.dec_item_add_content( "! !SOF !" );
-                        ScanaStudio.dec_item_emphasize_error();
-                        state_machine = ENUM_STATE_SLAVE_ADDR;
-                    }
-                    else
-                    {
-                        break;
-                    }
-                }
-            }//end ENUM_STATE_SOF
-
-            case ENUM_STATE_SLAVE_ADDR:
-            {
-                ScanaStudio.dec_item_new( channel,
-                                        uart_items[i].start_sample_index,
-                                        uart_items[i].end_sample_index);
-                ScanaStudio.dec_item_add_content( "Slave Address : " + uart_items[i].content );
-                ScanaStudio.dec_item_add_content( "Slave Addr: " + uart_items[i].content );
-                ScanaStudio.dec_item_add_content( "Addr:" + uart_items[i].content );
-                ScanaStudio.dec_item_add_content( uart_items[i].content );
-                ScanaStudio.packet_view_add_packet( true,
-                                                    channel,
-                                                    uart_items[i].start_sample_index,
-                                                    uart_items[i].end_sample_index,
-                                                    "Modbus",
-                                                    "CH" + (channel + 1),
-                                                    "#0000FF",
-                                                    "#8080FF");
-                ScanaStudio.packet_view_add_packet( false,
-                                                    channel,
-                                                    uart_items[i].start_sample_index,
-                                                    uart_items[i].end_sample_index,
-                                                    "Slave Addr:",
-                                                    "@" + uart_items[i].content,
-                                                    COLOR_T_ADDR,
-                                                    COLOR_C_ADDR);
-
-                trame.push(Number(uart_items[i].content));
-                too_short_silent = false;
-                state_machine = ENUM_STATE_FUNCTION;
-                break;
-            }
-
-            case ENUM_STATE_FUNCTION:
-            {
-                current_fct = Number( uart_items[i].content );
-                current_i_fct = i;
-                current_byte_cnt = -1;
-                current_i_eof = -1;
-                current_i_crc = -1;
-
-                state_machine = ENUM_STATE_AFTER_FUNCTION;
-                break;
-            }
-
-            case ENUM_STATE_AFTER_FUNCTION:
-            {
-                switch(current_fct)
-                {
-                    case FCT_READ_COIL_STATUS:
-                    case FCT_READ_INPUT_STATUS:
-                    case FCT_READ_HOLDING_REGISTERS:
-                    case FCT_READ_INPUT_REGISTERS:
-                    {
-                        if( (current_byte_cnt == -1) && (i == current_i_fct + 1) )
-                        {
-                            current_byte_cnt = Number(uart_items[i].content);
+                            else
+                            {
+                                ScanaStudio.dec_item_new( channel,
+                                                        trame[i].start_sample_index - 3*11*sample_per_bits - 3*sample_per_bits,
+                                                        trame[i].start_sample_index - 1*sample_per_bits);
+                                ScanaStudio.dec_item_add_content( "Start Of Frame" );
+                                ScanaStudio.dec_item_add_content( "SOF" );
+                            }
+                            ScanaStudio.dec_item_new( channel,
+                                                    trame[i].start_sample_index,
+                                                    trame[i].end_sample_index);
+                            ScanaStudio.dec_item_add_content( "Slave Address : " + trame[i].content );
+                            ScanaStudio.dec_item_add_content( "Slave Addr: " + trame[i].content );
+                            ScanaStudio.dec_item_add_content( "Addr:" + trame[i].content );
+                            ScanaStudio.dec_item_add_content( trame[i].content );
+                            ScanaStudio.packet_view_add_packet( true,
+                                                                channel,
+                                                                trame[i].start_sample_index,
+                                                                trame[trame.length-1].end_sample_index,
+                                                                "Modbus RTU",
+                                                                "CH" + (channel + 1),
+                                                                "#0000FF",
+                                                                ScanaStudio.get_channel_color(channel));//"#8080FF");
+                            ScanaStudio.packet_view_add_packet( false,
+                                                                channel,
+                                                                trame[i].start_sample_index,
+                                                                trame[i].end_sample_index,
+                                                                "Slave Addr:",
+                                                                "@" + trame[i].content,
+                                                                COLOR_T_ADDR,
+                                                                COLOR_C_ADDR);
+                            state_machine = ENUM_STATE_FUNCTION;
                             break;
-                        }
-                        else if( (i-current_i_fct == 5) && (current_byte_cnt == -1) )//request
+                        }//end ENUM_STATE_SLAVE_ADDR
+
+                        case ENUM_STATE_FUNCTION:
                         {
-                            ScanaStudio.dec_item_new( channel,
-                                                    uart_items[current_i_fct].start_sample_index,
-                                                    uart_items[current_i_fct].end_sample_index);
-                            ScanaStudio.dec_item_add_content( "Function : " + function_to_str(current_fct,1) );
-                            ScanaStudio.dec_item_add_content( "Fct : " + function_to_str(current_fct,1) );
-                            ScanaStudio.dec_item_add_content( "Fct : " + uart_items[current_i_fct].content );
-                            ScanaStudio.dec_item_add_content( uart_items[current_i_fct].content );
-                            ScanaStudio.packet_view_add_packet( false,
-                                                                channel,
-                                                                uart_items[current_i_fct].start_sample_index,
-                                                                uart_items[current_i_fct].end_sample_index,
-                                                                "Function",
-                                                                function_to_str(current_fct,1),
-                                                                COLOR_T_FCT,
-                                                                COLOR_C_FCT);
-                            trame.push(Number(uart_items[current_i_fct].content));
+                            fct_code = Number( trame[i].content );
 
-                            var k;
-                            for(k=current_i_fct+1; k<i; k++)//navigate throught the reste of data
+                            ScanaStudio.dec_item_new( channel,
+                                                    trame[i].start_sample_index,
+                                                    trame[i].end_sample_index);
+                            switch(fct_code)
                             {
-                                var pkt_str = "";
-                                ScanaStudio.dec_item_new( channel,
-                                                        uart_items[k].start_sample_index,
-                                                        uart_items[k].end_sample_index);
-                                switch(k - current_i_fct)
+                                case FCT_READ_COIL_STATUS:
+                                case FCT_READ_INPUT_STATUS:
+                                case FCT_READ_HOLDING_REGISTERS:
+                                case FCT_READ_INPUT_REGISTERS:
                                 {
-                                    case 1:
+                                    if(trame.length > 3)
                                     {
-                                        ScanaStudio.dec_item_add_content("Starting Address Hi : " + uart_items[k].content);
-                                        ScanaStudio.dec_item_add_content("Hi : " + uart_items[k].content);
-                                        pkt_str = "Starting @ Hi";
-                                        break;
+                                        if(trame.length-5 == Number(trame[2].content))
+                                        {
+                                            response = true;
+                                            request = false;
+                                        }
+                                        else if(trame.length == 8)
+                                        {
+                                            request = true;
+                                            response = false;
+                                        }
                                     }
-                                    case 2:
-                                    {
-                                        ScanaStudio.dec_item_add_content("Starting Address Lo : " + uart_items[k].content);
-                                        ScanaStudio.dec_item_add_content("Lo : " + uart_items[k].content);
-                                        pkt_str = "Starting @ Lo";
-                                        break;
-                                    }
-                                    case 3:
-                                    {
-                                        if(current_fct==FCT_READ_COIL_STATUS)
-                                        {
-                                            ScanaStudio.dec_item_add_content("Quantity of Coils Hi : " + uart_items[k].content);
-                                            pkt_str = "Qty Coils @ Hi";
-                                        }
-                                        else if(current_fct==FCT_READ_INPUT_STATUS)
-                                        {
-                                            ScanaStudio.dec_item_add_content("Quantity of inputs Hi : " + uart_items[k].content);
-                                            pkt_str = "Qty Input @ Hi";
-                                        }
-                                        else if( (current_fct==FCT_READ_HOLDING_REGISTERS) || (current_fct==FCT_READ_INPUT_REGISTERS) )
-                                        {
-                                            ScanaStudio.dec_item_add_content("Quantity of Register Hi : " + uart_items[k].content);
-                                            pkt_str = "Qty Reg @ Hi";
-                                        }
-                                        ScanaStudio.dec_item_add_content("Hi : " + uart_items[k].content);
-                                        break;
-                                    }
-                                    case 4:
-                                    {
-                                        if(current_fct==FCT_READ_COIL_STATUS)
-                                        {
-                                            ScanaStudio.dec_item_add_content("Quantity of Coils Lo : " + uart_items[k].content);
-                                            pkt_str = "Qty Coils @ Lo";
-                                        }
-                                        else if(current_fct==FCT_READ_INPUT_STATUS)
-                                        {
-                                            ScanaStudio.dec_item_add_content("Quantity of inputs Lo : " + uart_items[k].content);
-                                            pkt_str = "Qty Input @ Lo";
-                                        }
-                                        else if( (current_fct==FCT_READ_HOLDING_REGISTERS) || (current_fct==FCT_READ_INPUT_REGISTERS) )
-                                        {
-                                            ScanaStudio.dec_item_add_content("Quantity of Register Lo : " + uart_items[k].content);
-                                            pkt_str = "Qty Reg @ Lo";
-                                        }
-                                        ScanaStudio.dec_item_add_content("Lo : " + uart_items[k].content);
-                                        break;
-                                    }
-                                    default:
-                                    {
-                                        ScanaStudio.dec_item_add_content("Unknown item : " + uart_items[k].content);
-                                        pkt_str = "...";
-                                        break;
-                                    }
-                                }//end switch k
-                                ScanaStudio.dec_item_add_content(uart_items[k].content);
-                                ScanaStudio.packet_view_add_packet( false,
-                                                                    channel,
-                                                                    uart_items[k].start_sample_index,
-                                                                    uart_items[k].end_sample_index,
-                                                                    pkt_str,
-                                                                    uart_items[k].content,
-                                                                    COLOR_T_DATA,
-                                                                    COLOR_C_DATA);
-                                trame.push(Number(uart_items[k].content));
-                            }//end for k
-                            i--;
-                            state_machine = ENUM_STATE_CRC;
-                        }
-                        else if( (current_byte_cnt != -1) && (i == current_i_fct + 1 + current_byte_cnt) && (current_i_eof!=-1) ) // answer
-                        {
-                            ScanaStudio.dec_item_new( channel,
-                                                    uart_items[current_i_fct].start_sample_index,
-                                                    uart_items[current_i_fct].end_sample_index);
-                            ScanaStudio.dec_item_add_content( "Function : " + function_to_str(current_fct,0) );
-                            ScanaStudio.dec_item_add_content( "Fct : " + function_to_str(current_fct,0) );
-                            ScanaStudio.dec_item_add_content( "Fct : " + uart_items[current_i_fct].content );
-                            ScanaStudio.dec_item_add_content( uart_items[current_i_fct].content );
-                            ScanaStudio.packet_view_add_packet( false,
-                                                                channel,
-                                                                uart_items[current_i_fct].start_sample_index,
-                                                                uart_items[current_i_fct].end_sample_index,
-                                                                "Function",
-                                                                function_to_str(current_fct,0),
-                                                                COLOR_T_FCT,
-                                                                COLOR_C_FCT);
-                            trame.push(Number(uart_items[current_i_fct].content));
-
-                            ScanaStudio.dec_item_new( channel,
-                                                    uart_items[current_i_fct + 1].start_sample_index,
-                                                    uart_items[current_i_fct + 1].end_sample_index);
-                            ScanaStudio.dec_item_add_content( "Byte Count : " + uart_items[current_i_fct + 1].content );
-                            ScanaStudio.dec_item_add_content( "Cnt : " + uart_items[current_i_fct + 1].content );
-                            ScanaStudio.dec_item_add_content( uart_items[current_i_fct + 1].content );
-                            ScanaStudio.packet_view_add_packet( false,
-                                                                channel,
-                                                                uart_items[current_i_fct + 1].start_sample_index,
-                                                                uart_items[current_i_fct + 1].end_sample_index,
-                                                                "Cnt",
-                                                                uart_items[current_i_fct + 1].content,
-                                                                COLOR_T_DATA,
-                                                                COLOR_C_DATA);
-                            trame.push(Number(uart_items[current_i_fct+1].content));
-
-                            var k;
-                            var pkt_str = "";
-                            for(k=current_i_fct + 2; k < current_byte_cnt + current_i_fct + 2; k++)
-                            {
-                                ScanaStudio.dec_item_new( channel,
-                                                        uart_items[k].start_sample_index,
-                                                        uart_items[k].end_sample_index);
-
-                                if( (current_fct==FCT_READ_COIL_STATUS) || (current_fct==FCT_READ_INPUT_STATUS) )
-                                {
-                                    ScanaStudio.dec_item_add_content( "Data : " + uart_items[k].content );
-                                    pkt_str = "Data";
+                                    break;
                                 }
-                                else if( (current_fct==FCT_READ_HOLDING_REGISTERS) || (current_fct==FCT_READ_INPUT_REGISTERS) )
+
+                                case FCT_WRITE_SINGLE_COIL:
+                                case FCT_WRITE_SINGLE_REGISTER:
                                 {
-                                    if( k%2 )
+                                    if(trame.length == 8)
                                     {
-                                        ScanaStudio.dec_item_add_content( "Data Lo: " + uart_items[k].content );
-                                        ScanaStudio.dec_item_add_content("Lo : " + uart_items[k].content);
-                                        pkt_str = "Data Lo";
+                                        request = true;
+                                        response = false;
+                                    }
+                                    break;
+                                }
+
+                                case FCT_WRITE_MULTIPLE_COILS:
+                                case FCT_WRITE_MULTIPLE_REGISTERS:
+                                {
+                                    if(trame.length >= 7)
+                                    {
+                                        if(trame.length-9 == Number(trame[6].content))
+                                        {
+                                            request = true;
+                                            response = false;
+                                        }
+                                        else if(trame.length == 8)
+                                        {
+                                            response = true;
+                                            request = false;
+                                        }
+                                    }
+                                    break;
+                                }
+
+                                default:
+                                {
+                                    if((trame.length == 5)&&(fct_code&0x80))//exception
+                                    {
+                                         error = true;
                                     }
                                     else
                                     {
-                                        ScanaStudio.dec_item_add_content( "Data Hi: " + uart_items[k].content );
-                                        ScanaStudio.dec_item_add_content("Hi : " + uart_items[k].content);
-                                        pkt_str = "Data Hi";
+                                        //unknown function
                                     }
                                 }
 
-                                ScanaStudio.dec_item_add_content( uart_items[k].content );
-                                ScanaStudio.packet_view_add_packet( false,
-                                                                    channel,
-                                                                    uart_items[k].start_sample_index,
-                                                                    uart_items[k].end_sample_index,
-                                                                    pkt_str,
-                                                                    uart_items[k].content,
-                                                                    COLOR_T_DATA,
-                                                                    COLOR_C_DATA);
-                                trame.push(Number(uart_items[k].content));
+                            }//end switch fct_code
+                            var fct_type_dec = -2;
+                            if(error)
+                            {
+                                fct_type_dec = -1;
+                                ScanaStudio.dec_item_emphasize_warning();
                             }
-                            state_machine = ENUM_STATE_CRC;
-                        }
-                        break;
-                    }//end case FCT_READ_COIL_STATUS or FCT_READ_INPUT_STATUS or FCT_READ_HOLDING_REGISTERS or FCT_READ_INPUT_REGISTERS
-
-
-
-                    case FCT_WRITE_SINGLE_COIL:
-                    case FCT_WRITE_SINGLE_REGISTER:
-                    {
-                        if( i-current_i_fct == 5 )//request or answer
-                        {
-                            ScanaStudio.dec_item_new( channel,
-                                                    uart_items[current_i_fct].start_sample_index,
-                                                    uart_items[current_i_fct].end_sample_index);
-                            ScanaStudio.dec_item_add_content( "Function : " + function_to_str(current_fct,1) );
-                            ScanaStudio.dec_item_add_content( "Fct : " + function_to_str(current_fct,1) );
-                            ScanaStudio.dec_item_add_content( "Fct : " + uart_items[current_i_fct].content );
-                            ScanaStudio.dec_item_add_content( uart_items[current_i_fct].content );
+                            else if(request && !response)
+                            {
+                                fct_type_dec = 1;
+                            }
+                            else if(!request && response)
+                            {
+                                fct_type_dec = 0;
+                            }
+                            ScanaStudio.dec_item_add_content( "Function : " + function_to_str(fct_code&0x7F,fct_type_dec) );
+                            ScanaStudio.dec_item_add_content( "Fct : " + function_to_str(fct_code&0x7F,fct_type_dec) );
+                            ScanaStudio.dec_item_add_content( "Fct : " + trame[i].content );
+                            ScanaStudio.dec_item_add_content( trame[i].content );
                             ScanaStudio.packet_view_add_packet( false,
                                                                 channel,
-                                                                uart_items[current_i_fct].start_sample_index,
-                                                                uart_items[current_i_fct].end_sample_index,
+                                                                trame[i].start_sample_index,
+                                                                trame[i].end_sample_index,
                                                                 "Function",
-                                                                function_to_str(current_fct,1),
-                                                                COLOR_T_FCT,
-                                                                COLOR_C_FCT);
-                            trame.push(Number(uart_items[current_i_fct].content));
+                                                                function_to_str(fct_code&0x7F,fct_type_dec),
+                                                                (error ? COLOR_T_ERROR : COLOR_T_FCT),
+                                                                (error ? COLOR_C_ERROR : COLOR_C_FCT));
 
-                            var k;
-                            var pkt_str = "";
-                            for(k=current_i_fct+1; k<i; k++)//navigate throught the reste of data
-                            {
-                                ScanaStudio.dec_item_new( channel,
-                                                        uart_items[k].start_sample_index,
-                                                        uart_items[k].end_sample_index);
-                                switch(k - current_i_fct)
-                                {
-                                    case 1:
-                                    {
-                                        if(current_fct==FCT_WRITE_SINGLE_COIL)
-                                        {
-                                            ScanaStudio.dec_item_add_content("Coil Address Hi : " + uart_items[k].content);
-                                            pkt_str = "Coil @ Hi";
-                                        }
-                                        else
-                                        {
-                                            ScanaStudio.dec_item_add_content("Register Address Hi : " + uart_items[k].content);
-                                            pkt_str = "Reg @ Hi";
-                                        }
-                                        ScanaStudio.dec_item_add_content("Hi : " + uart_items[k].content);
-                                        break;
-                                    }
-                                    case 2:
-                                    {
-                                        if(current_fct==FCT_WRITE_SINGLE_COIL)
-                                        {
-                                            ScanaStudio.dec_item_add_content("Coil Address Lo : " + uart_items[k].content);
-                                            pkt_str = "Coil @ Lo";
-                                        }
-                                        else
-                                        {
-                                            ScanaStudio.dec_item_add_content("Register Address Lo : " + uart_items[k].content);
-                                            pkt_str = "Reg @ Lo";
-                                        }
-                                        ScanaStudio.dec_item_add_content("Lo : " + uart_items[k].content);
-                                        break;
-                                    }
-                                    case 3:
-                                    {
-                                        ScanaStudio.dec_item_add_content("Write Data Hi : " + uart_items[k].content);
-                                        ScanaStudio.dec_item_add_content("Hi : " + uart_items[k].content);
-                                        pkt_str = "W Data Hi";
-                                        break;
-                                    }
-                                    case 4:
-                                    {
-                                        ScanaStudio.dec_item_add_content("Write Data Lo : " + uart_items[k].content);
-                                        ScanaStudio.dec_item_add_content("Lo : " + uart_items[k].content);
-                                        pkt_str = "W Data Lo";
-                                        break;
-                                    }
-                                    default:
-                                    {
-                                        ScanaStudio.dec_item_add_content("Unknown item : " + uart_items[k].content);
-                                        pkt_str = "...";
-                                        break;
-                                    }
-                                }//end switch k
-                                ScanaStudio.dec_item_add_content(uart_items[k].content);
-                                ScanaStudio.packet_view_add_packet( false,
-                                                                    channel,
-                                                                    uart_items[k].start_sample_index,
-                                                                    uart_items[k].end_sample_index,
-                                                                    pkt_str,
-                                                                    uart_items[k].content,
-                                                                    COLOR_T_DATA,
-                                                                    COLOR_C_DATA);
-                                trame.push(Number(uart_items[k].content));
-                            }//end for k
-                            i--;
-                            state_machine = ENUM_STATE_CRC;
-                        }
-                        break;
-                    }//end case FCT_WRITE_SINGLE_COIL and FCT_WRITE_SINGLE_REGISTER
-
-
-
-                    case FCT_WRITE_MULTIPLE_COILS:
-                    case FCT_WRITE_MULTIPLE_REGISTERS:
-                    {
-                        if( (current_byte_cnt == -1) && (i == current_i_fct + 5) )
-                        {
-                            current_byte_cnt = Number(uart_items[i].content);
+                            state_machine = ENUM_STATE_AFTER_FUNCTION;
                             break;
-                        }
-                        else if( (i-current_i_fct == 5) && (current_byte_cnt == -2))//answer
+                        }//end ENUM_STATE_FUNCTION
+
+                        case ENUM_STATE_AFTER_FUNCTION:
                         {
                             ScanaStudio.dec_item_new( channel,
-                                                    uart_items[current_i_fct].start_sample_index,
-                                                    uart_items[current_i_fct].end_sample_index);
-                            ScanaStudio.dec_item_add_content( "Function : " + function_to_str(current_fct,0) );
-                            ScanaStudio.dec_item_add_content( "Fct : " + function_to_str(current_fct,0) );
-                            ScanaStudio.dec_item_add_content( "Fct : " + uart_items[current_i_fct].content );
-                            ScanaStudio.dec_item_add_content( uart_items[current_i_fct].content );
-                            ScanaStudio.packet_view_add_packet( false,
-                                                                channel,
-                                                                uart_items[current_i_fct].start_sample_index,
-                                                                uart_items[current_i_fct].end_sample_index,
-                                                                "Function",
-                                                                function_to_str(current_fct,0),
-                                                                COLOR_T_FCT,
-                                                                COLOR_C_FCT);
-                            trame.push(Number(uart_items[current_i_fct].content));
+                                                    trame[i].start_sample_index,
+                                                    trame[i].end_sample_index);
 
-                            var k;
                             var pkt_str = "";
-                            for(k=current_i_fct+1; k<i; k++)//navigate throught the reste of data
+                            var exception_code = 0;
+                            switch(fct_code)//fill dec_items and packet view
                             {
-                                ScanaStudio.dec_item_new( channel,
-                                                        uart_items[k].start_sample_index,
-                                                        uart_items[k].end_sample_index);
-                                switch(k - current_i_fct)
+                                case FCT_READ_COIL_STATUS:
                                 {
-                                    case 1:
+                                    if(request && !response)
                                     {
-                                        if(current_fct==FCT_WRITE_MULTIPLE_COILS)
+                                        switch(i)
                                         {
-                                            ScanaStudio.dec_item_add_content("Coil Address Hi : " + uart_items[k].content);
-                                            pkt_str = "Coil @ Hi";
+                                            case 2://Starting Address Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Starting Address Hi : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Hi : " + trame[i].content);
+                                                pkt_str = "Starting @ Hi";
+                                                break;
+                                            }
+                                            case 3://Starting Address Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Starting Address Lo : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Lo : " + trame[i].content);
+                                                pkt_str = "Starting @ Lo";
+                                                break;
+                                            }
+                                            case 4://Quantity of Coils Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Coils Hi : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Hi : " + trame[i].content);
+                                                pkt_str = "Qty Coils Hi";
+                                                break;
+                                            }
+                                            case 5://Quantity of Coils Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Coils Lo : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Lo : " + trame[i].content);
+                                                pkt_str = "Qty Coils Lo";
+                                                break;
+                                            }
+                                            default://warning
+                                            {
+                                                ScanaStudio.dec_item_emphasize_warning();
+                                                pkt_str = "Data";
+                                                break;
+                                            }
                                         }
-                                        else
-                                        {
-                                            ScanaStudio.dec_item_add_content("Starting Address Hi : " + uart_items[k].content);
-                                            pkt_str = "Start @ Hi";
-                                        }
-                                        ScanaStudio.dec_item_add_content("Hi : " + uart_items[k].content);
-                                        break;
                                     }
-                                    case 2:
+                                    else if(!request && response)
                                     {
-                                        if(current_fct==FCT_WRITE_MULTIPLE_COILS)
+                                        switch(i)
                                         {
-                                            ScanaStudio.dec_item_add_content("Coil Address Lo : " + uart_items[k].content);
-                                            pkt_str = "Coil @ Lo";
+                                            case 2://Byte Count
+                                            {
+                                                ScanaStudio.dec_item_add_content("Byte Count : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Cnt : " + trame[i].content);
+                                                pkt_str = "Cnt";
+                                                break;
+                                            }
+                                            default://data and warning
+                                            {
+                                                if((i-3< Number(trame[2].content))&&(i-3>=0))
+                                                {
+                                                    ScanaStudio.dec_item_add_content("Data : " + trame[i].content);
+                                                    pkt_str = "Data";
+                                                }
+                                                else
+                                                {
+                                                    ScanaStudio.dec_item_emphasize_warning();
+                                                    pkt_str = "Data";
+                                                }
+                                                break;
+                                            }
                                         }
-                                        else
-                                        {
-                                            ScanaStudio.dec_item_add_content("Starting Address Lo : " + uart_items[k].content);
-                                            pkt_str = "Start @ Lo";
-                                        }
-                                        ScanaStudio.dec_item_add_content("Lo : " + uart_items[k].content);
-                                        break;
                                     }
-                                    case 3:
+                                    else
                                     {
-                                        if(current_fct==FCT_WRITE_MULTIPLE_COILS)
-                                        {
-                                            ScanaStudio.dec_item_add_content("Quantity of Coils Hi : " + uart_items[k].content);
-                                            pkt_str = "Qty Coil Hi";
-                                        }
-                                        else
-                                        {
-                                            ScanaStudio.dec_item_add_content("Quantity of Registers Hi : " + uart_items[k].content);
-                                            pkt_str = "Qty Reg Hi";
-                                        }
-                                        ScanaStudio.dec_item_add_content("Hi : " + uart_items[k].content);
-                                        break;
+                                        //warning
+                                        ScanaStudio.dec_item_emphasize_error();
+                                        // pkt_str = "Data";
                                     }
-                                    case 4:
-                                    {
-                                        if(current_fct==FCT_WRITE_MULTIPLE_COILS)
-                                        {
-                                            ScanaStudio.dec_item_add_content("Quantity of Coils Lo : " + uart_items[k].content);
-                                            pkt_str = "Qty Coil Lo";
-                                        }
-                                        else
-                                        {
-                                            ScanaStudio.dec_item_add_content("Quantity of Registers Lo : " + uart_items[k].content);
-                                            pkt_str = "Qty Reg Lo";
-                                        }
-                                        ScanaStudio.dec_item_add_content("Lo : " + uart_items[k].content);
-                                        break;
-                                    }
-                                    default:
-                                    {
-                                        ScanaStudio.dec_item_add_content("Unknown item : " + uart_items[k].content);
-                                        pkt_str = "...";
-                                        break;
-                                    }
-                                }//end switch k
-                                ScanaStudio.dec_item_add_content(uart_items[k].content);
-                                ScanaStudio.packet_view_add_packet( false,
-                                                                    channel,
-                                                                    uart_items[k].start_sample_index,
-                                                                    uart_items[k].end_sample_index,
-                                                                    pkt_str,
-                                                                    uart_items[k].content,
-                                                                    COLOR_T_DATA,
-                                                                    COLOR_C_DATA);
-                                trame.push(Number(uart_items[k].content));
-                            }//end for k
-                            i--;
-                            state_machine = ENUM_STATE_CRC;
-                        }
-                        else if( (current_byte_cnt != -1) && (i == current_i_fct + 6 + current_byte_cnt) ) // request
-                        {
-                            ScanaStudio.dec_item_new( channel,
-                                                    uart_items[current_i_fct].start_sample_index,
-                                                    uart_items[current_i_fct].end_sample_index);
-                            ScanaStudio.dec_item_add_content( "Function : " + function_to_str(current_fct,1) );
-                            ScanaStudio.dec_item_add_content( "Fct : " + function_to_str(current_fct,1) );
-                            ScanaStudio.dec_item_add_content( "Fct : " + uart_items[current_i_fct].content );
-                            ScanaStudio.dec_item_add_content( uart_items[current_i_fct].content );
-                            ScanaStudio.packet_view_add_packet( false,
-                                                                channel,
-                                                                uart_items[current_i_fct].start_sample_index,
-                                                                uart_items[current_i_fct].end_sample_index,
-                                                                "Function",
-                                                                function_to_str(current_fct,1),
-                                                                COLOR_T_FCT,
-                                                                COLOR_C_FCT);
-                            trame.push(Number(uart_items[current_i_fct].content));
-
-                            var k;
-                            var pkt_str;
-                            for(k=current_i_fct+1; k<i; k++)//navigate throught the reste of data
-                            {
-                                ScanaStudio.dec_item_new( channel,
-                                                        uart_items[k].start_sample_index,
-                                                        uart_items[k].end_sample_index);
-                                switch(k - current_i_fct)
-                                {
-                                    case 1:
-                                    {
-                                        if(current_fct==FCT_WRITE_MULTIPLE_COILS)
-                                        {
-                                            ScanaStudio.dec_item_add_content("Coil Address Hi : " + uart_items[k].content);
-                                            pkt_str = "Coil @ Hi";
-                                        }
-                                        else
-                                        {
-                                            ScanaStudio.dec_item_add_content("Starting Address Hi : " + uart_items[k].content);
-                                            pkt_str = "Start @ Hi";
-                                        }
-                                        ScanaStudio.dec_item_add_content("Hi : " + uart_items[k].content);
-                                        break;
-                                    }
-                                    case 2:
-                                    {
-                                        if(current_fct==FCT_WRITE_MULTIPLE_COILS)
-                                        {
-                                            ScanaStudio.dec_item_add_content("Coil Address Lo : " + uart_items[k].content);
-                                            pkt_str = "Coil @ Lo";
-                                        }
-                                        else
-                                        {
-                                            ScanaStudio.dec_item_add_content("Starting Address Lo : " + uart_items[k].content);
-                                            pkt_str = "Start @ Lo";
-                                        }
-                                        ScanaStudio.dec_item_add_content("Lo : " + uart_items[k].content);
-                                        break;
-                                    }
-                                    case 3:
-                                    {
-                                        if(current_fct==FCT_WRITE_MULTIPLE_COILS)
-                                        {
-                                            ScanaStudio.dec_item_add_content("Quantity of Coils Hi : " + uart_items[k].content);
-                                            pkt_str = "Qty Coil Hi";
-                                        }
-                                        else
-                                        {
-                                            ScanaStudio.dec_item_add_content("Quantity of Registers Hi : " + uart_items[k].content);
-                                            pkt_str = "Qty Reg Hi";
-                                        }
-                                        ScanaStudio.dec_item_add_content("Hi : " + uart_items[k].content);
-                                        break;
-                                    }
-                                    case 4:
-                                    {
-                                        if(current_fct==FCT_WRITE_MULTIPLE_COILS)
-                                        {
-                                            ScanaStudio.dec_item_add_content("Quantity of Coils Lo : " + uart_items[k].content);
-                                            pkt_str = "Qty Coil Lo";
-                                        }
-                                        else
-                                        {
-                                            ScanaStudio.dec_item_add_content("Quantity of Registers Lo : " + uart_items[k].content);
-                                            pkt_str = "Qty Reg Lo";
-                                        }
-                                        ScanaStudio.dec_item_add_content("Lo : " + uart_items[k].content);
-                                        break;
-                                    }
-                                    case 5:
-                                    {
-                                        ScanaStudio.dec_item_add_content( "Byte Count : " + uart_items[k].content );
-                                        ScanaStudio.dec_item_add_content( "Cnt : " + uart_items[k].content );
-                                        pkt_str = "Cnt";
-                                        break;
-                                    }
-                                    default:
-                                    {
-                                        if( (k+current_i_fct+1)%2 )
-                                        {
-                                            ScanaStudio.dec_item_add_content( "Write Data Hi: " + uart_items[k].content );
-                                            ScanaStudio.dec_item_add_content("Hi : " + uart_items[k].content);
-                                            pkt_str = "W Data Hi";
-                                        }
-                                        else
-                                        {
-                                            ScanaStudio.dec_item_add_content( "Write Data Lo: " + uart_items[k].content );
-                                            ScanaStudio.dec_item_add_content("Lo : " + uart_items[k].content);
-                                            pkt_str = "W Data Lo";
-                                        }
-                                        break;
-                                    }
-                                }//end switch k
-                                ScanaStudio.dec_item_add_content(uart_items[k].content);
-                                ScanaStudio.packet_view_add_packet( false,
-                                                                    channel,
-                                                                    uart_items[k].start_sample_index,
-                                                                    uart_items[k].end_sample_index,
-                                                                    pkt_str,
-                                                                    uart_items[k].content,
-                                                                    COLOR_T_DATA,
-                                                                    COLOR_C_DATA);
-                                trame.push(Number(uart_items[k].content));
-                            }//end for k
-
-                            i--;
-                            state_machine = ENUM_STATE_CRC;
-                        }
-                        break;
-                    }//end case FCT_WRITE_MULTIPLE_COILS or FCT_WRITE_MULTIPLE_REGISTERS
-
-
-
-                    default:
-                    {
-                        if(current_fct&0x80) // rapport d'erreur
-                        {
-                            ScanaStudio.dec_item_new( channel,
-                                                    uart_items[current_i_fct].start_sample_index,
-                                                    uart_items[current_i_fct].end_sample_index);
-                            ScanaStudio.dec_item_add_content( "Function : " + function_to_str(current_fct&0x7F,-1) );
-                            ScanaStudio.dec_item_add_content( "Fct : " + function_to_str(current_fct&0x7F,-1) );
-                            ScanaStudio.dec_item_add_content( "Fct : " + uart_items[current_i_fct].content );
-                            ScanaStudio.dec_item_add_content( uart_items[current_i_fct].content );
-                            ScanaStudio.packet_view_add_packet( false,
-                                                                channel,
-                                                                uart_items[current_i_fct].start_sample_index,
-                                                                uart_items[current_i_fct].end_sample_index,
-                                                                "Function",
-                                                                function_to_str(current_fct&0x7F,-1),
-                                                                COLOR_T_ERROR,
-                                                                COLOR_C_ERROR);
-                            trame.push(Number(uart_items[current_i_fct].content));
-                            switch(i-current_i_fct)
-                            {
-                                case 1:
-                                {
-                                    var exepction_code = Number(uart_items[i].content);
-                                    ScanaStudio.dec_item_new( channel,
-                                                            uart_items[i].start_sample_index,
-                                                            uart_items[i].end_sample_index);
-                                    ScanaStudio.dec_item_add_content( "Exception : " + exception_to_str(exepction_code&0x7F) );
-                                    ScanaStudio.dec_item_add_content( "Ex : " + exception_to_str(exepction_code&0x7F) );
-                                    ScanaStudio.dec_item_add_content( "Ex : " + uart_items[i].content );
-                                    ScanaStudio.dec_item_add_content( uart_items[i].content );
-                                    ScanaStudio.dec_item_emphasize_warning();
-                                    ScanaStudio.packet_view_add_packet( false,
-                                                                        channel,
-                                                                        uart_items[i].start_sample_index,
-                                                                        uart_items[i].end_sample_index,
-                                                                        "Exeption",
-                                                                        exception_to_str(exepction_code&0x7F),
-                                                                        COLOR_T_ERROR,
-                                                                        COLOR_C_ERROR);
-                                    trame.push(Number(uart_items[i].content));
                                     break;
-                                }
-                                default:
-                                break;
-                            }
-                            state_machine = ENUM_STATE_CRC;
-                            break;
-                        }
-                        else
-                        {
-                            if( (i-current_i_fct == 1)&&(current_i_eof==-1) )//request or answer
-                            {
-                                ScanaStudio.dec_item_new( channel,
-                                                        uart_items[current_i_fct].start_sample_index,
-                                                        uart_items[current_i_fct].end_sample_index);
-                                ScanaStudio.dec_item_add_content( "Function : " + uart_items[current_i_fct].content );
-                                ScanaStudio.dec_item_add_content( "Fct : " + uart_items[current_i_fct].content );
-                                ScanaStudio.dec_item_add_content( uart_items[current_i_fct].content );
-                                ScanaStudio.packet_view_add_packet( false,
-                                                                    channel,
-                                                                    uart_items[current_i_fct].start_sample_index,
-                                                                    uart_items[current_i_fct].end_sample_index,
-                                                                    "Function",
-                                                                    uart_items[current_i_fct].content,
-                                                                    COLOR_T_FCT,
-                                                                    COLOR_C_FCT);
-                                trame.push(Number(uart_items[current_i_fct].content));
-                                current_byte_cnt = current_i_fct;
-                                break;
-                            }
+                                }//end FCT_READ_COIL_STATUS datas
 
-                            if( (current_i_eof!=-1) && (i<current_i_eof-2) )
-                            {
-                                ScanaStudio.dec_item_new( channel,
-                                                        uart_items[i].start_sample_index,
-                                                        uart_items[i].end_sample_index);
-                                ScanaStudio.dec_item_add_content( "Data : " + uart_items[i].content );
-                                ScanaStudio.dec_item_add_content( uart_items[i].content );
-                                ScanaStudio.packet_view_add_packet( false,
-                                                                    channel,
-                                                                    uart_items[i].start_sample_index,
-                                                                    uart_items[i].end_sample_index,
-                                                                    "Data",
-                                                                    uart_items[i].content,
-                                                                    COLOR_T_DATA,
-                                                                    COLOR_C_DATA);
-                                trame.push(Number(uart_items[i].content));
-                                if(i==current_i_eof-3)
+                                case FCT_READ_INPUT_STATUS:
                                 {
-                                    state_machine = ENUM_STATE_CRC;
+                                    if(request && !response)
+                                    {
+                                        switch(i)
+                                        {
+                                            case 2://Starting Address Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Starting Address Hi : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Hi : " + trame[i].content);
+                                                pkt_str = "Starting @ Hi";
+                                                break;
+                                            }
+                                            case 3://Starting Address Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Starting Address Lo : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Lo : " + trame[i].content);
+                                                pkt_str = "Starting @ Lo";
+                                                break;
+                                            }
+                                            case 4://Quantity of Inputs Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Inputs Hi : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Hi : " + trame[i].content);
+                                                pkt_str = "Qty In Hi";
+                                                break;
+                                            }
+                                            case 5://Quantity of Inputs Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Inputs Lo : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Lo : " + trame[i].content);
+                                                pkt_str = "Qty In Lo";
+                                                break;
+                                            }
+                                            default://warning
+                                            {
+                                                ScanaStudio.dec_item_emphasize_warning();
+                                                pkt_str = "Data";
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    else if(!request && response)
+                                    {
+                                        switch(i)
+                                        {
+                                            case 2://Byte Count
+                                            {
+                                                ScanaStudio.dec_item_add_content("Byte Count : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Cnt : " + trame[i].content);
+                                                pkt_str = "Cnt";
+                                                break;
+                                            }
+                                            default://data and warning
+                                            {
+                                                if((i-3< Number(trame[2].content))&&(i-3>=0))
+                                                {
+                                                    ScanaStudio.dec_item_add_content("Data : " + trame[i].content);
+                                                    pkt_str = "Data";
+                                                }
+                                                else
+                                                {
+                                                    ScanaStudio.dec_item_emphasize_warning();
+                                                    pkt_str = "Data";
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    else
+                                    {
+                                        //warning
+                                        ScanaStudio.dec_item_emphasize_error();
+                                        // pkt_str = "Data";
+                                    }
+                                    break;
+                                }//end FCT_READ_INPUT_STATUS datas
+
+                                case FCT_READ_HOLDING_REGISTERS:
+                                case FCT_READ_INPUT_REGISTERS:
+                                {
+                                    if(request && !response)
+                                    {
+                                        switch(i)
+                                        {
+                                            case 2://Starting Address Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Starting Address Hi : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Hi : " + trame[i].content);
+                                                pkt_str = "Starting @ Hi";
+                                                break;
+                                            }
+                                            case 3://Starting Address Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Starting Address Lo : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Lo : " + trame[i].content);
+                                                pkt_str = "Starting @ Lo";
+                                                break;
+                                            }
+                                            case 4://Quantity of Register Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Register Hi : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Hi : " + trame[i].content);
+                                                pkt_str = "Qty Register @ Hi";
+                                                break;
+                                            }
+                                            case 5://Quantity of Register Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Register Lo : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Lo : " + trame[i].content);
+                                                pkt_str = "Qty Reg @ Lo";
+                                                break;
+                                            }
+                                            default://warning
+                                            {
+                                                ScanaStudio.dec_item_emphasize_warning();
+                                                pkt_str = "Data";
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    else if(!request && response)
+                                    {
+                                        switch(i)
+                                        {
+                                            case 2://Byte Count
+                                            {
+                                                ScanaStudio.dec_item_add_content("Byte Count : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Cnt : " + trame[i].content);
+                                                pkt_str = "Cnt";
+                                                break;
+                                            }
+                                            default://data and warning     if i%2 == 1 => Data Hi     else Data Lo
+                                            {
+                                                if((i-3< Number(trame[2].content))&&(i-3>=0))
+                                                {
+                                                    if(i%2)
+                                                    {
+                                                        ScanaStudio.dec_item_add_content("Data Hi : " + trame[i].content);
+                                                        pkt_str = "Data Hi";
+                                                    }
+                                                    else
+                                                    {
+                                                        ScanaStudio.dec_item_add_content("Data Lo : " + trame[i].content);
+                                                        pkt_str = "Data Lo";
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    ScanaStudio.dec_item_emphasize_warning();
+                                                    pkt_str = "Data";
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    else
+                                    {
+                                        //warning
+                                        ScanaStudio.dec_item_emphasize_error();
+                                        // pkt_str = "Data";
+                                    }
+                                    break;
+                                }//end FCT_READ_HOLDING_REGISTERS and FCT_READ_INPUT_REGISTERS datas
+
+                                case FCT_WRITE_SINGLE_COIL:
+                                {
+                                    if(trame.length == 8)
+                                    {
+                                        switch(i)
+                                        {
+                                            case 2://Coil Address Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Coil Address Hi : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Hi : " + trame[i].content);
+                                                pkt_str = "Coil @ Hi";
+                                                break;
+                                            }
+                                            case 3://Coil Address Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Coil Address Lo : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Lo : " + trame[i].content);
+                                                pkt_str = "Coil @ Lo";
+                                                break;
+                                            }
+                                            case 4://Write Data Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Write Data Hi : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Hi : " + trame[i].content);
+                                                pkt_str = "Wr Data Hi";
+                                                break;
+                                            }
+                                            case 5://Write Data Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Write Data Lo : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Lo : " + trame[i].content);
+                                                pkt_str = "Wr Data Lo";
+                                                break;
+                                            }
+                                            default://warning
+                                            {
+                                                ScanaStudio.dec_item_emphasize_warning();
+                                                pkt_str = "Data";
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    else
+                                    {
+                                        //warning
+                                        ScanaStudio.dec_item_emphasize_error();
+                                        // pkt_str = "Data";
+                                    }
+                                    break;
+                                }//end FCT_WRITE_SINGLE_COIL datas
+
+                                case FCT_WRITE_SINGLE_REGISTER:
+                                {
+                                    if(trame.length == 8)
+                                    {
+                                        switch(i)
+                                        {
+                                            case 2://Register Address Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Register Address Hi : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Hi : " + trame[i].content);
+                                                pkt_str = "Reg @ Hi";
+                                                break;
+                                            }
+                                            case 3://Register Address Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Register Address Lo : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Lo : " + trame[i].content);
+                                                pkt_str = "Reg @ Lo";
+                                                break;
+                                            }
+                                            case 4://Write Data Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Write Data Hi : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Hi : " + trame[i].content);
+                                                pkt_str = "Wr Data Hi";
+                                                break;
+                                            }
+                                            case 5://Write Data Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Write Data Lo : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Lo : " + trame[i].content);
+                                                pkt_str = "Wr Data Lo";
+                                                break;
+                                            }
+                                            default://warning
+                                            {
+                                                ScanaStudio.dec_item_emphasize_warning();
+                                                pkt_str = "Data";
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    else
+                                    {
+                                        //warning
+                                        ScanaStudio.dec_item_emphasize_error();
+                                        // pkt_str = "Data";
+                                    }
+                                    break;
+                                }//end FCT_WRITE_SINGLE_COIL datas
+
+                                case FCT_WRITE_MULTIPLE_COILS:
+                                {
+                                    if(request && !response)
+                                    {
+                                        switch(i)
+                                        {
+                                            case 2://Coil Address Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Coil Address Hi : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Hi : " + trame[i].content);
+                                                pkt_str = "Coil @ Hi";
+                                                break;
+                                            }
+                                            case 3://Coil Address Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Coil Address Lo : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Lo : " + trame[i].content);
+                                                pkt_str = "Coil @ Lo";
+                                                break;
+                                            }
+                                            case 4://Quantity of Coil Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Coil Hi : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Hi : " + trame[i].content);
+                                                pkt_str = "Qty Hi";
+                                                break;
+                                            }
+                                            case 5://Quantity of Coil Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Coil Lo : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Lo : " + trame[i].content);
+                                                pkt_str = "Qty Lo";
+                                                break;
+                                            }
+                                            case 6://byte Count
+                                            {
+                                                ScanaStudio.dec_item_add_content("Byte Count : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Cnt : " + trame[i].content);
+                                                pkt_str = "Cnt";
+                                                break;
+                                            }
+                                            default://warning and data    if i%2 == 1 => Data Hi    else Data Lo
+                                            {
+                                                if((i-7< Number(trame[6].content))&&(i-7>=0))
+                                                {
+                                                    if(i%2)
+                                                    {
+                                                        ScanaStudio.dec_item_add_content("Data Hi : " + trame[i].content);
+                                                        pkt_str = "Data Hi";
+                                                    }
+                                                    else
+                                                    {
+                                                        ScanaStudio.dec_item_add_content("Data Lo : " + trame[i].content);
+                                                        pkt_str = "Data Lo";
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    ScanaStudio.dec_item_emphasize_warning();
+                                                    pkt_str = "Data";
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    else if(!request && response)
+                                    {
+                                        switch(i)
+                                        {
+                                            case 2://Coil Address Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Coil Address Hi : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Hi : " + trame[i].content);
+                                                pkt_str = "Coil @ Hi";
+                                                break;
+                                            }
+                                            case 3://Coil Address Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Coil Address Lo : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Lo : " + trame[i].content);
+                                                pkt_str = "Coil @ Lo";
+                                                break;
+                                            }
+                                            case 4://Quantity of Coil Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Coil Hi : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Hi : " + trame[i].content);
+                                                pkt_str = "Qty Hi";
+                                                break;
+                                            }
+                                            case 5://Quantity of Coil Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Coil Lo : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Lo : " + trame[i].content);
+                                                pkt_str = "Qty Lo";
+                                                break;
+                                            }
+                                            default://warning
+                                            {
+                                                ScanaStudio.dec_item_emphasize_warning();
+                                                pkt_str = "Data";
+                                            }
+                                        }
+                                    }
+                                    else
+                                    {
+                                        //warning
+                                        ScanaStudio.dec_item_emphasize_error();
+                                        // pkt_str = "Data";
+                                    }
+                                    break;
+                                }//end FCT_WRITE_MULTIPLE_COILS datas
+
+                                case FCT_WRITE_MULTIPLE_REGISTERS:
+                                {
+                                    if(request && !response)
+                                    {
+                                        switch(i)
+                                        {
+                                            case 2://Starting Address Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Starting Address Hi : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Hi : " + trame[i].content);
+                                                pkt_str = "Starting @ Hi";
+                                                break;
+                                            }
+                                            case 3://Starting Address Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Starting Address Lo : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Lo : " + trame[i].content);
+                                                pkt_str = "Starting @ Lo";
+                                                break;
+                                            }
+                                            case 4://Quantity of Registers Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Registers Hi : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Hi : " + trame[i].content);
+                                                pkt_str = "Qty Reg Hi";
+                                                break;
+                                            }
+                                            case 5://Quantity of Registers Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Registers Lo : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Lo : " + trame[i].content);
+                                                pkt_str = "Qty Reg Lo";
+                                                break;
+                                            }
+                                            case 6://Byte Count
+                                            {
+                                                ScanaStudio.dec_item_add_content("Byte Count : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Cnt : " + trame[i].content);
+                                                pkt_str = "Cnt";
+                                                break;
+                                            }
+                                            default://warning and data    if i%2 == 1 => Data Hi    else Data Lo
+                                            {
+                                                if((i-7< Number(trame[6].content))&&(i-7>=0))
+                                                {
+                                                    if(i%2)
+                                                    {
+                                                        ScanaStudio.dec_item_add_content("Data Hi : " + trame[i].content);
+                                                        pkt_str = "Data Hi";
+                                                    }
+                                                    else
+                                                    {
+                                                        ScanaStudio.dec_item_add_content("Data Lo : " + trame[i].content);
+                                                        pkt_str = "Data Lo";
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    ScanaStudio.dec_item_emphasize_warning();
+                                                    pkt_str = "Data";
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    else if(!request && response)
+                                    {
+                                        switch(i)
+                                        {
+                                            case 2://Starting Address Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Starting Address Hi : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Hi : " + trame[i].content);
+                                                pkt_str = "Starting @ Hi";
+                                                break;
+                                            }
+                                            case 3://Starting Address Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Starting Address Lo : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Lo : " + trame[i].content);
+                                                pkt_str = "Starting @ Lo";
+                                                break;
+                                            }
+                                            case 4://Quantity of Registers Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Registers Hi : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Hi : " + trame[i].content);
+                                                pkt_str = "Qty Reg Hi";
+                                                break;
+                                            }
+                                            case 5://Quantity of Registers Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Registers Lo : " + trame[i].content);
+                                                ScanaStudio.dec_item_add_content("Lo : " + trame[i].content);
+                                                pkt_str = "Qty Reg Lo";
+                                                break;
+                                            }
+                                            default://warning
+                                            {
+                                                ScanaStudio.dec_item_emphasize_warning();
+                                                pkt_str = "Data";
+                                            }
+                                        }
+                                    }
+                                    else
+                                    {
+                                        //warning
+                                        ScanaStudio.dec_item_emphasize_error();
+                                        // pkt_str = "Data";
+                                    }
+                                    break;
+                                }//end FCT_WRITE_MULTIPLE_REGISTERS datas
+
+                                default:
+                                {
+                                    if((trame.length == 5)&&(fct_code&0x80))//exception
+                                    {
+                                        exception_code = Number(trame[i].content);
+                                        ScanaStudio.dec_item_add_content("Exception : " + exception_to_str(exception_code&0x7F));
+                                        ScanaStudio.dec_item_add_content("Ex : " + exception_to_str(exception_code&0x7F));
+                                        ScanaStudio.dec_item_add_content("Ex : " + trame[i].content);
+                                        pkt_str = "Exception";
+                                        ScanaStudio.dec_item_emphasize_warning();
+                                    }
+                                    else
+                                    {
+                                        ScanaStudio.dec_item_add_content("Unknown data : " + trame[i].content);
+                                        pkt_str = "Unknown";
+                                    }
                                 }
+                            }//end switch fct for datas
+
+                            ScanaStudio.dec_item_add_content( trame[i].content );
+                            ScanaStudio.packet_view_add_packet( false,
+                                                                channel,
+                                                                trame[i].start_sample_index,
+                                                                trame[i].end_sample_index,
+                                                                pkt_str,
+                                                                (exception_code != 0) ? exception_to_str(exception_code&0x7F) : trame[i].content,
+                                                                (exception_code != 0) ? COLOR_T_ERROR : COLOR_T_DATA,
+                                                                (exception_code != 0) ? COLOR_C_ERROR : COLOR_C_DATA);
+                            if(i == trame.length - 3)
+                            {
+                                state_machine = ENUM_STATE_CRC;
+                            }
+                            break;
+                        }//end ENUM_STATE_AFTER_FUNCTION
+
+                        case ENUM_STATE_CRC:
+                        {
+                            if(!crc_reached)
+                            {
+                                crc_reached = true;
                                 break;
                             }
-                        }
-                        break;
-                    }//end default
 
-                }//end switch current_fct
+                            var crc_red = ((Number(trame[i].content)<<8)&0xFF00) | (Number(trame[i-1].content)&0x00FF);
+                            var tmp_trame = [];
+                            for(var k=0; k<trame.length-2; k++)
+                            {
+                                tmp_trame.push(trame[k].content);
+                            }
+                            var crc_calculated = crc_calculation(tmp_trame);
 
-                break;
-            }// end ENUM_STATE_FUNCTION
+                            var crc_str = "0x";
+                            if (crc_red < 0x10)
+                            {
+                                crc_str += "0";
+                            }
+                            crc_str += crc_red.toString(16);
 
-            case ENUM_STATE_CRC:
-            {
-                if(current_i_crc == -1)
-                {
-                    current_i_crc = i;
-                    break;
-                }
+                            ScanaStudio.dec_item_new( channel,
+                                                    trame[i-1].start_sample_index,
+                                                    trame[i].end_sample_index);
+                            if(crc_red == crc_calculated)
+                            {
+                                ScanaStudio.dec_item_add_content( "CRC OK : " + crc_str );
+                                ScanaStudio.dec_item_add_content( "CRC " + crc_str );
+                                ScanaStudio.dec_item_add_content( crc_str );
 
-                var crc_red = ((Number(uart_items[i].content)<<8)&0xFF00) | (Number(uart_items[i-1].content)&0x00FF);
-                var crc_calculated = crc_calculation(trame);
+                                ScanaStudio.packet_view_add_packet( false,
+                                                                    channel,
+                                                                    trame[i-1].start_sample_index,
+                                                                    trame[i].end_sample_index,
+                                                                    "CRC",
+                                                                    crc_str + " OK",
+                                                                    COLOR_T_CRC,
+                                                                    COLOR_C_CRC);
+                            }
+                            else //wrong CRC
+                            {
+                                var crc_c_str = "0x";
+                                if (crc_calculated < 0x10)
+                                {
+                                    crc_c_str += "0";
+                                }
+                                crc_c_str += crc_calculated.toString(16);
+                                ScanaStudio.dec_item_add_content( "CRC WRONG : " + crc_str + " should be " + crc_c_str );
+                                ScanaStudio.dec_item_add_content( "CRC WRONG :" + crc_str );
+                                ScanaStudio.dec_item_add_content( crc_str );
+                                ScanaStudio.dec_item_emphasize_error();
 
-                var crc_str = "0x";
-                if (crc_red < 0x10)
-                {
-                    crc_str += "0";
-                }
-                crc_str += crc_red.toString(16);
-
-                ScanaStudio.dec_item_new( channel,
-                                        uart_items[i-1].start_sample_index,
-                                        uart_items[i].end_sample_index);
-                if(crc_red == crc_calculated)
-                {
-                    ScanaStudio.dec_item_add_content( "CRC OK : " + crc_str );
-                    ScanaStudio.dec_item_add_content( "CRC " + crc_str );
-                    ScanaStudio.dec_item_add_content( crc_str );
-
-                    ScanaStudio.packet_view_add_packet( false,
-                                                        channel,
-                                                        uart_items[i-1].start_sample_index,
-                                                        uart_items[i].end_sample_index,
-                                                        "CRC",
-                                                        crc_str + " OK",
-                                                        COLOR_T_CRC,
-                                                        COLOR_C_CRC);
-                }
-                else //wrong CRC
-                {
-                    var crc_c_str = "0x";
-                    if (crc_calculated < 0x10)
-                    {
-                        crc_c_str += "0";
-                    }
-                    crc_c_str += crc_calculated.toString(16);
-                    ScanaStudio.dec_item_add_content( "CRC WRONG : " + crc_str + " should be " + crc_c_str );
-                    ScanaStudio.dec_item_add_content( "CRC WRONG :" + crc_str );
-                    ScanaStudio.dec_item_add_content( crc_str );
-                    ScanaStudio.dec_item_emphasize_error();
-
-                    ScanaStudio.packet_view_add_packet( false,
-                                                        channel,
-                                                        uart_items[i-1].start_sample_index,
-                                                        uart_items[i].end_sample_index,
-                                                        "CRC",
-                                                        crc_str + " Wrong, should be " + crc_c_str,
-                                                        COLOR_T_ERROR,
-                                                        COLOR_C_ERROR);
-                }
-
-                state_machine = ENUM_STATE_SOF;
-                break;
-            }
-
-            default:
-            {
-                ScanaStudio.dec_item_new( channel, uart_items[i].start_sample_index, uart_items[i].end_sample_index );
-                ScanaStudio.dec_item_add_content( uart_items[i].content );
-                ScanaStudio.dec_item_emphasize_warning();
-                break;
-            }
-
-        }//end switch state machine
-
-
-    }//end for each uart item
+                                ScanaStudio.packet_view_add_packet( false,
+                                                                    channel,
+                                                                    trame[i-1].start_sample_index,
+                                                                    trame[i].end_sample_index,
+                                                                    "CRC",
+                                                                    crc_str + " Wrong, should be " + crc_c_str,
+                                                                    COLOR_T_ERROR,
+                                                                    COLOR_C_ERROR);
+                            }
+                            break;
+                        }//end ENUM_STATE_CRC
+                    }// end switch state_machine
+                }//end for i in trame
+            }//end if trame ended
+        }//end if trame started
+    }//end for j in uart_item
 }//end function decode for RTU mode
 
 
@@ -1127,1017 +1094,973 @@ function on_decode_signals_ASCII_mode(uart_items)
         }
     }
 
-    for(i=0; (i<uart_items.length)&&(!ScanaStudio.abort_is_requested()); i++)
-    {
+    // for(j=0; j<uart_items.length; j++)
+    // {
+    //     ScanaStudio.dec_item_new(channel,uart_items[j].start_sample_index,uart_items[j].end_sample_index);
+    //     ScanaStudio.dec_item_add_content(uart_items[j].content);
+    // }
+    // return;
 
-        if(uart_items[i].content == ":".charCodeAt())//initialisation and detection of frame
+    var sample_per_bits = ScanaStudio.get_capture_sample_rate() / baud;
+    for(j=0; (j<uart_items.length) && (!ScanaStudio.abort_is_requested()); j++)
+    {
+        if(!trame_started)
         {
-            var sof = i;
-            var k;
-            var eof = -1;
             trame = [];
-            for(k = sof; k<uart_items.length; k++)
+            if(uart_items[j].content == ":".charCodeAt())
             {
-                trame.push(uart_items[k].content);
-                if(k+1 < uart_items.length )
+                trame_started = true;
+            }
+        }
+
+        if(trame_started)
+        {
+            trame.push(uart_items[j]);
+
+            if(j==uart_items.length-1)
+            {
+                if(j>=1 )
                 {
-                    if( (uart_items[k].content == "\r".charCodeAt()) && (uart_items[k+1].content == "\n".charCodeAt()) )
+                    if( (uart_items[j-1].content == "\r".charCodeAt()) && (uart_items[j].content == "\n".charCodeAt()) )
                     {
-                        eof = k;
-                        break;//exit for
+                        trame_ended = true;
                     }
                 }
-                else if(k - sof > 513)
+                else if(uart_items[j].end_sample_index <= available_samples-1*ScanaStudio.get_capture_sample_rate() )//1s between 2 char
                 {
-                    break;//exit for
+                    trame_ended = true;
+                }
+            }
+            else
+            {
+                if( uart_items[j+1].start_sample_index  >= uart_items[j].end_sample_index + 1*ScanaStudio.get_capture_sample_rate() )
+                {
+                    trame_ended = true;
+                }
+                else if(j>=1 )
+                {
+                    if( (uart_items[j-1].content == "\r".charCodeAt()) && (uart_items[j].content == "\n".charCodeAt()) )
+                    {
+                        trame_ended = true;
+                        // trame.push(uart_items[j+1]);
+                    }
                 }
             }
 
-
-            if(eof == -1) //no end of frame
+            if(trame_ended)//decode trame
             {
-                break;
-            }
+                trame_ended = false;
+                trame_started = false;
 
-            ScanaStudio.packet_view_add_packet( true,
-                                                channel,
-                                                uart_items[sof].start_sample_index,
-                                                uart_items[sof].end_sample_index,
-                                                "Modbus ASCII",
-                                                "CH" + (channel + 1),
-                                                "#0000FF",
-                                                "#8080FF");
-            ScanaStudio.packet_view_add_packet( false,
-                                                channel,
-                                                uart_items[sof].start_sample_index,
-                                                uart_items[sof].end_sample_index,
-                                                "SOF",
-                                                String.fromCharCode(uart_items[sof].content),
-                                                "#0000FF",
-                                                "#8080FF");
 
-            ScanaStudio.dec_item_new(   channel,
-                                        uart_items[sof].start_sample_index,
-                                        uart_items[sof].end_sample_index);
-            ScanaStudio.dec_item_add_content( "Start Of Frame " + String.fromCharCode(uart_items[sof].content) );
-            ScanaStudio.dec_item_add_content( "SOF " + String.fromCharCode(uart_items[sof].content) );
-            ScanaStudio.dec_item_add_content( String.fromCharCode(uart_items[sof].content) );
-
-            current_i_fct = -1;
-            current_byte_cnt = -1;
-            var byte_value = 0;
-            var lrc = 0;
-
-            state_machine = ENUM_STATE_SLAVE_ADDR;
-
-            for(k = sof+1; k<eof; k++)
-            {
-                var tmp_val; //char value detection
-                if( (uart_items[k].content >= 0x30) && (uart_items[k].content <= 0x39) ) //0-9
+                var i=0;
+                var fct_code = 0x00;
+                var request = false;
+                var response = false;
+                var error = false;
+                var lrc_reached = false;
+                var lrc = 0;
+                state_machine = ENUM_STATE_SLAVE_ADDR;
+                for(i=0; (i<trame.length) && (!ScanaStudio.abort_is_requested()); i++)
                 {
-                    tmp_val = uart_items[k].content - 0x30;
-                }
-                else if( (uart_items[k].content >= 0x41) && (uart_items[k].content <= 0x46) ) //A-F
-                {
-                    tmp_val = uart_items[k].content - 0x41 + 10;
-                }
-                else if( (uart_items[k].content >= 0x61) && (uart_items[k].content <= 0x66) ) //A-F
-                {
-                    tmp_val = uart_items[k].content - 0x61 + 10;
-                }
-                else
-                {
-                    ScanaStudio.dec_item_new(   channel,
-                                                uart_items[k].start_sample_index,
-                                                uart_items[k].end_sample_index);
-                    ScanaStudio.dec_item_add_content( "Unknown char code :'" + String.fromCharCode(uart_items[k].content) + "' " + uart_items[k].content );
-                    ScanaStudio.dec_item_add_content( "'" + String.fromCharCode(uart_items[k].content) + "' " + uart_items[k].content );
-                    ScanaStudio.dec_item_add_content( uart_items[k].content );
-                    ScanaStudio.dec_item_emphasize_warning();
-                }
+                    if(i==0)//start ":"
+                    {
+                        if(trame[i].content == ":".charCodeAt())
+                        {
+                            ScanaStudio.packet_view_add_packet( true,
+                                                                channel,
+                                                                trame[i].start_sample_index,
+                                                                trame[trame.length-1].end_sample_index,
+                                                                "Modbus ASCII",
+                                                                "CH" + (channel + 1),
+                                                                "#0000FF",
+                                                                ScanaStudio.get_channel_color(channel));//"#8080FF");
+                            ScanaStudio.packet_view_add_packet( false,
+                                                                channel,
+                                                                trame[i].start_sample_index,
+                                                                trame[i].end_sample_index,
+                                                                "SOF",
+                                                                String.fromCharCode(trame[i].content),
+                                                                "#0000FF",
+                                                                "#8080FF");
 
-                if( (k+sof)%2 == 1 ) //first byte
-                {
-                    byte_value = tmp_val * 16;
-                    continue;
-                }
-                else( (k+sof)%2 == 0 )
-                {
-                    byte_value += tmp_val;
-                }
+                            ScanaStudio.dec_item_new( channel,
+                                                    trame[i].start_sample_index,
+                                                    trame[i].end_sample_index);
+                            ScanaStudio.dec_item_add_content( "Start Of Frame" );
+                            ScanaStudio.dec_item_add_content( "SOF : ':'" );
+                            ScanaStudio.dec_item_add_content( "':'" );
+                            continue;
+                        }
+                        else
+                        {
+                            ScanaStudio.packet_view_add_packet( true,
+                                                    channel,
+                                                    trame[i].start_sample_index,
+                                                    trame[i].end_sample_index,
+                                                    "!SOF",
+                                                    String.fromCharCode(trame[i].content),
+                                                    COLOR_T_ERROR,
+                                                    COLOR_T_ERROR);
+                            break;
+                        }
+                    }
+                    else if(i==trame.length-2)
+                    {
+                        if( (trame[i].content == "\r".charCodeAt()) && (trame[i+1].content == "\n".charCodeAt()) )//End of Frame
+                        {
+                            ScanaStudio.dec_item_new(   channel,
+                                                        trame[i].start_sample_index,
+                                                        trame[i+1].end_sample_index);
+                            ScanaStudio.dec_item_add_content( "End of Frame : CR LF" );
+                            ScanaStudio.dec_item_add_content( "EOF : CR LF" );
+                            ScanaStudio.dec_item_add_content( "EOF" );
+                            ScanaStudio.packet_view_add_packet( false,
+                                            channel,
+                                            trame[i].start_sample_index,
+                                            trame[i+1].end_sample_index,
+                                            "EOF",
+                                            "CR LF",
+                                            "#0000FF",
+                                            "#8080FF");
+                        }
+                    }
 
-
-                switch(state_machine)
-                {
-                    case ENUM_STATE_SLAVE_ADDR:
+                    var tmp_val; //char value detection
+                    if( (trame[i].content >= 0x30) && (trame[i].content <= 0x39) ) //0-9
+                    {
+                        tmp_val = trame[i].content - 0x30;
+                    }
+                    else if( (trame[i].content >= 0x41) && (trame[i].content <= 0x46) ) //A-F
+                    {
+                        tmp_val = trame[i].content - 0x41 + 10;
+                    }
+                    else if( (trame[i].content >= 0x61) && (trame[i].content <= 0x66) ) //A-F
+                    {
+                        tmp_val = trame[i].content - 0x61 + 10;
+                    }
+                    else if((trame[i].content == "\r".charCodeAt()) || (trame[i].content == "\n".charCodeAt()))
+                    {
+                        tmp_val = 0;
+                    }
+                    else
                     {
                         ScanaStudio.dec_item_new(   channel,
-                                                    uart_items[k-1].start_sample_index,
-                                                    uart_items[k].end_sample_index);
-                        ScanaStudio.dec_item_add_content( "Slave Address : " + dec_to_str(byte_value, "0x") );
-                        ScanaStudio.dec_item_add_content( "Slave Addr: " + dec_to_str(byte_value, "0x") );
-                        ScanaStudio.dec_item_add_content( "Addr:" + dec_to_str(byte_value, "0x") );
-                        ScanaStudio.dec_item_add_content( dec_to_str(byte_value, "0x") );
-                        ScanaStudio.packet_view_add_packet( false,
-                                                            channel,
-                                                            uart_items[k-1].start_sample_index,
-                                                            uart_items[k].end_sample_index,
-                                                            "Slave Addr:",
-                                                            "@" + dec_to_str(byte_value, "0x"),
-                                                            COLOR_T_ADDR,
-                                                            COLOR_C_ADDR);
-
-                        lrc += byte_value;
-                        state_machine = ENUM_STATE_FUNCTION;
-                        break;
+                                                    trame[i].start_sample_index,
+                                                    trame[i].end_sample_index);
+                        ScanaStudio.dec_item_add_content( "Unknown char code :'" + String.fromCharCode(trame[i].content) + "' " + trame[i].content );
+                        ScanaStudio.dec_item_add_content( "'" + String.fromCharCode(trame[i].content) + "' " + trame[i].content );
+                        ScanaStudio.dec_item_add_content( trame[i].content );
+                        ScanaStudio.dec_item_emphasize_warning();
                     }
 
 
-                    case ENUM_STATE_FUNCTION:
+                    if( i%2 == 1 ) //first byte
                     {
-                        current_fct = byte_value;
-                        current_i_fct = k;
-                        lrc += byte_value;
-                        current_byte_cnt = -1
-                        state_machine = ENUM_STATE_AFTER_FUNCTION;
-                        break;
+                        byte_value = tmp_val * 16;
+                        continue;
+                    }
+                    else( i%2 == 0 )
+                    {
+                        byte_value += tmp_val;
                     }
 
 
-                    case ENUM_STATE_AFTER_FUNCTION:
+                    switch(state_machine)//start of decoding of the frame
                     {
-                        switch(current_fct)
+                        case ENUM_STATE_SLAVE_ADDR:
                         {
-                            case FCT_READ_COIL_STATUS:
-                            case FCT_READ_INPUT_STATUS:
-                            case FCT_READ_HOLDING_REGISTERS:
-                            case FCT_READ_INPUT_REGISTERS:
+                            ScanaStudio.dec_item_new( channel,
+                                                    trame[i-1].start_sample_index,
+                                                    trame[i].end_sample_index);
+                            ScanaStudio.dec_item_add_content( "Slave Address : " + dec_to_str(byte_value, "0x") );
+                            ScanaStudio.dec_item_add_content( "Slave Addr: " + dec_to_str(byte_value, "0x") );
+                            ScanaStudio.dec_item_add_content( "Addr:" + dec_to_str(byte_value, "0x") );
+                            ScanaStudio.dec_item_add_content( dec_to_str(byte_value, "0x") );
+                            ScanaStudio.packet_view_add_packet( false,
+                                                                channel,
+                                                                trame[i-1].start_sample_index,
+                                                                trame[i].end_sample_index,
+                                                                "Slave Addr:",
+                                                                "@" + dec_to_str(byte_value, "0x"),
+                                                                COLOR_T_ADDR,
+                                                                COLOR_C_ADDR);
+                            lrc += byte_value;
+                            state_machine = ENUM_STATE_FUNCTION;
+                            break;
+                        }//end ENUM_STATE_SLAVE_ADDR
+
+                        case ENUM_STATE_FUNCTION:
+                        {
+                            fct_code = byte_value;
+                            lrc += byte_value;
+
+                            ScanaStudio.dec_item_new( channel,
+                                                    trame[i-1].start_sample_index,
+                                                    trame[i].end_sample_index);
+                            switch(fct_code)
                             {
-                                //current_byte_cnt calculation
-                                if(current_byte_cnt == -1)
+                                case FCT_READ_COIL_STATUS:
+                                case FCT_READ_INPUT_STATUS:
+                                case FCT_READ_HOLDING_REGISTERS:
+                                case FCT_READ_INPUT_REGISTERS:
                                 {
-                                    current_byte_cnt = byte_value;
+                                    if(trame.length > 7)
+                                    {
+                                        if( (trame.length-11)/2 == (str_to_hex(trame[5].content)*16 +  str_to_hex(trame[6].content)) )
+                                        {
+                                            response = true;
+                                            request = false;
+                                        }
+                                        else if(trame.length == 17)
+                                        {
+                                            request = true;
+                                            response = false;
+                                        }
+                                    }
+                                    break;
                                 }
 
-
-                                if( ( current_byte_cnt*2 !=(eof - sof - 9) )&&( eof - sof == 15 ) )//request
+                                case FCT_WRITE_SINGLE_COIL:
+                                case FCT_WRITE_SINGLE_REGISTER:
                                 {
-                                    if( Math.round((k-(sof+4))/2) == 1)
+                                    if(trame.length == 17)
                                     {
-                                        ScanaStudio.dec_item_new(   channel,
-                                                                    uart_items[current_i_fct-1].start_sample_index,
-                                                                    uart_items[current_i_fct].end_sample_index);
-                                        ScanaStudio.dec_item_add_content( "Function : " + function_to_str(current_fct,1) );
-                                        ScanaStudio.dec_item_add_content( "Fct : " + function_to_str(current_fct,1) );
-                                        ScanaStudio.dec_item_add_content( "Fct : " + dec_to_str(current_fct, "0x") );
-                                        ScanaStudio.dec_item_add_content( dec_to_str(current_fct, "0x") );
-                                        ScanaStudio.packet_view_add_packet( false,
-                                                                            channel,
-                                                                            uart_items[current_i_fct-1].start_sample_index,
-                                                                            uart_items[current_i_fct].end_sample_index,
-                                                                            "Function",
-                                                                            function_to_str(current_fct,1),
-                                                                            COLOR_T_FCT,
-                                                                            COLOR_C_FCT);
+                                        request = true;
+                                        response = false;
                                     }
+                                    break;
+                                }
 
-                                    var pkt_str;
-                                    ScanaStudio.dec_item_new(   channel,
-                                                                uart_items[k-1].start_sample_index,
-                                                                uart_items[k].end_sample_index);
-                                    switch( Math.round((k-(sof+4))/2) )
-                                    {
-                                        case 1:
-                                        {
-                                            ScanaStudio.dec_item_add_content("Starting Address Hi : " + dec_to_str(byte_value, "0x") );
-                                            ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x") );
-                                            pkt_str = "Starting @ Hi";
-                                            break;
-                                        }
-                                        case 2:
-                                        {
-                                            ScanaStudio.dec_item_add_content("Starting Address Lo : " + dec_to_str(byte_value, "0x") );
-                                            ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x") );
-                                            pkt_str = "Starting @ Lo";
-                                            break;
-                                        }
-                                        case 3:
-                                        {
-                                            if(current_fct==FCT_READ_COIL_STATUS)
-                                            {
-                                                ScanaStudio.dec_item_add_content("Quantity of Coils Hi : " + dec_to_str(byte_value, "0x") );
-                                                pkt_str = "Qty Coils @ Hi";
-                                            }
-                                            else if(current_fct==FCT_READ_INPUT_STATUS)
-                                            {
-                                                ScanaStudio.dec_item_add_content("Quantity of inputs Hi : " + dec_to_str(byte_value, "0x") );
-                                                pkt_str = "Qty Input @ Hi";
-                                            }
-                                            else if( (current_fct==FCT_READ_HOLDING_REGISTERS) || (current_fct==FCT_READ_INPUT_REGISTERS) )
-                                            {
-                                                ScanaStudio.dec_item_add_content("Quantity of Register Hi : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "Qty Reg @ Hi";
-                                            }
-                                            ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
-                                            break;
-                                        }
-                                        case 4:
-                                        {
-                                            if(current_fct==FCT_READ_COIL_STATUS)
-                                            {
-                                                ScanaStudio.dec_item_add_content("Quantity of Coils Lo : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "Qty Coils @ Lo";
-                                            }
-                                            else if(current_fct==FCT_READ_INPUT_STATUS)
-                                            {
-                                                ScanaStudio.dec_item_add_content("Quantity of inputs Lo : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "Qty Input @ Lo";
-                                            }
-                                            else if( (current_fct==FCT_READ_HOLDING_REGISTERS) || (current_fct==FCT_READ_INPUT_REGISTERS) )
-                                            {
-                                                ScanaStudio.dec_item_add_content("Quantity of Register Lo : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "Qty Reg @ Lo";
-                                            }
-                                            ScanaStudio.dec_item_add_content("Lo : " +dec_to_str(byte_value, "0x"));
-                                            break;
-                                        }
-                                        default:
-                                        {
-                                            ScanaStudio.dec_item_add_content("Unknown item : " +dec_to_str(byte_value, "0x"));
-                                            ScanaStudio.dec_item_emphasize_warning();
-                                            pkt_str = "...";
-                                            break;
-                                        }
-                                    }//end switch k
-                                    lrc += byte_value;
-                                    ScanaStudio.dec_item_add_content( dec_to_str(byte_value, "0x") );
-                                    ScanaStudio.packet_view_add_packet( false,
-                                                                        channel,
-                                                                        uart_items[k-1].start_sample_index,
-                                                                        uart_items[k].end_sample_index,
-                                                                        pkt_str,
-                                                                        dec_to_str(byte_value, "0x"),
-                                                                        COLOR_T_DATA,
-                                                                        COLOR_C_DATA);
-
-                                }//end request
-                                else if( current_byte_cnt*2 ==(eof - sof - 9) )//answer
+                                case FCT_WRITE_MULTIPLE_COILS:
+                                case FCT_WRITE_MULTIPLE_REGISTERS:
                                 {
-                                    if( Math.round((k-(sof+4))/2) == 1)
+                                    if(trame.length >= 15)
                                     {
-                                        ScanaStudio.dec_item_new(   channel,
-                                                                    uart_items[current_i_fct-1].start_sample_index,
-                                                                    uart_items[current_i_fct].end_sample_index);
-                                        ScanaStudio.dec_item_add_content( "Function : " + function_to_str(current_fct,0) );
-                                        ScanaStudio.dec_item_add_content( "Fct : " + function_to_str(current_fct,0) );
-                                        ScanaStudio.dec_item_add_content( "Fct : " + dec_to_str(current_fct, "0x") );
-                                        ScanaStudio.dec_item_add_content( dec_to_str(current_fct, "0x") );
-                                        ScanaStudio.packet_view_add_packet( false,
-                                                                            channel,
-                                                                            uart_items[current_i_fct-1].start_sample_index,
-                                                                            uart_items[current_i_fct].end_sample_index,
-                                                                            "Function",
-                                                                            function_to_str(current_fct,1),
-                                                                            COLOR_T_FCT,
-                                                                            COLOR_C_FCT);
+                                        if( (trame.length-19)/2 == (str_to_hex(trame[13].content)*16 +  str_to_hex(trame[14].content)) )
+                                        {
+                                            request = true;
+                                            response = false;
+                                        }
+                                        else if(trame.length == 17)
+                                        {
+                                            response = true;
+                                            request = false;
+                                        }
                                     }
+                                    break;
+                                }
 
-                                    var pkt_str;
-                                    ScanaStudio.dec_item_new(   channel,
-                                                                uart_items[k-1].start_sample_index,
-                                                                uart_items[k].end_sample_index);
-
-
-                                    if( Math.round((k-(sof+4))/2) == 1)
+                                default:
+                                {
+                                    if((trame.length == 11)&&(fct_code&0x80))//exception
                                     {
-                                        ScanaStudio.dec_item_add_content( "Byte Count : " + dec_to_str(byte_value, "0x") );
-                                        ScanaStudio.dec_item_add_content( "Cnt : " + dec_to_str(byte_value, "0x") );
-                                        pkt_str = "Cnt"
+                                         error = true;
                                     }
                                     else
                                     {
-                                        if( (current_fct==FCT_READ_COIL_STATUS) || (current_fct==FCT_READ_INPUT_STATUS) )
-                                        {
-                                            ScanaStudio.dec_item_add_content( "Data : " + dec_to_str(byte_value, "0x") );
-                                            pkt_str = "Data";
-                                        }
-                                        else if( (current_fct==FCT_READ_HOLDING_REGISTERS) || (current_fct==FCT_READ_INPUT_REGISTERS) )
-                                        {
-                                            if( Math.round((k-(sof+4))/2)%2 )
-                                            {
-                                                ScanaStudio.dec_item_add_content( "Data Lo: " + dec_to_str(byte_value, "0x") );
-                                                ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x") );
-                                                pkt_str = "Data Lo";
-                                            }
-                                            else
-                                            {
-                                                ScanaStudio.dec_item_add_content( "Data Hi: " + dec_to_str(byte_value, "0x") );
-                                                ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x") );
-                                                pkt_str = "Data Hi";
-                                            }
-                                        }
+                                        //unknown function
                                     }
-                                    ScanaStudio.dec_item_add_content( dec_to_str(byte_value, "0x") );
-                                    ScanaStudio.packet_view_add_packet( false,
-                                                                        channel,
-                                                                        uart_items[k-1].start_sample_index,
-                                                                        uart_items[k].end_sample_index,
-                                                                        pkt_str,
-                                                                        dec_to_str(byte_value, "0x"),
-                                                                        COLOR_T_DATA,
-                                                                        COLOR_C_DATA);
-                                    lrc += byte_value;
-
-                                }//end answer
-                                else //error
-                                {
-
-                                    if( Math.round((k-(sof+4))/2) == 1)
-                                    {
-                                        ScanaStudio.dec_item_new(   channel,
-                                                                    uart_items[current_i_fct-1].start_sample_index,
-                                                                    uart_items[current_i_fct].end_sample_index);
-                                        ScanaStudio.dec_item_add_content( "Function wrong length: " + function_to_str(current_fct,0) );
-                                        ScanaStudio.dec_item_add_content( "Fct !len: " + function_to_str(current_fct,0) );
-                                        ScanaStudio.dec_item_add_content( "Fct !len: " + dec_to_str(current_fct, "0x") );
-                                        ScanaStudio.dec_item_add_content( dec_to_str(current_fct, "0x") );
-                                        ScanaStudio.dec_item_emphasize_warning();
-                                        ScanaStudio.packet_view_add_packet( false,
-                                                                            channel,
-                                                                            uart_items[current_i_fct-1].start_sample_index,
-                                                                            uart_items[current_i_fct].end_sample_index,
-                                                                            "Function",
-                                                                            "wrong length ! fct type :" + dec_to_str(current_fct, "0x"),
-                                                                            COLOR_T_FCT,
-                                                                            COLOR_C_FCT);
-                                    }
-
-                                    ScanaStudio.dec_item_new(   channel,
-                                                                uart_items[k-1].start_sample_index,
-                                                                uart_items[k].end_sample_index);
-                                    ScanaStudio.dec_item_add_content("Unknown item : " + dec_to_str(byte_value, "0x"));
-                                    ScanaStudio.dec_item_add_content( dec_to_str(byte_value, "0x") );
-                                    ScanaStudio.dec_item_emphasize_warning();
-                                    ScanaStudio.packet_view_add_packet( false,
-                                                                        channel,
-                                                                        uart_items[k-1].start_sample_index,
-                                                                        uart_items[k].end_sample_index,
-                                                                        "Unknown",
-                                                                        dec_to_str(byte_value, "0x"),
-                                                                        COLOR_T_DATA,
-                                                                        COLOR_C_DATA);
-                                    lrc += byte_value;
                                 }
 
-                                if(eof-3 == k)
-                                {
-                                    state_machine = ENUM_STATE_LRC;
-                                }
-                                else if(eof-3 < k)
-                                {
-                                    ScanaStudio.dec_item_new(   channel,
-                                                                uart_items[k-1].start_sample_index,
-                                                                uart_items[k].end_sample_index);
-                                    ScanaStudio.dec_item_add_content("UNEXPECTED ERROR");
-                                    ScanaStudio.dec_item_add_content("ERROR");
-                                    ScanaStudio.dec_item_emphasize_error();
-                                }
-                                break;
-                            }//end case FCT_READ_COIL_STATUS or FCT_READ_INPUT_STATUS or FCT_READ_HOLDING_REGISTERS or FCT_READ_INPUT_REGISTERS
-
-
-
-                            case FCT_WRITE_SINGLE_COIL:
-                            case FCT_WRITE_SINGLE_REGISTER:
+                            }//end switch fct_code
+                            var fct_type_dec = -2;
+                            if(error)
                             {
-                                if( Math.round((k-(sof+4))/2) == 1)
+                                fct_type_dec = -1;
+                                ScanaStudio.dec_item_emphasize_warning();
+                            }
+                            else if(request && !response)
+                            {
+                                fct_type_dec = 1;
+                            }
+                            else if(!request && response)
+                            {
+                                fct_type_dec = 0;
+                            }
+                            ScanaStudio.dec_item_add_content( "Function : " + function_to_str(fct_code&0x7F,fct_type_dec) );
+                            ScanaStudio.dec_item_add_content( "Fct : " + function_to_str(fct_code&0x7F,fct_type_dec) );
+                            ScanaStudio.dec_item_add_content( "Fct : " + dec_to_str(byte_value, "0x") );
+                            ScanaStudio.dec_item_add_content( dec_to_str(byte_value, "0x") );
+                            ScanaStudio.packet_view_add_packet( false,
+                                                                channel,
+                                                                trame[i-1].start_sample_index,
+                                                                trame[i].end_sample_index,
+                                                                "Function",
+                                                                function_to_str(fct_code&0x7F,fct_type_dec),
+                                                                (error ? COLOR_T_ERROR : COLOR_T_FCT),
+                                                                (error ? COLOR_C_ERROR : COLOR_C_FCT));
+
+                            state_machine = ENUM_STATE_AFTER_FUNCTION;
+                            break;
+                        }//end ENUM_STATE_FUNCTION
+
+                        case ENUM_STATE_AFTER_FUNCTION:
+                        {
+                            ScanaStudio.dec_item_new( channel,
+                                                    trame[i-1].start_sample_index,
+                                                    trame[i].end_sample_index);
+
+                            lrc += byte_value;
+                            var pkt_str = "";
+                            var exception_code = 0;
+                            switch(fct_code)//fill dec_items and packet view
+                            {
+                                case FCT_READ_COIL_STATUS:
                                 {
-                                    ScanaStudio.dec_item_new(   channel,
-                                                                uart_items[current_i_fct-1].start_sample_index,
-                                                                uart_items[current_i_fct].end_sample_index);
-                                    ScanaStudio.dec_item_add_content( "Function : " + function_to_str(current_fct,1) );
-                                    ScanaStudio.dec_item_add_content( "Fct : " + function_to_str(current_fct,1) );
-                                    ScanaStudio.dec_item_add_content( "Fct : " + dec_to_str(current_fct, "0x") );
-                                    ScanaStudio.dec_item_add_content( dec_to_str(current_fct, "0x") );
-                                    ScanaStudio.packet_view_add_packet( false,
-                                                                        channel,
-                                                                        uart_items[current_i_fct-1].start_sample_index,
-                                                                        uart_items[current_i_fct].end_sample_index,
-                                                                        "Function",
-                                                                        function_to_str(current_fct,1),
-                                                                        COLOR_T_FCT,
-                                                                        COLOR_C_FCT);
-                                }
-                                var pkt_str;
-                                ScanaStudio.dec_item_new(   channel,
-                                                            uart_items[k-1].start_sample_index,
-                                                            uart_items[k].end_sample_index);
-                                switch( Math.round((k-(sof+4))/2) )
+                                    if(request && !response)
+                                    {
+                                        switch((i/2)-1)
+                                        {
+                                            case 2://Starting Address Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Starting Address Hi : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Starting @ Hi";
+                                                break;
+                                            }
+                                            case 3://Starting Address Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Starting Address Lo : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Starting @ Lo";
+                                                break;
+                                            }
+                                            case 4://Quantity of Coils Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Coils Hi : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Qty Coils Hi";
+                                                break;
+                                            }
+                                            case 5://Quantity of Coils Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Coils Lo : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Qty Coils Lo";
+                                                break;
+                                            }
+                                            default://warning
+                                            {
+                                                ScanaStudio.dec_item_emphasize_warning();
+                                                pkt_str = "Data";
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    else if(!request && response)
+                                    {
+                                        switch((i/2)-1)
+                                        {
+                                            case 2://Byte Count
+                                            {
+                                                ScanaStudio.dec_item_add_content("Byte Count : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Cnt : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Cnt";
+                                                break;
+                                            }
+                                            default://data and warning
+                                            {
+                                                if(i - 7 < (str_to_hex(trame[5].content)*16 + str_to_hex(trame[6].content))*2 && (i-7>=0) )
+                                                {
+                                                    ScanaStudio.dec_item_add_content("Data : " + dec_to_str(byte_value, "0x"));
+                                                    pkt_str = "Data";
+                                                }
+                                                else
+                                                {
+                                                    ScanaStudio.dec_item_emphasize_warning();
+                                                    pkt_str = "Data";
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    else
+                                    {
+                                        //warning
+                                        ScanaStudio.dec_item_emphasize_error();
+                                        // pkt_str = "Data";
+                                    }
+                                    break;
+                                }//end FCT_READ_COIL_STATUS datas
+
+                                case FCT_READ_INPUT_STATUS:
                                 {
-                                    case 1:
+                                    if(request && !response)
                                     {
-                                        if(current_fct==FCT_WRITE_SINGLE_COIL)
+                                        switch((i/2)-1)
                                         {
-                                            ScanaStudio.dec_item_add_content("Coil Address Hi : " + dec_to_str(byte_value, "0x") );
-                                            pkt_str = "Coil @ Hi";
+                                            case 2://Starting Address Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Starting Address Hi : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Starting @ Hi";
+                                                break;
+                                            }
+                                            case 3://Starting Address Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Starting Address Lo : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Starting @ Lo";
+                                                break;
+                                            }
+                                            case 4://Quantity of Inputs Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Inputs Hi : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Qty In Hi";
+                                                break;
+                                            }
+                                            case 5://Quantity of Inputs Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Inputs Lo : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Qty In Lo";
+                                                break;
+                                            }
+                                            default://warning
+                                            {
+                                                ScanaStudio.dec_item_emphasize_warning();
+                                                pkt_str = "Data";
+                                                break;
+                                            }
                                         }
-                                        else
+                                    }
+                                    else if(!request && response)
+                                    {
+                                        switch((i/2)-1)
                                         {
-                                            ScanaStudio.dec_item_add_content("Register Address Hi : " + dec_to_str(byte_value, "0x") );
-                                            pkt_str = "Reg @ Hi";
+                                            case 2://Byte Count
+                                            {
+                                                ScanaStudio.dec_item_add_content("Byte Count : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Cnt : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Cnt";
+                                                break;
+                                            }
+                                            default://data and warning
+                                            {
+                                                if(i - 7 < (str_to_hex(trame[5].content)*16 + str_to_hex(trame[6].content))*2 && (i-7>=0) )
+                                                {
+                                                    ScanaStudio.dec_item_add_content("Data : " + dec_to_str(byte_value, "0x"));
+                                                    pkt_str = "Data";
+                                                }
+                                                else
+                                                {
+                                                    ScanaStudio.dec_item_emphasize_warning();
+                                                    pkt_str = "Data";
+                                                }
+                                                break;
+                                            }
                                         }
-                                        ScanaStudio.dec_item_add_content("Hi : " +dec_to_str(byte_value, "0x") );
-                                        break;
                                     }
-                                    case 2:
+                                    else
                                     {
-                                        if(current_fct==FCT_WRITE_SINGLE_COIL)
+                                        //warning
+                                        ScanaStudio.dec_item_emphasize_error();
+                                        // pkt_str = "Data";
+                                    }
+                                    break;
+                                }//end FCT_READ_INPUT_STATUS datas
+
+                                case FCT_READ_HOLDING_REGISTERS:
+                                case FCT_READ_INPUT_REGISTERS:
+                                {
+                                    if(request && !response)
+                                    {
+                                        switch((i/2)-1)
                                         {
-                                            ScanaStudio.dec_item_add_content("Coil Address Lo : " + dec_to_str(byte_value, "0x"));
-                                            pkt_str = "Coil @ Lo";
+                                            case 2://Starting Address Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Starting Address Hi : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Starting @ Hi";
+                                                break;
+                                            }
+                                            case 3://Starting Address Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Starting Address Lo : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Starting @ Lo";
+                                                break;
+                                            }
+                                            case 4://Quantity of Register Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Register Hi : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Qty Register @ Hi";
+                                                break;
+                                            }
+                                            case 5://Quantity of Register Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Register Lo : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Qty Reg @ Lo";
+                                                break;
+                                            }
+                                            default://warning
+                                            {
+                                                ScanaStudio.dec_item_emphasize_warning();
+                                                pkt_str = "Data";
+                                                break;
+                                            }
                                         }
-                                        else
+                                    }
+                                    else if(!request && response)
+                                    {
+                                        switch((i/2)-1)
                                         {
-                                            ScanaStudio.dec_item_add_content("Register Address Lo : " + dec_to_str(byte_value, "0x"));
-                                            pkt_str = "Reg @ Lo";
+                                            case 2://Byte Count
+                                            {
+                                                ScanaStudio.dec_item_add_content("Byte Count : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Cnt : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Cnt";
+                                                break;
+                                            }
+                                            default://data and warning     if i%2 == 1 => Data Hi     else Data Lo
+                                            {
+                                                if(i - 7 < (str_to_hex(trame[5].content)*16 + str_to_hex(trame[6].content))*2 && (i-7>=0) )
+                                                {
+                                                    if((i/2)%2 == 0)
+                                                    {
+                                                        ScanaStudio.dec_item_add_content("Data Hi : " + dec_to_str(byte_value, "0x"));
+                                                        pkt_str = "Data Hi";
+                                                    }
+                                                    else
+                                                    {
+                                                        ScanaStudio.dec_item_add_content("Data Lo : " + dec_to_str(byte_value, "0x"));
+                                                        pkt_str = "Data Lo";
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    ScanaStudio.dec_item_emphasize_warning();
+                                                    pkt_str = "Data";
+                                                }
+                                                break;
+                                            }
                                         }
-                                        ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
-                                        break;
                                     }
-                                    case 3:
+                                    else
                                     {
-                                        ScanaStudio.dec_item_add_content("Write Data Hi : " + dec_to_str(byte_value, "0x"));
-                                        ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
-                                        pkt_str = "W Data Hi";
-                                        break;
+                                        //warning
+                                        ScanaStudio.dec_item_emphasize_error();
+                                        // pkt_str = "Data";
                                     }
-                                    case 4:
+                                    break;
+                                }//end FCT_READ_HOLDING_REGISTERS and FCT_READ_INPUT_REGISTERS datas
+
+                                case FCT_WRITE_SINGLE_COIL:
+                                {
+                                    if(trame.length == 17)
                                     {
-                                        ScanaStudio.dec_item_add_content("Write Data Lo : " + dec_to_str(byte_value, "0x"));
-                                        ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
-                                        pkt_str = "W Data Lo";
-                                        break;
+                                        switch((i/2)-1)
+                                        {
+                                            case 2://Coil Address Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Coil Address Hi : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Coil @ Hi";
+                                                break;
+                                            }
+                                            case 3://Coil Address Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Coil Address Lo : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Coil @ Lo";
+                                                break;
+                                            }
+                                            case 4://Write Data Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Write Data Hi : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Wr Data Hi";
+                                                break;
+                                            }
+                                            case 5://Write Data Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Write Data Lo : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Wr Data Lo";
+                                                break;
+                                            }
+                                            default://warning
+                                            {
+                                                ScanaStudio.dec_item_emphasize_warning();
+                                                pkt_str = "Data";
+                                                break;
+                                            }
+                                        }
                                     }
-                                    default:
+                                    else
                                     {
-                                        ScanaStudio.dec_item_add_content("Unknown item : " + dec_to_str(byte_value, "0x") );
+                                        //warning
+                                        ScanaStudio.dec_item_emphasize_error();
+                                        // pkt_str = "Data";
+                                    }
+                                    break;
+                                }//end FCT_WRITE_SINGLE_COIL datas
+
+                                case FCT_WRITE_SINGLE_REGISTER:
+                                {
+                                    if(trame.length == 17)
+                                    {
+                                        switch((i/2)-1)
+                                        {
+                                            case 2://Register Address Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Register Address Hi : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Reg @ Hi";
+                                                break;
+                                            }
+                                            case 3://Register Address Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Register Address Lo : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Reg @ Lo";
+                                                break;
+                                            }
+                                            case 4://Write Data Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Write Data Hi : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Wr Data Hi";
+                                                break;
+                                            }
+                                            case 5://Write Data Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Write Data Lo : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Wr Data Lo";
+                                                break;
+                                            }
+                                            default://warning
+                                            {
+                                                ScanaStudio.dec_item_emphasize_warning();
+                                                pkt_str = "Data";
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    else
+                                    {
+                                        //warning
+                                        ScanaStudio.dec_item_emphasize_error();
+                                        // pkt_str = "Data";
+                                    }
+                                    break;
+                                }//end FCT_WRITE_SINGLE_COIL datas
+
+                                case FCT_WRITE_MULTIPLE_COILS:
+                                {
+                                    if(request && !response)
+                                    {
+                                        switch((i/2)-1)
+                                        {
+                                            case 2://Coil Address Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Coil Address Hi : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Coil @ Hi";
+                                                break;
+                                            }
+                                            case 3://Coil Address Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Coil Address Lo : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Coil @ Lo";
+                                                break;
+                                            }
+                                            case 4://Quantity of Coil Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Coil Hi : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Qty Hi";
+                                                break;
+                                            }
+                                            case 5://Quantity of Coil Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Coil Lo : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Qty Lo";
+                                                break;
+                                            }
+                                            case 6://byte Count
+                                            {
+                                                ScanaStudio.dec_item_add_content("Byte Count : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Cnt : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Cnt";
+                                                break;
+                                            }
+                                            default://warning and data    if i%2 == 1 => Data Hi    else Data Lo
+                                            {
+                                                if(i - 15 < (str_to_hex(trame[13].content)*16 + str_to_hex(trame[14].content))*2 && (i-15>=0) )
+                                                {
+                                                    if((i/2)%2 == 0)
+                                                    {
+                                                        ScanaStudio.dec_item_add_content("Data Hi : " + dec_to_str(byte_value, "0x"));
+                                                        pkt_str = "Data Hi";
+                                                    }
+                                                    else
+                                                    {
+                                                        ScanaStudio.dec_item_add_content("Data Lo : " + dec_to_str(byte_value, "0x"));
+                                                        pkt_str = "Data Lo";
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    ScanaStudio.dec_item_emphasize_warning();
+                                                    pkt_str = "Data";
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    else if(!request && response)
+                                    {
+                                        switch((i/2)-1)
+                                        {
+                                            case 2://Coil Address Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Coil Address Hi : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Coil @ Hi";
+                                                break;
+                                            }
+                                            case 3://Coil Address Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Coil Address Lo : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Coil @ Lo";
+                                                break;
+                                            }
+                                            case 4://Quantity of Coil Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Coil Hi : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Qty Hi";
+                                                break;
+                                            }
+                                            case 5://Quantity of Coil Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Coil Lo : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Qty Lo";
+                                                break;
+                                            }
+                                            default://warning
+                                            {
+                                                ScanaStudio.dec_item_emphasize_warning();
+                                                pkt_str = "Data";
+                                            }
+                                        }
+                                    }
+                                    else
+                                    {
+                                        //warning
+                                        ScanaStudio.dec_item_emphasize_error();
+                                        // pkt_str = "Data";
+                                    }
+                                    break;
+                                }//end FCT_WRITE_MULTIPLE_COILS datas
+
+                                case FCT_WRITE_MULTIPLE_REGISTERS:
+                                {
+                                    if(request && !response)
+                                    {
+                                        switch((i/2)-1)
+                                        {
+                                            case 2://Starting Address Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Starting Address Hi : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Starting @ Hi";
+                                                break;
+                                            }
+                                            case 3://Starting Address Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Starting Address Lo : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Starting @ Lo";
+                                                break;
+                                            }
+                                            case 4://Quantity of Registers Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Registers Hi : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Qty Reg Hi";
+                                                break;
+                                            }
+                                            case 5://Quantity of Registers Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Registers Lo : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Qty Reg Lo";
+                                                break;
+                                            }
+                                            case 6://Byte Count
+                                            {
+                                                ScanaStudio.dec_item_add_content("Byte Count : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Cnt : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Cnt";
+                                                break;
+                                            }
+                                            default://warning and data    if i%2 == 1 => Data Hi    else Data Lo
+                                            {
+                                                if(i - 15 < (str_to_hex(trame[13].content)*16 + str_to_hex(trame[14].content))*2 && (i-15>=0) )
+                                                {
+                                                    if((i/2)%2 == 0)
+                                                    {
+                                                        ScanaStudio.dec_item_add_content("Data Hi : " + dec_to_str(byte_value, "0x"));
+                                                        pkt_str = "Data Hi";
+                                                    }
+                                                    else
+                                                    {
+                                                        ScanaStudio.dec_item_add_content("Data Lo : " + dec_to_str(byte_value, "0x"));
+                                                        pkt_str = "Data Lo";
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    ScanaStudio.dec_item_emphasize_warning();
+                                                    pkt_str = "Data";
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    else if(!request && response)
+                                    {
+                                        switch((i/2)-1)
+                                        {
+                                            case 2://Starting Address Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Starting Address Hi : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Starting @ Hi";
+                                                break;
+                                            }
+                                            case 3://Starting Address Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Starting Address Lo : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Starting @ Lo";
+                                                break;
+                                            }
+                                            case 4://Quantity of Registers Hi
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Registers Hi : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Qty Reg Hi";
+                                                break;
+                                            }
+                                            case 5://Quantity of Registers Lo
+                                            {
+                                                ScanaStudio.dec_item_add_content("Quantity of Registers Lo : " + dec_to_str(byte_value, "0x"));
+                                                ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
+                                                pkt_str = "Qty Reg Lo";
+                                                break;
+                                            }
+                                            default://warning
+                                            {
+                                                ScanaStudio.dec_item_emphasize_warning();
+                                                pkt_str = "Data";
+                                            }
+                                        }
+                                    }
+                                    else
+                                    {
+                                        //warning
+                                        ScanaStudio.dec_item_emphasize_error();
+                                        // pkt_str = "Data";
+                                    }
+                                    break;
+                                }//end FCT_WRITE_MULTIPLE_REGISTERS datas
+
+                                default:
+                                {
+                                    if((trame.length == 11)&&(fct_code&0x80))//exception
+                                    {
+                                        exception_code = byte_value;
+                                        ScanaStudio.dec_item_add_content("Exception : " + exception_to_str(exception_code&0x7F));
+                                        ScanaStudio.dec_item_add_content("Ex : " + exception_to_str(exception_code&0x7F));
+                                        ScanaStudio.dec_item_add_content("Ex : " + dec_to_str(byte_value, "0x"));
+                                        pkt_str = "Exception";
                                         ScanaStudio.dec_item_emphasize_warning();
-                                        pkt_str = "...";
-                                        break;
                                     }
-                                }//end switch iterator in frame
-                                lrc += byte_value;
+                                    else
+                                    {
+                                        ScanaStudio.dec_item_add_content("Unknown data : " + dec_to_str(byte_value, "0x"));
+                                        pkt_str = "Unknown";
+                                    }
+                                }
+                            }//end switch fct for datas
+
+                            ScanaStudio.dec_item_add_content( dec_to_str(byte_value, "0x") );
+                            ScanaStudio.packet_view_add_packet( false,
+                                                                channel,
+                                                                trame[i-1].start_sample_index,
+                                                                trame[i].end_sample_index,
+                                                                pkt_str,
+                                                                (exception_code != 0) ? exception_to_str(exception_code&0x7F) : dec_to_str(byte_value, "0x"),
+                                                                (exception_code != 0) ? COLOR_T_ERROR : COLOR_T_DATA,
+                                                                (exception_code != 0) ? COLOR_C_ERROR : COLOR_C_DATA);
+                            if(i == trame.length - 5)
+                            {
+                                state_machine = ENUM_STATE_LRC;
+                            }
+                            break;
+                        }//end ENUM_STATE_AFTER_FUNCTION
+
+                        case ENUM_STATE_LRC:
+                        {
+        					lrc= (-lrc)%256;
+        					lrc = 256+lrc;
+                            lrc &= 0xFF;
+
+                            ScanaStudio.dec_item_new(   channel,
+                                                        trame[i-1].start_sample_index,
+                                                        trame[i].end_sample_index);
+                            if(lrc == byte_value)
+                            {
+                                ScanaStudio.dec_item_add_content( "LRC OK : " + dec_to_str(byte_value, "0x") );
+                                ScanaStudio.dec_item_add_content( "LRC " + dec_to_str(byte_value, "0x") );
                                 ScanaStudio.dec_item_add_content( dec_to_str(byte_value, "0x") );
+
                                 ScanaStudio.packet_view_add_packet( false,
                                                                     channel,
-                                                                    uart_items[k-1].start_sample_index,
-                                                                    uart_items[k].end_sample_index,
-                                                                    pkt_str,
-                                                                    dec_to_str(byte_value, "0x"),
-                                                                    COLOR_T_DATA,
-                                                                    COLOR_C_DATA);
-
-
-                                if(eof-3 == k)
-                                {
-                                    state_machine = ENUM_STATE_LRC;
-                                }
-                                else if(eof-3 < k)
-                                {
-                                    ScanaStudio.dec_item_new(   channel,
-                                                                uart_items[k-1].start_sample_index,
-                                                                uart_items[k].end_sample_index);
-                                    ScanaStudio.dec_item_add_content("UNEXPECTED ERROR");
-                                    ScanaStudio.dec_item_add_content("ERROR");
-                                    ScanaStudio.dec_item_emphasize_error();
-                                }
-                                break;
-                            }//end case FCT_WRITE_SINGLE_COIL and FCT_WRITE_SINGLE_REGISTER
-
-
-
-                            case FCT_WRITE_MULTIPLE_COILS:
-                            case FCT_WRITE_MULTIPLE_REGISTERS:
+                                                                    trame[i-1].start_sample_index,
+                                                                    trame[i].end_sample_index,
+                                                                    "LRC",
+                                                                    dec_to_str(byte_value, "0x") + " OK",
+                                                                    COLOR_T_CRC,
+                                                                    COLOR_C_CRC);
+                            }
+                            else //wrong LRC
                             {
-                                //current_byte_cnt calculation
-                                if((eof - sof >= 15)&&(current_byte_cnt == -1))
-                                {
-                                    var tmp_char; //char value detection
-                                    var tmp_val; //char value detection
-                                    var tmp_i=0;
-                                    for(tmp_i = 0; tmp_i<2; tmp_i++)
-                                    {
-                                        if( (uart_items[sof+13+tmp_i].content >= 0x30) && (uart_items[sof+13+tmp_i].content <= 0x39) ) //0-9
-                                        {
-                                            tmp_char = uart_items[sof+13+tmp_i].content - 0x30;
-                                        }
-                                        else if( (uart_items[sof+13+tmp_i].content >= 0x41) && (uart_items[sof+13+tmp_i].content <= 0x46) ) //A-F
-                                        {
-                                            tmp_char = uart_items[sof+13+tmp_i].content - 0x41 + 10;
-                                        }
-                                        else if( (uart_items[sof+13+tmp_i].content >= 0x61) && (uart_items[sof+13+tmp_i].content <= 0x66) ) //A-F
-                                        {
-                                            tmp_char = uart_items[sof+13+tmp_i].content - 0x61 + 10;
-                                        }
-                                        else
-                                        {
-                                            ScanaStudio.dec_item_new(   channel,
-                                                                        uart_items[k].start_sample_index,
-                                                                        uart_items[k].end_sample_index);
-                                            ScanaStudio.dec_item_add_content( "Unknown char code :'" + String.fromCharCode(uart_items[k].content) + "' " + uart_items[k].content );
-                                            ScanaStudio.dec_item_add_content( "'" + String.fromCharCode(uart_items[k].content) + "' " + uart_items[k].content );
-                                            ScanaStudio.dec_item_add_content( uart_items[k].content );
-                                            ScanaStudio.dec_item_emphasize_warning();
-                                        }
+                                ScanaStudio.dec_item_add_content( "LRC WRONG : " + dec_to_str(byte_value, "0x") + " should be " + dec_to_str(lrc, "0x") );
+                                ScanaStudio.dec_item_add_content( "LRC WRONG :" + dec_to_str(byte_value, "0x") );
+                                ScanaStudio.dec_item_add_content( dec_to_str(byte_value, "0x") );
+                                ScanaStudio.dec_item_emphasize_error();
 
-                                        if( tmp_i == 0 ) //first byte
-                                        {
-                                            tmp_val = tmp_char * 16;
-                                        }
-                                        else
-                                        {
-                                            tmp_val += tmp_char;
-                                        }
-                                    }
+                                ScanaStudio.packet_view_add_packet( false,
+                                                                    channel,
+                                                                    trame[i-1].start_sample_index,
+                                                                    trame[i].end_sample_index,
+                                                                    "LRC",
+                                                                    dec_to_str(byte_value, "0x") + " Wrong, should be " +  dec_to_str(lrc, "0x"),
+                                                                    COLOR_T_ERROR,
+                                                                    COLOR_C_ERROR);
+                            }
 
-
-                                    current_byte_cnt = tmp_val;
-                                }
-
-
-                                if( eof - sof == 15 )//answer
-                                {
-                                    if( Math.round((k-(sof+4))/2) == 1)
-                                    {
-                                        ScanaStudio.dec_item_new(   channel,
-                                                                    uart_items[current_i_fct-1].start_sample_index,
-                                                                    uart_items[current_i_fct].end_sample_index);
-                                        ScanaStudio.dec_item_add_content( "Function : " + function_to_str(current_fct,0) );
-                                        ScanaStudio.dec_item_add_content( "Fct : " + function_to_str(current_fct,0) );
-                                        ScanaStudio.dec_item_add_content( "Fct : " + dec_to_str(current_fct, "0x") );
-                                        ScanaStudio.dec_item_add_content( dec_to_str(current_fct, "0x") );
-                                        ScanaStudio.packet_view_add_packet( false,
-                                                                            channel,
-                                                                            uart_items[current_i_fct-1].start_sample_index,
-                                                                            uart_items[current_i_fct].end_sample_index,
-                                                                            "Function",
-                                                                            function_to_str(current_fct,1),
-                                                                            COLOR_T_FCT,
-                                                                            COLOR_C_FCT);
-                                    }
-
-                                    var pkt_str;
-                                    ScanaStudio.dec_item_new(   channel,
-                                                                uart_items[k-1].start_sample_index,
-                                                                uart_items[k].end_sample_index);
-
-                                    switch( Math.round((k-(sof+4))/2) )
-                                    {
-                                        case 1:
-                                        {
-                                            if(current_fct==FCT_WRITE_MULTIPLE_COILS)
-                                            {
-                                                ScanaStudio.dec_item_add_content("Coil Address Hi : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "Coil @ Hi";
-                                            }
-                                            else
-                                            {
-                                                ScanaStudio.dec_item_add_content("Starting Address Hi : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "Start @ Hi";
-                                            }
-                                            ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
-                                            break;
-                                        }
-                                        case 2:
-                                        {
-                                            if(current_fct==FCT_WRITE_MULTIPLE_COILS)
-                                            {
-                                                ScanaStudio.dec_item_add_content("Coil Address Lo : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "Coil @ Lo";
-                                            }
-                                            else
-                                            {
-                                                ScanaStudio.dec_item_add_content("Starting Address Lo : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "Start @ Lo";
-                                            }
-                                            ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
-                                            break;
-                                        }
-                                        case 3:
-                                        {
-                                            if(current_fct==FCT_WRITE_MULTIPLE_COILS)
-                                            {
-                                                ScanaStudio.dec_item_add_content("Quantity of Coils Hi : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "Qty Coil Hi";
-                                            }
-                                            else
-                                            {
-                                                ScanaStudio.dec_item_add_content("Quantity of Registers Hi : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "Qty Reg Hi";
-                                            }
-                                            ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
-                                            break;
-                                        }
-                                        case 4:
-                                        {
-                                            if(current_fct==FCT_WRITE_MULTIPLE_COILS)
-                                            {
-                                                ScanaStudio.dec_item_add_content("Quantity of Coils Lo : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "Qty Coil Lo";
-                                            }
-                                            else
-                                            {
-                                                ScanaStudio.dec_item_add_content("Quantity of Registers Lo : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "Qty Reg Lo";
-                                            }
-                                            ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
-                                            break;
-                                        }
-                                        default:
-                                        {
-                                            ScanaStudio.dec_item_add_content("Unknown item : " + dec_to_str(byte_value, "0x"));
-                                            pkt_str = "...";
-                                            break;
-                                        }
-
-                                    }//end switch k
-
-                                    ScanaStudio.dec_item_add_content( dec_to_str(byte_value, "0x") );
-                                    ScanaStudio.packet_view_add_packet( false,
-                                                                        channel,
-                                                                        uart_items[k-1].start_sample_index,
-                                                                        uart_items[k].end_sample_index,
-                                                                        pkt_str,
-                                                                        dec_to_str(byte_value, "0x"),
-                                                                        COLOR_T_DATA,
-                                                                        COLOR_C_DATA);
-                                    lrc += byte_value;
-
-                                }//end answer
-                                else if( current_byte_cnt*2 ==(eof - sof - 17) )//answer
-                                {
-                                    if( Math.round((k-(sof+4))/2) == 1)
-                                    {
-                                        ScanaStudio.dec_item_new(   channel,
-                                                                    uart_items[current_i_fct-1].start_sample_index,
-                                                                    uart_items[current_i_fct].end_sample_index);
-                                        ScanaStudio.dec_item_add_content( "Function : " + function_to_str(current_fct,1) );
-                                        ScanaStudio.dec_item_add_content( "Fct : " + function_to_str(current_fct,1) );
-                                        ScanaStudio.dec_item_add_content( "Fct : " + dec_to_str(current_fct, "0x") );
-                                        ScanaStudio.dec_item_add_content( dec_to_str(current_fct, "0x") );
-                                        ScanaStudio.packet_view_add_packet( false,
-                                                                            channel,
-                                                                            uart_items[current_i_fct-1].start_sample_index,
-                                                                            uart_items[current_i_fct].end_sample_index,
-                                                                            "Function",
-                                                                            function_to_str(current_fct,1),
-                                                                            COLOR_T_FCT,
-                                                                            COLOR_C_FCT);
-                                    }
-
-                                    var pkt_str;
-                                    ScanaStudio.dec_item_new(   channel,
-                                                                uart_items[k-1].start_sample_index,
-                                                                uart_items[k].end_sample_index);
-
-                                    switch(Math.round((k-(sof+4))/2))
-                                    {
-                                        case 1:
-                                        {
-                                            if(current_fct==FCT_WRITE_MULTIPLE_COILS)
-                                            {
-                                                ScanaStudio.dec_item_add_content("Coil Address Hi : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "Coil @ Hi";
-                                            }
-                                            else
-                                            {
-                                                ScanaStudio.dec_item_add_content("Starting Address Hi : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "Start @ Hi";
-                                            }
-                                            ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
-                                            break;
-                                        }
-                                        case 2:
-                                        {
-                                            if(current_fct==FCT_WRITE_MULTIPLE_COILS)
-                                            {
-                                                ScanaStudio.dec_item_add_content("Coil Address Lo : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "Coil @ Lo";
-                                            }
-                                            else
-                                            {
-                                                ScanaStudio.dec_item_add_content("Starting Address Lo : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "Start @ Lo";
-                                            }
-                                            ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
-                                            break;
-                                        }
-                                        case 3:
-                                        {
-                                            if(current_fct==FCT_WRITE_MULTIPLE_COILS)
-                                            {
-                                                ScanaStudio.dec_item_add_content("Quantity of Coils Hi : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "Qty Coil Hi";
-                                            }
-                                            else
-                                            {
-                                                ScanaStudio.dec_item_add_content("Quantity of Registers Hi : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "Qty Reg Hi";
-                                            }
-                                            ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
-                                            break;
-                                        }
-                                        case 4:
-                                        {
-                                            if(current_fct==FCT_WRITE_MULTIPLE_COILS)
-                                            {
-                                                ScanaStudio.dec_item_add_content("Quantity of Coils Lo : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "Qty Coil Lo";
-                                            }
-                                            else
-                                            {
-                                                ScanaStudio.dec_item_add_content("Quantity of Registers Lo : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "Qty Reg Lo";
-                                            }
-                                            ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
-                                            break;
-                                        }
-                                        case 5:
-                                        {
-                                            ScanaStudio.dec_item_add_content( "Byte Count : " + dec_to_str(byte_value, "0x") );
-                                            ScanaStudio.dec_item_add_content( "Cnt : " + dec_to_str(byte_value, "0x") );
-                                            pkt_str = "Cnt";
-                                            break;
-                                        }
-                                        default:
-                                        {
-                                            if( (k+current_i_fct+1)%2 )
-                                            {
-                                                ScanaStudio.dec_item_add_content( "Write Data Hi: " + dec_to_str(byte_value, "0x") );
-                                                ScanaStudio.dec_item_add_content("Hi : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "W Data Hi";
-                                            }
-                                            else
-                                            {
-                                                ScanaStudio.dec_item_add_content( "Write Data Lo: " + dec_to_str(byte_value, "0x") );
-                                                ScanaStudio.dec_item_add_content("Lo : " + dec_to_str(byte_value, "0x"));
-                                                pkt_str = "W Data Lo";
-                                            }
-                                            break;
-                                        }
-                                    }
-
-                                    lrc += byte_value;
-                                    ScanaStudio.dec_item_add_content( dec_to_str(byte_value, "0x") );
-                                    ScanaStudio.packet_view_add_packet( false,
-                                                                        channel,
-                                                                        uart_items[k-1].start_sample_index,
-                                                                        uart_items[k].end_sample_index,
-                                                                        pkt_str,
-                                                                        dec_to_str(byte_value, "0x"),
-                                                                        COLOR_T_DATA,
-                                                                        COLOR_C_DATA);
-
-                                }//end request
-                                else //error
-                                {
-
-                                    if( Math.round((k-(sof+4))/2) == 1)
-                                    {
-                                        ScanaStudio.dec_item_new(   channel,
-                                                                    uart_items[current_i_fct-1].start_sample_index,
-                                                                    uart_items[current_i_fct].end_sample_index);
-                                        ScanaStudio.dec_item_add_content( "Function wrong length: " + function_to_str(current_fct,0) );
-                                        ScanaStudio.dec_item_add_content( "Fct !len: " + function_to_str(current_fct,0) );
-                                        ScanaStudio.dec_item_add_content( "Fct !len: " + dec_to_str(current_fct, "0x") );
-                                        ScanaStudio.dec_item_add_content( dec_to_str(current_fct, "0x") );
-                                        ScanaStudio.dec_item_emphasize_warning();
-                                        ScanaStudio.packet_view_add_packet( false,
-                                                                            channel,
-                                                                            uart_items[current_i_fct-1].start_sample_index,
-                                                                            uart_items[current_i_fct].end_sample_index,
-                                                                            "Function",
-                                                                            "wrong length ! fct type :" + dec_to_str(current_fct, "0x"),
-                                                                            COLOR_T_FCT,
-                                                                            COLOR_C_FCT);
-                                    }
-
-                                    ScanaStudio.dec_item_new(   channel,
-                                                                uart_items[k-1].start_sample_index,
-                                                                uart_items[k].end_sample_index);
-                                    ScanaStudio.dec_item_add_content("Unknown item : " + dec_to_str(byte_value, "0x"));
-                                    ScanaStudio.dec_item_add_content( dec_to_str(byte_value, "0x") );
-                                    ScanaStudio.dec_item_emphasize_warning();
-                                    ScanaStudio.packet_view_add_packet( false,
-                                                                        channel,
-                                                                        uart_items[k-1].start_sample_index,
-                                                                        uart_items[k].end_sample_index,
-                                                                        "Unknown",
-                                                                        dec_to_str(byte_value, "0x"),
-                                                                        COLOR_T_DATA,
-                                                                        COLOR_C_DATA);
-                                    lrc += byte_value;
-                                }
-
-                                if(eof-3 == k)
-                                {
-                                    state_machine = ENUM_STATE_LRC;
-                                }
-                                else if(eof-3 < k)
-                                {
-                                    ScanaStudio.dec_item_new(   channel,
-                                                                uart_items[k-1].start_sample_index,
-                                                                uart_items[k].end_sample_index);
-                                    ScanaStudio.dec_item_add_content("UNEXPECTED ERROR");
-                                    ScanaStudio.dec_item_add_content("ERROR");
-                                    ScanaStudio.dec_item_emphasize_error();
-                                }
-                                break;
-                            }//end case FCT_WRITE_MULTIPLE_COILS and FCT_WRITE_MULTIPLE_REGISTERS
-
-
-
-                            default:
-                            {
-                                if( (current_fct&0x80)&&( eof - sof == 9 ) )
-                                {
-                                    if( Math.round((k-(sof+4))/2) == 1)
-                                    {
-                                        ScanaStudio.dec_item_new(   channel,
-                                                                    uart_items[current_i_fct-1].start_sample_index,
-                                                                    uart_items[current_i_fct].end_sample_index);
-                                        ScanaStudio.dec_item_add_content( "Function : " + function_to_str(current_fct&0x7F,-1) );
-                                        ScanaStudio.dec_item_add_content( "Fct : " + function_to_str(current_fct&0x7F,-1) );
-                                        ScanaStudio.dec_item_add_content( "Fct : " + dec_to_str(current_fct, "0x") );
-                                        ScanaStudio.dec_item_add_content( dec_to_str(current_fct, "0x") );
-                                        ScanaStudio.packet_view_add_packet( false,
-                                                                            channel,
-                                                                            uart_items[current_i_fct-1].start_sample_index,
-                                                                            uart_items[current_i_fct].end_sample_index,
-                                                                            "Function",
-                                                                            dec_to_str(current_fct, "0x"),
-                                                                            COLOR_T_FCT,
-                                                                            COLOR_C_FCT);
-                                    }
-
-                                    ScanaStudio.dec_item_new( channel,
-                                                            uart_items[k-1].start_sample_index,
-                                                            uart_items[k].end_sample_index);
-                                    ScanaStudio.dec_item_add_content( "Exception : " + exception_to_str(byte_value&0x7F) );
-                                    ScanaStudio.dec_item_add_content( "Ex : " + exception_to_str(byte_value&0x7F) );
-                                    ScanaStudio.dec_item_add_content( "Ex : " + dec_to_str(byte_value, "0x") );
-                                    ScanaStudio.dec_item_add_content( dec_to_str(byte_value, "0x") );
-                                    ScanaStudio.dec_item_emphasize_warning();
-                                    ScanaStudio.packet_view_add_packet( false,
-                                                                        channel,
-                                                                        uart_items[k-1].start_sample_index,
-                                                                        uart_items[k].end_sample_index,
-                                                                        "Exeption",
-                                                                        exception_to_str(byte_value&0x7F),
-                                                                        COLOR_T_ERROR,
-                                                                        COLOR_C_ERROR);
-                                    lrc += byte_value;
-                                }
-                                else//unknown function
-                                {
-                                    if( Math.round((k-(sof+4))/2) == 1)
-                                    {
-                                        ScanaStudio.dec_item_new(   channel,
-                                                                    uart_items[current_i_fct-1].start_sample_index,
-                                                                    uart_items[current_i_fct].end_sample_index);
-                                        ScanaStudio.dec_item_add_content( "Function : " + dec_to_str(current_fct, "0x") );
-                                        ScanaStudio.dec_item_add_content( "Fct : " + dec_to_str(current_fct, "0x") );
-                                        ScanaStudio.dec_item_add_content( dec_to_str(current_fct, "0x") );
-                                        ScanaStudio.packet_view_add_packet( false,
-                                                                            channel,
-                                                                            uart_items[current_i_fct-1].start_sample_index,
-                                                                            uart_items[current_i_fct].end_sample_index,
-                                                                            "Function",
-                                                                            dec_to_str(current_fct, "0x"),
-                                                                            COLOR_T_FCT,
-                                                                            COLOR_C_FCT);
-                                    }
-
-                                    ScanaStudio.dec_item_new(   channel,
-                                                                uart_items[k-1].start_sample_index,
-                                                                uart_items[k].end_sample_index);
-                                    ScanaStudio.dec_item_add_content("Data : " + dec_to_str(byte_value, "0x"));
-                                    ScanaStudio.dec_item_add_content( dec_to_str(byte_value, "0x") );
-                                    ScanaStudio.packet_view_add_packet( false,
-                                                                        channel,
-                                                                        uart_items[k-1].start_sample_index,
-                                                                        uart_items[k].end_sample_index,
-                                                                        "Data",
-                                                                        dec_to_str(byte_value, "0x"),
-                                                                        COLOR_T_DATA,
-                                                                        COLOR_C_DATA);
-                                    lrc += byte_value;
-                                }
-
-
-                                if(eof-3 == k)
-                                {
-                                state_machine = ENUM_STATE_LRC;
-                                }
-                                else if(eof-3 < k)
-                                {
-                                    ScanaStudio.dec_item_new(   channel,
-                                                                uart_items[k-1].start_sample_index,
-                                                                uart_items[k].end_sample_index);
-                                    ScanaStudio.dec_item_add_content("UNEXPECTED ERROR");
-                                    ScanaStudio.dec_item_add_content("ERROR");
-                                    ScanaStudio.dec_item_emphasize_error();
-                                }
-                                break;
-                            }//end default
-
-                        }
-                        break;
-                    }//end case ENUM_STATE_AFTER_FUNCTION
-
-
-                    case ENUM_STATE_LRC:
-                    {
-    					lrc= (-lrc)%256;
-    					lrc = 256+lrc;
-
-                        ScanaStudio.dec_item_new(   channel,
-                                                    uart_items[k-1].start_sample_index,
-                                                    uart_items[k].end_sample_index);
-                        if(lrc == byte_value)
-                        {
-                            ScanaStudio.dec_item_add_content( "LRC OK : " + dec_to_str(byte_value, "0x") );
-                            ScanaStudio.dec_item_add_content( "LRC " + dec_to_str(byte_value, "0x") );
-                            ScanaStudio.dec_item_add_content( dec_to_str(byte_value, "0x") );
-
-                            ScanaStudio.packet_view_add_packet( false,
-                                                                channel,
-                                                                uart_items[k-1].start_sample_index,
-                                                                uart_items[k].end_sample_index,
-                                                                "LRC",
-                                                                dec_to_str(byte_value, "0x") + " OK",
-                                                                COLOR_T_CRC,
-                                                                COLOR_C_CRC);
-                        }
-                        else //wrong LRC
-                        {
-                            ScanaStudio.dec_item_add_content( "LRC WRONG : " + dec_to_str(byte_value, "0x") + " should be " + dec_to_str(lrc, "0x") );
-                            ScanaStudio.dec_item_add_content( "LRC WRONG :" + dec_to_str(byte_value, "0x") );
-                            ScanaStudio.dec_item_add_content( dec_to_str(byte_value, "0x") );
-                            ScanaStudio.dec_item_emphasize_error();
-
-                            ScanaStudio.packet_view_add_packet( false,
-                                                                channel,
-                                                                uart_items[k-1].start_sample_index,
-                                                                uart_items[k].end_sample_index,
-                                                                "LRC",
-                                                                dec_to_str(byte_value, "0x") + " Wrong, should be " +  dec_to_str(lrc, "0x"),
-                                                                COLOR_T_ERROR,
-                                                                COLOR_C_ERROR);
-                        }
-
-                        state_machine = ENUM_STATE_SOF;
-                        break;
-                    }//end case ENUM_STATE_LRC
-
-
-                    default:
-                    {
-                        ScanaStudio.dec_item_new(   channel,
-                                                    uart_items[k-1].start_sample_index,
-                                                    uart_items[k].end_sample_index);
-                        ScanaStudio.dec_item_add_content( "CODE SHOULD NEVER REACH THIS POINT ! " + dec_to_str(byte_value, "0x") );
-                        ScanaStudio.dec_item_add_content( dec_to_str(byte_value, "0x") );
-                        ScanaStudio.dec_item_emphasize_error();
-                    }
-
-                }//end switch state_machine
-
-
-            }//end for k (here k should be eof-1)
-
-            if( (uart_items[eof].content == "\r".charCodeAt()) && (uart_items[eof+1].content == "\n".charCodeAt()) )//End of Frame
-            {
-                ScanaStudio.dec_item_new(   channel,
-                                            uart_items[eof].start_sample_index,
-                                            uart_items[eof+1].end_sample_index);
-                ScanaStudio.dec_item_add_content( "End of Frame : CR LF" );
-                ScanaStudio.dec_item_add_content( "EOF : CR LF" );
-                ScanaStudio.dec_item_add_content( "EOF" );
-                ScanaStudio.packet_view_add_packet( false,
-                                channel,
-                                uart_items[eof].start_sample_index,
-                                uart_items[eof+1].end_sample_index,
-                                "EOF",
-                                "CR LF",
-                                "#0000FF",
-                                "#8080FF");
-            }
-
-
-            i = eof;//repositionning the iterator
-        }
-    }//end for each uart item
+                            state_machine = ENUM_STATE_EOF;
+                            break;
+                        }//end ENUM_STATE_LRC
+                    }// end switch state_machine
+                }// end for i in trame
+            }//end if trame ended
+        }//end if trame started
+    }//end for j in uart_item
 }//end function decode for ASCII mode
 
 
@@ -2149,30 +2072,24 @@ function on_decode_signals(resume)
         //initialization code
         reload_dec_gui_values();
         state_machine = ENUM_STATE_SOF;
-        ScanaStudio.trs_reset(channel);
-        trs = ScanaStudio.trs_get_next(channel);
-        trame = [];
-        current_byte_cnt = -1
-        current_i_crc = -1;
+        current_byte_cnt = -1;
         current_fct = -1;
         current_i_fct = -1;
-        current_i_eof = -1
-        too_short_silent = false;
-        need_reinit_state_machine = false;
-
-        i=0;
+        trame = [];
+        trame_started = false;
+        trame_ended = false;
+        last_item_end = 0;
     }
-
 
     if(mode==0)//RTU mode
     {
-        var uart_items = ScanaStudio.pre_decode("uart.js",resume);
-        on_decode_signals_RTU_mode(uart_items);
+        available_samples = ScanaStudio.get_available_samples(channel);
+        on_decode_signals_RTU_mode(ScanaStudio.pre_decode("uart.js",resume));
     }
     else //ASCII mode
     {
-        var uart_items = ScanaStudio.pre_decode("uart.js",resume);
-        on_decode_signals_ASCII_mode(uart_items);
+        available_samples = ScanaStudio.get_available_samples(channel);
+        on_decode_signals_ASCII_mode(ScanaStudio.pre_decode("uart.js",resume));
     }
 
 }//end function decode signals
@@ -2447,6 +2364,7 @@ ScanaStudio.BuilderObject = {
 
     	lrc = (-lrc)%256;
     	lrc = 256+lrc;
+        lrc &= 0xFF;
 
     	if (lrc < 0x10)
     	{
@@ -2478,6 +2396,10 @@ function function_to_str(fct_code, b_request)
     if(b_request==-1)
     {
         str = "ERROR ";
+    }
+    if(b_request==-2)
+    {
+        str = "Unknown ";
     }
 
     switch(fct_code)
@@ -2520,6 +2442,11 @@ function function_to_str(fct_code, b_request)
         case FCT_WRITE_MULTIPLE_REGISTERS:
         {
             str += "Write Multiple Registers";
+            break;
+        }
+        default :
+        {
+            str += "Function";
             break;
         }
     }
@@ -2613,4 +2540,22 @@ function dec_to_str(dec, prefix)
     str += dec.toString(16).toUpperCase();
 
     return str;
+}
+
+function str_to_hex(str)
+{
+    var tmp_val = 0;
+    if( (str >= 0x30) && (str <= 0x39) ) //0-9
+    {
+        tmp_val = str - 0x30;
+    }
+    else if( (str >= 0x41) && (str <= 0x46) ) //A-F
+    {
+        tmp_val = str - 0x41 + 10;
+    }
+    else if( (str >= 0x61) && (str <= 0x66) ) //A-F
+    {
+        tmp_val = str - 0x61 + 10;
+    }
+    return tmp_val;
 }
