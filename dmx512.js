@@ -10,7 +10,7 @@
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.0:  Initial release()&.
+V0.0:  Initial release.
 </RELEASE_NOTES>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 

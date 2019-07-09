@@ -10,7 +10,7 @@ I2C support for ScanaStudio.
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.4: Fixed warnings in script log when decoding random (non-I2C) signals
+V0.4: Fixed warnings in script log when decoding random non-I2C signals
 V0.3: Better demo mode generator
 V0.2: Added support for 10b addresses, added support for pre-decoding.
 V0.1: Initial release.

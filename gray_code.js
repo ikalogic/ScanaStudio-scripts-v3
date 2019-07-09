@@ -10,7 +10,7 @@ gray code support for ScanaStudio.
 <COPYRIGHT> Copyright 2019 Ikalogic SAS </COPYRIGHT>
 <LICENSE>	This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-	V1.0: Initial release & create builder demo
+	V1.0: Initial release and create builder demo
 	V1.1: Decode signial
 </RELEASE_NOTES>
 */
