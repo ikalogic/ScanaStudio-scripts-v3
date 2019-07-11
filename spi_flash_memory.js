@@ -313,6 +313,11 @@ function on_build_demo_signals()
   instr = 0;
   while (ScanaStudio.builder_get_samples_acc(ch_clk) < samples_to_build)
   {
+    if (ScanaStudio.abort_is_requested())
+    {
+      break;
+    }
+    
     if (instr >= commands.length) instr = 0;
     spi_builder.put_start();
     spi_builder.put_silence(1e-6); //1 us

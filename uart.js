@@ -702,17 +702,21 @@ function on_build_demo_signals()
     counter = 0;
     while(ScanaStudio.builder_get_samples_acc(channel) < samples_to_build)
     {
-        random_size = Math.floor(Math.random()*10) + 1;
-        for (w = 0; w < random_size; w++)
-        {
-            uart_builder.put_c(counter);
-            counter++;
-            if (ScanaStudio.builder_get_samples_acc(channel) >= samples_to_build)
-            {
-                break;
-            }
-        }
-        uart_builder.put_silence_samples(silence_period_samples);
+      if (ScanaStudio.abort_is_requested())
+  		{
+  			break;
+  		}
+      random_size = Math.floor(Math.random()*10) + 1;
+      for (w = 0; w < random_size; w++)
+      {
+          uart_builder.put_c(counter);
+          counter++;
+          if (ScanaStudio.builder_get_samples_acc(channel) >= samples_to_build)
+          {
+              break;
+          }
+      }
+      uart_builder.put_silence_samples(silence_period_samples);
     }
 }
 
