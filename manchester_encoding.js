@@ -175,11 +175,18 @@ function decode_bit (trs_st, trs_end)
     {
         bitstream_arr.push(new BitObject(trs_end.value, BIT_TYPE.ONE_T, trs_end.sample_index));
     }
-
-    if ((t < (t2 + get_t_margin(t2))) && (t > (t2 - get_t_margin(t2))))
+    else if ((t < (t2 + get_t_margin(t2))) && (t > (t2 - get_t_margin(t2))))
     {
         bitstream_arr.push(new BitObject(trs_st.value, BIT_TYPE.TWO_T, trs_st.sample_index));
         bitstream_arr.push(new BitObject(trs_end.value, BIT_TYPE.TWO_T, trs_end.sample_index));
+    }
+    else
+    {
+        ScanaStudio.dec_item_new(ch, trs_st.sample_index, trs_end.sample_index);
+        ScanaStudio.dec_item_emphasize_error();
+        ScanaStudio.dec_item_add_content("UNKNOWN STATE");
+        ScanaStudio.dec_item_add_content("UNKNOWN");
+        ScanaStudio.dec_item_add_content("!");
     }
 
     if (bitstream_arr.length > 1)
@@ -250,7 +257,7 @@ function reverse_bits (byte_value)
 
 function get_t_margin (samples)
 {
-	return ((samples / 100) * 35);
+	return ((samples / 100) * 25);
 }
 
 //Function called to generate demo siganls (when no physical device is attached)
