@@ -3,7 +3,7 @@
 <DESCRIPTION>
 My protocol can decode pretty much any logic signal!
 </DESCRIPTION>
-<VERSION> 0.0 </VERSION>
+<VERSION> 0.1 </VERSION>
 <AUTHOR_NAME>  Victor Canoz </AUTHOR_NAME>
 <AUTHOR_URL> v.canoz@ikalogic.com</AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>

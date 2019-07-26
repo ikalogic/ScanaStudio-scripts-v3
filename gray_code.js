@@ -3,7 +3,7 @@
 <DESCRIPTION>
 gray code support for ScanaStudio.
 </DESCRIPTION>
-<VERSION> 1.0 </VERSION>
+<VERSION> 1.1 </VERSION>
 <AUTHOR_NAME>	Juille Neil, Ibrahim KAMAL	</AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/ </HELP_URL>
