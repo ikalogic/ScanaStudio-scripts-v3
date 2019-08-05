@@ -11,7 +11,7 @@ new decoder.
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.0:  Initial script release.
+V0.0:  Initial release.
 </RELEASE_NOTES>
 */
 
