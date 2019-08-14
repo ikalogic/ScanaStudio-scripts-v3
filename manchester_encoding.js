@@ -190,6 +190,7 @@ function decode_bit (trs_st, trs_end)
         ScanaStudio.dec_item_add_content("UNKNOWN STATE");
         ScanaStudio.dec_item_add_content("UNKNOWN");
         ScanaStudio.dec_item_add_content("!");
+        ScanaStudio.dec_item_end();
     }
 
     if (bitstream_arr.length > 1)
@@ -212,6 +213,8 @@ function decode_bit (trs_st, trs_end)
 
         ScanaStudio.dec_item_new(ch, (bit_object.sample_index - (t1 / 2)), (bit_object.sample_index + (t1 / 2)));
         ScanaStudio.dec_item_add_content(bit_object.value);
+        ScanaStudio.dec_item_end();
+
         decode_byte(bit_object);
     }
 }

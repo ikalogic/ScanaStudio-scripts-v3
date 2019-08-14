@@ -252,6 +252,7 @@ function on_decode_signals (resume)
                 ScanaStudio.dec_item_add_content("WRONG");
                 ScanaStudio.dec_item_add_content("!");
                 ScanaStudio.dec_item_emphasize_error();
+                ScanaStudio.dec_item_end();
             }
         }
         else
@@ -284,6 +285,7 @@ function on_decode_signals (resume)
                 ScanaStudio.dec_item_add_content("RESET");
                 ScanaStudio.dec_item_add_content("RST");
                 ScanaStudio.dec_item_add_content("R");
+                ScanaStudio.dec_item_end();
 
                 ScanaStudio.packet_view_add_packet(true, ch, -1,  -1, "RGB LED", chip.str, ScanaStudio.get_channel_color(ch), ScanaStudio.get_channel_color(ch));
                 ScanaStudio.packet_view_add_packet(false, ch, (trs_last.sample_index + (chip.t1h * sample_rate)),  trs.sample_index, "LED", "RESET", "#D3D3D3", "#D3D3D3");
@@ -303,11 +305,13 @@ function on_decode_signals (resume)
                         {
                             ScanaStudio.dec_item_new(ch, bit_object.st_sample, bit_object.end_sample);
                             ScanaStudio.dec_item_emphasize_warning();
+                            ScanaStudio.dec_item_end();
                         }
                         else if ((bit_object.end_sample - bit_object.st_sample) < (bit_time_min * sample_rate))
                         {
                             ScanaStudio.dec_item_new(ch, bit_object.st_sample, bit_object.end_sample);
                             ScanaStudio.dec_item_emphasize_warning();
+                            ScanaStudio.dec_item_end();
                         }
                     }
 
@@ -320,6 +324,7 @@ function on_decode_signals (resume)
                     ScanaStudio.dec_item_add_content("WRONG");
                     ScanaStudio.dec_item_add_content("!");
                     ScanaStudio.dec_item_emphasize_error();
+                    ScanaStudio.dec_item_end();
                 }
             }
             else if ((t >= (chip.t1l - chip.t_var)) && (t <= (chip.t1l + chip.t_var)))
@@ -337,11 +342,13 @@ function on_decode_signals (resume)
                         {
                             ScanaStudio.dec_item_new(ch, bit_object.st_sample, bit_object.end_sample);
                             ScanaStudio.dec_item_emphasize_warning();
+                            ScanaStudio.dec_item_end();
                         }
                         else if ((bit_object.end_sample - bit_object.st_sample) < (bit_time_min * sample_rate))
                         {
                             ScanaStudio.dec_item_new(ch, bit_object.st_sample, bit_object.end_sample);
                             ScanaStudio.dec_item_emphasize_warning();
+                            ScanaStudio.dec_item_end();
                         }
                     }
 
@@ -354,6 +361,7 @@ function on_decode_signals (resume)
                     ScanaStudio.dec_item_add_content("WRONG");
                     ScanaStudio.dec_item_add_content("!");
                     ScanaStudio.dec_item_emphasize_error();
+                    ScanaStudio.dec_item_end();
                 }
             }
             else
@@ -363,6 +371,7 @@ function on_decode_signals (resume)
                 ScanaStudio.dec_item_add_content("WRONG");
                 ScanaStudio.dec_item_add_content("!");
                 ScanaStudio.dec_item_emphasize_error();
+                ScanaStudio.dec_item_end();
             }
         }
     }
@@ -402,6 +411,7 @@ function decode_word (bit_object)
         ScanaStudio.dec_item_new(ch, bitstream_arr[0].st_sample, bitstream_arr[23].end_sample);
         ScanaStudio.dec_item_add_content(title + ": " + content);
         ScanaStudio.dec_item_add_content(content);
+        ScanaStudio.dec_item_end();
 
         ScanaStudio.packet_view_add_packet(false, ch, bitstream_arr[0].st_sample, bitstream_arr[23].end_sample, title, content, title_clr, content_clr);
         bitstream_arr = [];
