@@ -11,7 +11,7 @@ CAN bus protocol analyzer
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
 V0.3: Added dec_item_end() for each dec_item_new().
-V0.2:  Added error detection, GUI validation, fixed bit stuffing errors.
+V0.2:  Added error detection, added GUI validation, fixed bit stuffing errors.
 V0.1:  Initial release.
 </RELEASE_NOTES>
 */
