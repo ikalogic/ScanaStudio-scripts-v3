@@ -19,8 +19,7 @@ Highly configurable SPI bus decoder
 	V1.70: Fix decoding issue with missing CS signal at the start
 	V1.69: Fix PacketView packets search iisue
 	V1.68: Fix the last byte/word not being decoded
-	V1.67: BugFix: Decoding stops after an invalid frame engineering_notation(
-  ,digits)
+	V1.67: BugFix: Decoding stops after an invalid frame
 	V1.66: Add light packet capabilities
 	V1.65: Completely reworked PacketView
 	V1.62: Better progress reporting, better demo mode generator, better PacketView
