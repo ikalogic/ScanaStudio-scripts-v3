@@ -3,53 +3,54 @@
 <DESCRIPTION>
 Highly configurable SPI bus decoder
 </DESCRIPTION>
-<VERSION> 1.76 </VERSION>
+<VERSION> 1.77 </VERSION>
 <AUTHOR_NAME>  Vladislav Kosinov, Ibrahim Kamal </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/SPI-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-  V1.76: Fixed bug in binary format display
-  V1.75: Fixed bug in trigger sequence builder
-  V1.74: Added support for GUI evaluation
-  V1.73: Added support for Dual/Quad SPI modes
-  V1.72: Migrated to new V3 API
-  V1.71: Fix bug that caused decodering to fail if CS is ignored.
-	V1.70: Fix decoding issue with missing CS signal at the start
-	V1.69: Fix PacketView packets search iisue
-	V1.68: Fix the last byte/word not being decoded
-	V1.67: BugFix: Decoding stops after an invalid frame
-	V1.66: Add light packet capabilities
-	V1.65: Completely reworked PacketView
-	V1.62: Better progress reporting, better demo mode generator, better PacketView
-	V1.61: Upgrade PacketView
-	V1.60: Fixed bug in SPI decoder and improve display
-	V1.59: Fixed bug in SPI decoder when CS is not valide
-	V1.58: Fixed bug in SPI generator, thanks to user Camille
-	V1.57: Added ScanaStudio 2.3xx compatibility.
-	V1.56: Added generator capability
-	V1.55: New options for trigger part
-	V1.54: Trigger fix
-	V1.53: Added decoder trigger
-	V1.52: Added demo signal building capability
-	V1.50: Better handling of probable noize on CS line (e.g. during system power up)
-	V1.49: Enhanced the way hex data is displayed in packet view (Thanks to user 0xdeadbeef)
-	V1.48: Corrected a bug in the way decoded data is displayed
-	V1.47: Better drawing of decoded items on the wavefrom (better alignment).
-	V1.46: Fixed a bug that caused some SPI modes to be incorrectly decoded. (By I.Kamal)
-	V1.45: Corrected another bug related to the option to ignore CS line. (By I.Kamal)
-	V1.44: Corrected a bug related to the option to ignore CS line. (By I.Kamal)
-	V1.42: Added the ability to ignore the CS line (for 2 wire SPI mode)
-	V1.41: Added the ability to decode even if the first CS edge is missing
-	V1.30: Added Packet/Hex View support.
-	V1.26: Added the possibility (option) to ignore MOSI or MISO line
-	V1.25: Single slave (w/o a cs signal) mode bug fixes. Thx to DCM
-	V1.20: UI improvements
-	V1.15: CPOL=1 & CPHA=1 mode bug fixes
-	V1.10: Some little bug fixes
-	V1.01: Added description and release notes
-	V1.00: Initial release
+V1.77: Added dec_item_end() for each dec_item_new().
+V1.76: Fixed bug in binary format display
+V1.75: Fixed bug in trigger sequence builder
+V1.74: Added support for GUI evaluation
+V1.73: Added support for Dual/Quad SPI modes
+V1.72: Migrated to new V3 API
+V1.71: Fix bug that caused decodering to fail if CS is ignored.
+V1.70: Fix decoding issue with missing CS signal at the start
+V1.69: Fix PacketView packets search iisue
+V1.68: Fix the last byte/word not being decoded
+V1.67: BugFix: Decoding stops after an invalid frame
+V1.66: Add light packet capabilities
+V1.65: Completely reworked PacketView
+V1.62: Better progress reporting, better demo mode generator, better PacketView
+V1.61: Upgrade PacketView
+V1.60: Fixed bug in SPI decoder and improve display
+V1.59: Fixed bug in SPI decoder when CS is not valide
+V1.58: Fixed bug in SPI generator, thanks to user Camille
+V1.57: Added ScanaStudio 2.3xx compatibility.
+V1.56: Added generator capability
+V1.55: New options for trigger part
+V1.54: Trigger fix
+V1.53: Added decoder trigger
+V1.52: Added demo signal building capability
+V1.50: Better handling of probable noize on CS line (e.g. during system power up)
+V1.49: Enhanced the way hex data is displayed in packet view (Thanks to user 0xdeadbeef)
+V1.48: Corrected a bug in the way decoded data is displayed
+V1.47: Better drawing of decoded items on the wavefrom (better alignment).
+V1.46: Fixed a bug that caused some SPI modes to be incorrectly decoded. (By I.Kamal)
+V1.45: Corrected another bug related to the option to ignore CS line. (By I.Kamal)
+V1.44: Corrected a bug related to the option to ignore CS line. (By I.Kamal)
+V1.42: Added the ability to ignore the CS line (for 2 wire SPI mode)
+V1.41: Added the ability to decode even if the first CS edge is missing
+V1.30: Added Packet/Hex View support.
+V1.26: Added the possibility (option) to ignore MOSI or MISO line
+V1.25: Single slave (w/o a cs signal) mode bug fixes. Thx to DCM
+V1.20: UI improvements
+V1.15: CPOL=1 & CPHA=1 mode bug fixes
+V1.10: Some little bug fixes
+V1.01: Added description and release notes
+V1.00: Initial release
 </RELEASE_NOTES>
 */
 
@@ -321,9 +322,10 @@ function on_decode_signals(resume)
                 ScanaStudio.dec_item_new(ch_cs,cs_start_sample,cs_end_sample);
                 ScanaStudio.dec_item_emphasize_warning(); //Display this item as a warning
                 ScanaStudio.dec_item_add_content("Warning: CS leading edge is missing!");
-      					ScanaStudio.dec_item_add_content("Warning: CS!");
-      					ScanaStudio.dec_item_add_content("!CS!");
-      					ScanaStudio.dec_item_add_content("!");
+      			ScanaStudio.dec_item_add_content("Warning: CS!");
+      			ScanaStudio.dec_item_add_content("!CS!");
+      			ScanaStudio.dec_item_add_content("!");
+                ScanaStudio.dec_item_end();
               }
           }
 
@@ -508,8 +510,9 @@ function on_decode_signals(resume)
               //Add sample points
               for (b = 0; b < clock_sample_points.length; b++)
               {
-                ScanaStudio.dec_item_add_sample_point(clock_sample_points[b],drw)
+                ScanaStudio.dec_item_add_sample_point(clock_sample_points[b],drw);
               }
+              ScanaStudio.dec_item_end();
           }
 
           if (opt != 2)
@@ -522,6 +525,7 @@ function on_decode_signals(resume)
               {
                 ScanaStudio.dec_item_add_sample_point(clock_sample_points[b],drw)
               }
+              ScanaStudio.dec_item_end();
           }
 
 
@@ -541,6 +545,7 @@ function on_decode_signals(resume)
               //add decoder item
               ScanaStudio.dec_item_new(ch_clk,word_start_sample_dual-margin,word_end_sample_dual+margin);
               add_spi_content_to_dec_item("DUAL IO: ",data_dual);
+              ScanaStudio.dec_item_end();
               bit_counter_dual = 0;
               data_dual = 0;
             }
@@ -556,6 +561,7 @@ function on_decode_signals(resume)
               //add decoder item
               ScanaStudio.dec_item_new(ch_cs,word_start_sample_quad-margin,word_end_sample_quad+margin);
               add_spi_content_to_dec_item("QUAD IO: ",data_quad);
+              ScanaStudio.dec_item_end();
               bit_counter_quad = 0;
               data_quad = 0;
             }

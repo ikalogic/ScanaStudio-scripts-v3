@@ -3,18 +3,17 @@
 <DESCRIPTION>
 My protocol can decode pretty much any logic signal!
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME>  Victor Canoz </AUTHOR_NAME>
 <AUTHOR_URL> v.canoz@ikalogic.com</AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Victor Canoz </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.0:  Initial release.
+V0.2: Added dec_item_end() for each dec_item_new().
+V0.1:  Initial release.
 </RELEASE_NOTES>
 */
-
-
 
 //Decoder GUI
 function on_draw_gui_decoder() {
@@ -65,10 +64,13 @@ function on_decode_signals(resume) {
       if (pulse_width > th) {
         ScanaStudio.dec_item_new(ch, last_edge, trs.sample_index);
         ScanaStudio.dec_item_add_content("1");
-      } else {
+        ScanaStudio.dec_item_end();
+      }
+      else {
         if (last_zero_start_cnt == trscnt - 1) {
           ScanaStudio.dec_item_new(ch, last_zero_start_idx, trs.sample_index);
           ScanaStudio.dec_item_add_content("0");
+          ScanaStudio.dec_item_end();
         } else {
           last_zero_start_cnt = trscnt;
           last_zero_start_idx = last_edge;

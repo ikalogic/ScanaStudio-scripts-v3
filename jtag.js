@@ -3,7 +3,7 @@
 <DESCRIPTION>
 
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
@@ -11,10 +11,10 @@
 of the GNU General Public License GPLv3 </LICENSE>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/JTAG-ScanaStudio-script-documentation </HELP_URL>
 <RELEASE_NOTES>
-V0.0:  Initial release.
+V0.2: Added dec_item_end() for each dec_item_new().
+V0.1: Initial release.
 </RELEASE_NOTES>
 */
-
 
 //Type "template..." in Atom.io editor (with ScanaStudio plugin) to generate code examples.
 function on_draw_gui_decoder()
@@ -247,7 +247,9 @@ function add_dec_item_state_machine(start_sample, end_sample, sample_point)
             break;
         }
     }
+
     ScanaStudio.dec_item_add_sample_point(sample_point,"U");
+    ScanaStudio.dec_item_end();
 }
 
 function add_dec_item_value_tdio(ch_td, start_sample, end_sample, sample_pt, td_value)
@@ -271,6 +273,7 @@ function add_dec_item_value_tdio(ch_td, start_sample, end_sample, sample_pt, td_
     {
         str_value += " 0b" + td_value.toString(2) ;
     }
+
     ScanaStudio.dec_item_add_content(str_value);
 
     for(var i=0; i<sample_pt.length; i++)
@@ -278,6 +281,7 @@ function add_dec_item_value_tdio(ch_td, start_sample, end_sample, sample_pt, td_
         ScanaStudio.dec_item_add_sample_point(sample_pt[i],"P");
     }
 
+    ScanaStudio.dec_item_end();
 }
 
 function on_decode_signals(resume)

@@ -3,14 +3,15 @@
 <DESCRIPTION>
 I2S Digital audio signals decoders
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Vladislav Kosinov </AUTHOR_NAME>
 <AUTHOR_URL> v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/I2S-decoder-documentation </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL, Vladislav Kosinov </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.1:  Initial release.
+V0.2: Added dec_item_end() for each dec_item_new().
+V0.1: Initial release.
 </RELEASE_NOTES>
 */
 
@@ -169,6 +170,8 @@ function on_decode_signals(resume)
               ScanaStudio.dec_item_add_sample_point(clock_sample_points[b],"U");
             }
           }
+
+          ScanaStudio.dec_item_end();
           bit_counter = 0;
           sd_word = 0;
           clock_sample_points = [];

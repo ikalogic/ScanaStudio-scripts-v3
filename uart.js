@@ -4,13 +4,14 @@
 <DESCRIPTION>
 Serial UART (Universal asynchronous receiver/transmitter) Protocol Decoder.
 </DESCRIPTION>
-<VERSION> 1.49 </VERSION>
+<VERSION> 1.50 </VERSION>
 <AUTHOR_NAME>	Vladislav Kosinov, Ibrahim Kamal, Nicolas Bastit </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/UART-ScanaStudio-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright 2019 Ikalogic SAS </COPYRIGHT>
 <LICENSE>	This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V1.50: Added dec_item_end() for each dec_item_new().
 V1.49: Fixed sampling points drawing
 V1.48: Added trigger, added GUI validation
 V1.47: Fixed freez condition.
@@ -40,7 +41,6 @@ V1.00: Initial release
 </RELEASE_NOTES>
 */
 
-
 /*
 Work in progress
 ================
@@ -50,7 +50,6 @@ still Todo:
 * Sampling points
 * Packet View
 */
-
 
 //Decoder GUI
 function on_draw_gui_decoder()
@@ -218,6 +217,7 @@ function on_decode_signals(resume)
                                                 cursor + samples_per_bit - margin);
                     ScanaStudio.dec_item_add_content("Start");
                     ScanaStudio.dec_item_add_content("S");
+                    ScanaStudio.dec_item_end();
 
                     cursor += samples_per_bit; //Advance after start bit
 
@@ -287,6 +287,7 @@ function on_decode_signals(resume)
                             ScanaStudio.dec_item_emphasize_error();
                         }
 
+                        ScanaStudio.dec_item_end();
                         cursor += samples_per_bit;
                     }
 
@@ -320,6 +321,8 @@ function on_decode_signals(resume)
 
                         ScanaStudio.dec_item_emphasize_error(); //Ensure it stands out as an error!
                     }
+
+                    ScanaStudio.dec_item_end();
                     cursor += ((samples_per_bit*stop)/2);
                     //ScanaStudio.console_info_msg("Cursor set",cursor);
                     state_machine = 0; //rewind to first state: wait for start bit.
@@ -348,6 +351,7 @@ function add_uart_dec_item(ch, start_edge, value)
     var content,b;
     var prev_content = "";
     ScanaStudio.dec_item_new(ch,start_edge + margin,start_edge + (nbits * samples_per_bit) - margin);
+
     if (ScanaStudio.is_pre_decoding())
     {
         //in case tbis decoder is called by another decoder,
@@ -402,11 +406,12 @@ function add_uart_dec_item(ch, start_edge, value)
             ScanaStudio.dec_item_add_sample_point(start_edge + ((b+0.5) * samples_per_bit),"P");
         }
 
+        ScanaStudio.dec_item_end();
         if (value > 255) value = 255;
         if (value < 0) value = 255;
+
         ScanaStudio.hex_view_add_byte(ch,start_edge,start_edge + (nbits * samples_per_bit) ,value);
     }
-
 }
 
 /*  A helper function add leading "0"s to numbers

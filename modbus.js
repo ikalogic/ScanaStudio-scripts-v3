@@ -3,14 +3,15 @@
 <DESCRIPTION>
 
 </DESCRIPTION>
-<VERSION> 0.0 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.0:  Initial release.
+V0.2: Added dec_item_end() for each dec_item_new().
+V0.1: Initial release.
 </RELEASE_NOTES>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 */
@@ -183,6 +184,7 @@ function on_decode_signals_RTU_mode(uart_items)
     // {
     //     ScanaStudio.dec_item_new(channel,uart_items[j].start_sample_index,uart_items[j].end_sample_index);
     //     ScanaStudio.dec_item_add_content(uart_items[j].content);
+    //     ScanaStudio.dec_item_end();
     // }
     // return;
 
@@ -249,6 +251,7 @@ function on_decode_signals_RTU_mode(uart_items)
                                 ScanaStudio.dec_item_add_content( "!Start Of Frame" );
                                 ScanaStudio.dec_item_add_content( "!SOF" );
                                 ScanaStudio.dec_item_emphasize_warning();
+                                ScanaStudio.dec_item_end();
                             }
                             else
                             {
@@ -257,6 +260,7 @@ function on_decode_signals_RTU_mode(uart_items)
                                                         trame[i].start_sample_index - 1*sample_per_bits);
                                 ScanaStudio.dec_item_add_content( "Start Of Frame" );
                                 ScanaStudio.dec_item_add_content( "SOF" );
+                                ScanaStudio.dec_item_end();
                             }
                             ScanaStudio.dec_item_new( channel,
                                                     trame[i].start_sample_index,
@@ -265,6 +269,8 @@ function on_decode_signals_RTU_mode(uart_items)
                             ScanaStudio.dec_item_add_content( "Slave Addr: " + trame[i].content );
                             ScanaStudio.dec_item_add_content( "Addr:" + trame[i].content );
                             ScanaStudio.dec_item_add_content( trame[i].content );
+                            ScanaStudio.dec_item_end();
+
                             ScanaStudio.packet_view_add_packet( true,
                                                                 channel,
                                                                 trame[i].start_sample_index,
@@ -376,6 +382,8 @@ function on_decode_signals_RTU_mode(uart_items)
                             ScanaStudio.dec_item_add_content( "Fct : " + function_to_str(fct_code&0x7F,fct_type_dec) );
                             ScanaStudio.dec_item_add_content( "Fct : " + trame[i].content );
                             ScanaStudio.dec_item_add_content( trame[i].content );
+                            ScanaStudio.dec_item_end();
+
                             ScanaStudio.packet_view_add_packet( false,
                                                                 channel,
                                                                 trame[i].start_sample_index,
@@ -990,6 +998,8 @@ function on_decode_signals_RTU_mode(uart_items)
                             }//end switch fct for datas
 
                             ScanaStudio.dec_item_add_content( trame[i].content );
+                            ScanaStudio.dec_item_end();
+
                             ScanaStudio.packet_view_add_packet( false,
                                                                 channel,
                                                                 trame[i].start_sample_index,
@@ -1068,6 +1078,7 @@ function on_decode_signals_RTU_mode(uart_items)
                                                                     COLOR_T_ERROR,
                                                                     COLOR_C_ERROR);
                             }
+                            ScanaStudio.dec_item_end();
                             break;
                         }//end ENUM_STATE_CRC
                     }// end switch state_machine
@@ -1098,6 +1109,7 @@ function on_decode_signals_ASCII_mode(uart_items)
     // {
     //     ScanaStudio.dec_item_new(channel,uart_items[j].start_sample_index,uart_items[j].end_sample_index);
     //     ScanaStudio.dec_item_add_content(uart_items[j].content);
+    //     ScanaStudio.dec_item_end();
     // }
     // return;
 
@@ -1190,6 +1202,7 @@ function on_decode_signals_ASCII_mode(uart_items)
                             ScanaStudio.dec_item_add_content( "Start Of Frame" );
                             ScanaStudio.dec_item_add_content( "SOF : ':'" );
                             ScanaStudio.dec_item_add_content( "':'" );
+                            ScanaStudio.dec_item_end();
                             continue;
                         }
                         else
@@ -1215,6 +1228,8 @@ function on_decode_signals_ASCII_mode(uart_items)
                             ScanaStudio.dec_item_add_content( "End of Frame : CR LF" );
                             ScanaStudio.dec_item_add_content( "EOF : CR LF" );
                             ScanaStudio.dec_item_add_content( "EOF" );
+                            ScanaStudio.dec_item_end();
+
                             ScanaStudio.packet_view_add_packet( false,
                                             channel,
                                             trame[i].start_sample_index,
@@ -1252,6 +1267,7 @@ function on_decode_signals_ASCII_mode(uart_items)
                         ScanaStudio.dec_item_add_content( "'" + String.fromCharCode(trame[i].content) + "' " + trame[i].content );
                         ScanaStudio.dec_item_add_content( trame[i].content );
                         ScanaStudio.dec_item_emphasize_warning();
+                        ScanaStudio.dec_item_end();
                     }
 
 
@@ -1277,6 +1293,8 @@ function on_decode_signals_ASCII_mode(uart_items)
                             ScanaStudio.dec_item_add_content( "Slave Addr: " + dec_to_str(byte_value, "0x") );
                             ScanaStudio.dec_item_add_content( "Addr:" + dec_to_str(byte_value, "0x") );
                             ScanaStudio.dec_item_add_content( dec_to_str(byte_value, "0x") );
+                            ScanaStudio.dec_item_end();
+
                             ScanaStudio.packet_view_add_packet( false,
                                                                 channel,
                                                                 trame[i-1].start_sample_index,
@@ -1382,6 +1400,7 @@ function on_decode_signals_ASCII_mode(uart_items)
                             ScanaStudio.dec_item_add_content( "Fct : " + function_to_str(fct_code&0x7F,fct_type_dec) );
                             ScanaStudio.dec_item_add_content( "Fct : " + dec_to_str(byte_value, "0x") );
                             ScanaStudio.dec_item_add_content( dec_to_str(byte_value, "0x") );
+                            ScanaStudio.dec_item_end();
                             ScanaStudio.packet_view_add_packet( false,
                                                                 channel,
                                                                 trame[i-1].start_sample_index,

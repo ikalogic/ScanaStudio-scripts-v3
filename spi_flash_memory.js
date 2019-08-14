@@ -3,17 +3,17 @@
 <DESCRIPTION>
  SPI Flash memory transactions analyzer
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/SPI-Flash-memory-instructions-analyzer </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.1:  Initial release.
+V0.2: Added dec_item_end() for each dec_item_new().
+V0.1: Initial release.
 </RELEASE_NOTES>
 */
-
 
 /*
   TODO:
@@ -141,6 +141,7 @@ function on_decode_signals(resume)
   {
     //ScanaStudio.dec_item_new(spi_items[i].channel_index,spi_items[i].start_sample_index,spi_items[i].end_sample_index);
     //ScanaStudio.dec_item_add_content(spi_items[i].content);
+    //ScanaStudio.dec_item_end();
     var tmp = spi_items[i].content.split(":");
     if (tmp.length > 0)
     {
@@ -186,6 +187,7 @@ function parse_spi_items(item)
         ScanaStudio.dec_item_add_content(cmd_descriptor[0].long_caption+" ("+ data_to_str(item.content,cmd_descriptor[0].format,8)+")");
         ScanaStudio.dec_item_add_content(cmd_descriptor[0].short_caption+" ("+data_to_str(item.content,cmd_descriptor[0].format,8)+")");
         ScanaStudio.dec_item_add_content(data_to_str(item.content,cmd_descriptor[0].format,8));
+        ScanaStudio.dec_item_end();
         if (cmd_descriptor.length > 1) //If there is at least one parameter
         {
             state_machine++;
@@ -218,6 +220,7 @@ function parse_spi_items(item)
               ScanaStudio.dec_item_add_content(cmd_descriptor[cmd_par_counter].long_caption   + ": "  + data_to_str(parameter_data,cmd_descriptor[cmd_par_counter].format,cmd_descriptor[cmd_par_counter].len*8));
               ScanaStudio.dec_item_add_content(cmd_descriptor[cmd_par_counter].short_caption  + ": "  + data_to_str(parameter_data,cmd_descriptor[cmd_par_counter].format,cmd_descriptor[cmd_par_counter].len*8));
               ScanaStudio.dec_item_add_content(data_to_str(parameter_data,cmd_descriptor[cmd_par_counter].format,cmd_descriptor[cmd_par_counter].len*8));
+              ScanaStudio.dec_item_end();
               cmd_par_counter++;
               if (cmd_par_counter >= cmd_descriptor.length)
               {
@@ -246,6 +249,7 @@ function parse_spi_items(item)
             marker = item.end_sample_index;
             ScanaStudio.dec_item_new(item.channel_index,item.start_sample_index,item.end_sample_index);
             ScanaStudio.dec_item_add_content(data_to_str(item.content,flash_format_data,8));
+            ScanaStudio.dec_item_end();
             //ScanaStudio.console_info_msg("Payload:"+ data_to_str(item.content,flash_format_data,8));
           }
       break;
@@ -317,7 +321,7 @@ function on_build_demo_signals()
     {
       break;
     }
-    
+
     if (instr >= commands.length) instr = 0;
     spi_builder.put_start();
     spi_builder.put_silence(1e-6); //1 us

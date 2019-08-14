@@ -3,13 +3,14 @@
 <DESCRIPTION>
 CAN bus protocol analyzer
 </DESCRIPTION>
-<VERSION> 0.2 </VERSION>
+<VERSION> 0.3 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Nicolas Bastit </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com, n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.3: Added dec_item_end() for each dec_item_new().
 V0.2:  Added error detection, GUI validation, fixed bit stuffing errors.
 V0.1:  Initial release.
 </RELEASE_NOTES>
@@ -21,7 +22,6 @@ V0.1:  Initial release.
 // Add trigger support
 // Hex and Packet view
 */
-
 
 //Decoder GUI
 function on_draw_gui_decoder()
@@ -328,6 +328,7 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
     ScanaStudio.dec_item_add_content("Error");
     ScanaStudio.dec_item_add_content("!E");
     ScanaStudio.dec_item_emphasize_error();
+    ScanaStudio.dec_item_end();
   }
   last_processed_bit = b;
   crc_acc(b,is_stuffed_bit);
@@ -363,6 +364,8 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         ScanaStudio.dec_item_add_content("SOF");
         ScanaStudio.dec_item_add_content("S");
         ScanaStudio.dec_item_add_sample_point(sample_point,"U");
+        ScanaStudio.dec_item_end();
+
         can_bits = [];
         fd_mode = false;
         switch_to_high_baud_rate = false;
@@ -391,6 +394,7 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         ScanaStudio.dec_item_add_content("Base ID = " + format_content(can_base_id.value,id_format,11));
         ScanaStudio.dec_item_add_content(format_content(can_base_id.value,id_format,11));
         add_can_bits_sampling_points(can_bits,0,11);
+        ScanaStudio.dec_item_end();
 
         //RTR / R1 field
         ScanaStudio.dec_item_new( ch,
@@ -417,6 +421,7 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
           can_state_machine = CAN.SEEK_IDE;
         }
 
+        ScanaStudio.dec_item_end();
         //IDE Field
         ScanaStudio.dec_item_new( ch,
                                     can_ide.start - sample_point_offset_std + dec_item_margin,
@@ -424,6 +429,7 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         add_can_bits_sampling_points(can_bits,12,1);
         ScanaStudio.dec_item_add_content("IDE = " + can_ide.value.toString());
         ScanaStudio.dec_item_add_content("IDE");
+        ScanaStudio.dec_item_end();
 
         //R0 - EDL (if not IDE)
         if (can_state_machine != CAN.SEEK_IDE)
@@ -442,6 +448,7 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
             ScanaStudio.dec_item_add_content("EDL");
           }
           add_can_bits_sampling_points(can_bits,13,1);
+          ScanaStudio.dec_item_end();
 
           can_bits = [];
         }
@@ -472,6 +479,7 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         ScanaStudio.dec_item_add_content(format_content(can_full_id,id_format,29));
         ScanaStudio.dec_item_add_content("ID Ext.");
         add_can_bits_sampling_points(can_bits,0,18);
+        ScanaStudio.dec_item_end();
 
         if (can_r1_edl.value == 0) //CAN Frame
         {
@@ -482,6 +490,8 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
           add_can_bits_sampling_points(can_bits,18,1);
           ScanaStudio.dec_item_add_content("RTR = " + can_rtr_r1.value.toString());
           ScanaStudio.dec_item_add_content("RTR");
+          ScanaStudio.dec_item_end();
+
           //R1
           ScanaStudio.dec_item_new( ch,
                                     can_r1_edl.start - sample_point_offset_std + dec_item_margin,
@@ -489,6 +499,7 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
           add_can_bits_sampling_points(can_bits,19,1);
           ScanaStudio.dec_item_add_content("R1 = " + can_r1_edl.value.toString());
           ScanaStudio.dec_item_add_content("R1");
+          ScanaStudio.dec_item_end();
         }
         else //CAN FD frame
         {
@@ -500,6 +511,8 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
           add_can_bits_sampling_points(can_bits,18,1);
           ScanaStudio.dec_item_add_content("R1 = " + can_rtr_r1.value.toString());
           ScanaStudio.dec_item_add_content("R1");
+          ScanaStudio.dec_item_end();
+
           //EDL
           ScanaStudio.dec_item_new( ch,
                                     can_r1_edl.start - sample_point_offset_std + dec_item_margin,
@@ -507,9 +520,8 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
           add_can_bits_sampling_points(can_bits,19,1);
           ScanaStudio.dec_item_add_content("EDL = " + can_r1_edl.value.toString());
           ScanaStudio.dec_item_add_content("EDL");
+          ScanaStudio.dec_item_end();
         }
-
-
 
         if (is_can_fd_frame)
         {
@@ -526,6 +538,7 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
           add_can_bits_sampling_points(can_bits,20,1);
           ScanaStudio.dec_item_add_content("R0 = " + can_r0.value.toString());
           ScanaStudio.dec_item_add_content("R0");
+          ScanaStudio.dec_item_end();
 
           can_state_machine = CAN.SEEK_CAN_DLC;
           can_destuffed_bit_counter = 0;
@@ -548,6 +561,8 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         ScanaStudio.dec_item_add_content("DLC = " + can_dlc.value.toString());
         ScanaStudio.dec_item_add_content(can_dlc.value.toString());
         add_can_bits_sampling_points(can_bits,0,4);
+        ScanaStudio.dec_item_end();
+
         if (can_len > 0)
         {
           can_state_machine = CAN.SEEK_DATA;
@@ -582,6 +597,7 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
                                 can_r0.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
         ScanaStudio.dec_item_add_content("R0");
         add_can_bits_sampling_points(can_bits,0,1);
+        ScanaStudio.dec_item_end();
 
         if (can_brs.value == 1)
         {
@@ -590,6 +606,8 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
                                     can_brs.end - sample_point_offset_std + samples_per_brs_bit - (samples_per_brs_bit/50));
           ScanaStudio.dec_item_add_content("BRS = 1 (Switching bit rate)");
           ScanaStudio.dec_item_add_content("BRS = 1");
+          ScanaStudio.dec_item_end();
+
           //scanastudio.console_info_msg("Switching to high bit rate on next bit, at cursor = " + sample_point,sample_point);
           switch_to_high_baud_rate = true;
           is_fd_mode = true;
@@ -605,6 +623,8 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
           ScanaStudio.dec_item_add_content("BRS = 0");
         }
         add_can_bits_sampling_points(can_bits,1,1);
+        ScanaStudio.dec_item_end();
+
         can_bits = [];
         can_state_machine = CAN.SEEK_FD_ESI_DLC;
       }
@@ -628,6 +648,7 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
           ScanaStudio.dec_item_emphasize_warning();
         }
         add_can_bits_sampling_points(can_bits,0,1);
+        ScanaStudio.dec_item_end();
 
         ScanaStudio.dec_item_new( ch,
                                   can_dlc.start - sample_point_offset + dec_item_margin,
@@ -636,6 +657,7 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         ScanaStudio.dec_item_add_content("Length = " + can_len.toString());
         ScanaStudio.dec_item_add_content(can_len.toString());
         add_can_bits_sampling_points(can_bits,1,4);
+        ScanaStudio.dec_item_end();
 
         if (can_len > 0)
         {
@@ -672,6 +694,8 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         ScanaStudio.dec_item_add_content("DATA = " + format_content(can_data.value,data_format,8));
         ScanaStudio.dec_item_add_content(format_content(can_data.value,data_format,8));
         add_can_bits_sampling_points(can_bits,0,8);
+        ScanaStudio.dec_item_end();
+
         can_byte_counter++;
         can_bits = [];
         if (can_byte_counter >= can_len)
@@ -721,6 +745,8 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         }
         ScanaStudio.dec_item_add_content(format_content(can_crc.value,data_format,crc_len));
         add_can_bits_sampling_points(can_bits,0,crc_len);
+        ScanaStudio.dec_item_end();
+
         can_bits = [];
         can_state_machine = CAN.SEEK_CRC_DEL;
         stuff_mode = 0; //No more bit stuffing after this point (even for CAN FD)
@@ -761,6 +787,8 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
           ScanaStudio.dec_item_emphasize_error();
         }
         add_can_bits_sampling_points(can_bits,0,1);
+        ScanaStudio.dec_item_end();
+
         if (is_fd_mode)
         {
           switch_to_std_baud_rate = true;
@@ -779,8 +807,6 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         can_ack_del = interpret_can_bits(can_bits,1,1);
         can_eof = interpret_can_bits(can_bits,2,1);
 
-
-
         //ACK
         ScanaStudio.dec_item_new( ch,
                                   can_ack.start - sample_point_offset_std + dec_item_margin,
@@ -798,7 +824,9 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
           ScanaStudio.dec_item_add_content("!A");
           ScanaStudio.dec_item_emphasize_warning();
         }
+
         add_can_bits_sampling_points(can_bits,0,1);
+        ScanaStudio.dec_item_end();
 
         //ACK DEL
         ScanaStudio.dec_item_new( ch,
@@ -818,7 +846,9 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
           ScanaStudio.dec_item_add_content("!Del.");
           ScanaStudio.dec_item_emphasize_error();
         }
+
         add_can_bits_sampling_points(can_bits,1,1);
+        ScanaStudio.dec_item_end();
 
         //EOF
         ScanaStudio.dec_item_new( ch,
@@ -837,7 +867,9 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
           ScanaStudio.dec_item_add_content("!E");
           ScanaStudio.dec_item_emphasize_error();
         }
+
         add_can_bits_sampling_points(can_bits,2,1);
+        ScanaStudio.dec_item_end();
 
         can_bits = [];
         can_state_machine = CAN.SEEK_IDLE;

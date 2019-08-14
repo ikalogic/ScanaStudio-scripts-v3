@@ -3,13 +3,14 @@
 <DESCRIPTION>
 LIN (Local Interconnect Network) protocol analyzer
 </DESCRIPTION>
-<VERSION> 0.2 </VERSION>
+<VERSION> 0.3 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Vladislav Kosinov </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL, Vladislav Kosinov </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.3: Added dec_item_end() for each dec_item_new().
 V0.2: Added decoder GUI validation function
 V0.1: Initial release.
 </RELEASE_NOTES>
@@ -23,8 +24,6 @@ V0.1: Initial release.
   * Add online documentation
   * Add signal builder support
 */
-
-
 
 var FRAME_ID =
 {
@@ -47,7 +46,6 @@ function on_draw_gui_decoder()
 {
   //Define decoder configuration GUI
   ScanaStudio.gui_add_ch_selector("ch_lin","LIN bus ch_lin","LIN");
-
 
 ScanaStudio.gui_add_new_tab("Advanced options",false);
     ScanaStudio.gui_add_combo_box("lin_spec","LIN Specifications version");
@@ -139,7 +137,8 @@ function on_decode_signals(resume)
             ScanaStudio.dec_item_add_content("BREAK");
             ScanaStudio.dec_item_add_content("BRK");
             ScanaStudio.dec_item_add_content("B");
-            bit_counter = 0;
+			ScanaStudio.dec_item_end();
+			bit_counter = 0;
             state_machine++;
           }
           else
@@ -151,6 +150,7 @@ function on_decode_signals(resume)
             ScanaStudio.dec_item_add_content("! BREAK");
             ScanaStudio.dec_item_add_content("!");
             ScanaStudio.dec_item_emphasize_error();
+			ScanaStudio.dec_item_end();
             //ScanaStudio.console_info_msg("Invalid break",cursor);
             state_machine = 0;
           }
@@ -185,6 +185,7 @@ function on_decode_signals(resume)
           ScanaStudio.dec_item_add_content("! SYNC");
           ScanaStudio.dec_item_add_content("!");
           ScanaStudio.dec_item_emphasize_error();
+		  ScanaStudio.dec_item_end();
           //ScanaStudio.console_info_msg("Ivalid sync filed:"+last_sync_bit_width+"/"+sync_bit_width,cursor);
           state_machine = 0;
         }
@@ -195,6 +196,7 @@ function on_decode_signals(resume)
           ScanaStudio.dec_item_add_content("! SYNC");
           ScanaStudio.dec_item_add_content("!");
           ScanaStudio.dec_item_emphasize_error();
+		  ScanaStudio.dec_item_end();
           //ScanaStudio.console_info_msg("Ivalid sync filed(2):"+sync_bit_width+"/"+break_width,cursor);
           state_machine = 0;
         }
@@ -203,16 +205,23 @@ function on_decode_signals(resume)
           //calculate baud rate as the average bit time in the sync field
           samples_per_bit =  Math.floor((cursor-first_sync_edge)/10);
           var baud = Math.floor(sampling_rate/samples_per_bit);
+
           ScanaStudio.dec_item_new(ch_lin,first_sync_edge,sync_start);
           ScanaStudio.dec_item_add_content("START");
           ScanaStudio.dec_item_add_content("S");
+		  ScanaStudio.dec_item_end();
+
           ScanaStudio.dec_item_new(ch_lin,sync_start,sync_end);
           ScanaStudio.dec_item_add_content("SYNC Field (BAUD = " + baud.toString() + ")");
           ScanaStudio.dec_item_add_content("SYNC");
           ScanaStudio.dec_item_add_content("S");
+		  ScanaStudio.dec_item_end();
+
           ScanaStudio.dec_item_new(ch_lin,sync_end,cursor);
           ScanaStudio.dec_item_add_content("STOP");
           ScanaStudio.dec_item_add_content("P");
+		  ScanaStudio.dec_item_end();
+
           //ScanaStudio.console_info_msg("Sync ok, baud = " + baud);
           ScanaStudio.bit_sampler_init(ch_lin,cursor+(samples_per_bit*0.5),samples_per_bit);
 
@@ -272,17 +281,20 @@ function on_decode_signals(resume)
               ScanaStudio.dec_item_add_content("!");
               ScanaStudio.dec_item_emphasize_error();
             }
+			ScanaStudio.dec_item_end();
 
             ScanaStudio.dec_item_new(ch_lin,cursor+(samples_per_bit*1),cursor+(samples_per_bit*7));
             ScanaStudio.dec_item_add_content("ID = " + format_content(lin_id,id_format,6) + " Data LEN = " + get_lin_data_len(lin_id));
             ScanaStudio.dec_item_add_content("ID = " + format_content(lin_id,id_format,6) + " L = " + get_lin_data_len(lin_id));
             ScanaStudio.dec_item_add_content("ID = " + format_content(lin_id,id_format,6));
             ScanaStudio.dec_item_add_content(format_content(lin_id,id_format,6));
+			ScanaStudio.dec_item_end();
 
             ScanaStudio.dec_item_new(ch_lin,cursor+(samples_per_bit*7),cursor+(samples_per_bit*9));
             ScanaStudio.dec_item_add_content("Parity = " + format_content(lin_par,parity_format,2));
             ScanaStudio.dec_item_add_content("P = " + format_content(lin_par,parity_format,2));
             ScanaStudio.dec_item_add_content(format_content(lin_par,parity_format,2));
+			ScanaStudio.dec_item_end();
 
             ScanaStudio.dec_item_new(ch_lin,cursor+(samples_per_bit*9),cursor+(samples_per_bit*10));
             if (lin_stop == 1)
@@ -297,6 +309,7 @@ function on_decode_signals(resume)
               ScanaStudio.dec_item_add_content("!");
               ScanaStudio.dec_item_emphasize_error();
             }
+			ScanaStudio.dec_item_end();
 
             n_lin_bytes = get_lin_data_len(lin_id);
             byte_counter = 0;
@@ -360,6 +373,7 @@ function on_decode_signals(resume)
               ScanaStudio.dec_item_add_content("!");
               ScanaStudio.dec_item_emphasize_error();
             }
+			ScanaStudio.dec_item_end();
 
             if (byte_counter < n_lin_bytes)
             {
@@ -369,6 +383,7 @@ function on_decode_signals(resume)
               ScanaStudio.dec_item_add_content("DATA("+ byte_counter.toString(10) +") = " + format_content(lin_data,data_format,8));
               ScanaStudio.dec_item_add_content("DATA = " + format_content(lin_data,data_format,8));
               ScanaStudio.dec_item_add_content(format_content(lin_data,data_format,8));
+			  ScanaStudio.dec_item_end();
             }
             else
             {
@@ -388,6 +403,7 @@ function on_decode_signals(resume)
                 ScanaStudio.dec_item_add_content("!");
                 ScanaStudio.dec_item_emphasize_error();
               }
+			  ScanaStudio.dec_item_end();
             }
 
             ScanaStudio.dec_item_new(ch_lin,cursor+(samples_per_bit*9),cursor+(samples_per_bit*10));
@@ -403,6 +419,7 @@ function on_decode_signals(resume)
               ScanaStudio.dec_item_add_content("!");
               ScanaStudio.dec_item_emphasize_error();
             }
+			ScanaStudio.dec_item_end();
 
             cursor += samples_per_bit * 9.5;
             if (byte_counter < n_lin_bytes)

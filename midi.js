@@ -3,14 +3,15 @@
 <DESCRIPTION>
 MIDI 1.0 protocol
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.0:  Initial release.
+V0.2: Added dec_item_end() for each dec_item_new().
+V0.1: Initial release.
 </RELEASE_NOTES>
 */
 
@@ -106,6 +107,8 @@ function on_decode_signals(resume)
           midi_status = Number(uart_items[i].content);
           midi_cmd = get_midi_cmd(midi_status);
           build_midi_header_dec_item(midi_cmd,midi_status);
+          ScanaStudio.dec_item_end();
+
           pkt_data = [];
           if (midi_cmd.len != 0)
           {
@@ -131,6 +134,7 @@ function on_decode_signals(resume)
           {
             ScanaStudio.dec_item_new(ch,uart_items[i].start_sample_index,uart_items[i].end_sample_index);
             ScanaStudio.dec_item_add_content(uart_items[i].content);
+            ScanaStudio.dec_item_end();
           }
           else
           {
@@ -482,6 +486,7 @@ function build_midi_data_dec_items(midi_cmd,data_array,start_sample,end_sample)
   {
     ScanaStudio.dec_item_add_content(content_short);
   }
+  ScanaStudio.dec_item_end();
 }
 
 function midi_cmd_t(status,status_mask,short_name,long_name,data_type,len)

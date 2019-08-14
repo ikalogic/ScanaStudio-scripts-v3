@@ -3,14 +3,15 @@
 <DESCRIPTION>
 PMBus protocol analyzer
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.1:  Initial release.
+V0.2: Added dec_item_end() for each dec_item_new().
+V0.1: Initial release.
 </RELEASE_NOTES>
 */
 
@@ -112,168 +113,174 @@ function on_decode_signals(resume)
 
 function process_pm_item(item)
 {
-  ScanaStudio.dec_item_new(item.channel_index,item.start_sample_index,item.end_sample_index);
+	ScanaStudio.dec_item_new(item.channel_index,item.start_sample_index,item.end_sample_index);
 
-  if (item.content.indexOf("RE-START") >= 0)
-  {
-    ScanaStudio.dec_item_add_content("RE-START");
-    ScanaStudio.dec_item_add_content("RS");
-    ScanaStudio.dec_item_add_content("R");
-    frame_state = SMB.ADDRESS;
-  }
-  else if (item.content.indexOf("START") >= 0)
-  {
-    ScanaStudio.dec_item_add_content("START");
-    ScanaStudio.dec_item_add_content("S");
-    frame_state = SMB.ADDRESS;
-    crc8_reset();
-  }
-  else if (item.content.indexOf("STOP") >= 0)
-  {
-    ScanaStudio.dec_item_add_content("STOP");
-    ScanaStudio.dec_item_add_content("P");
-    frame_state = SMB.ADDRESS;
-  }
-  else if (item.content.indexOf("NACK") >= 0)
-  {
-    ScanaStudio.dec_item_add_content("NACK");
-    ScanaStudio.dec_item_add_content("N");
-  }
-  else if (item.content.indexOf("ACK") >= 0)
-  {
-    ScanaStudio.dec_item_add_content("ACK");
-    ScanaStudio.dec_item_add_content("A");
-  }
-  else //It's any other address or data byte
-  {
-    var byte = Number(item.content);
-    switch (frame_state) {
-      case SMB.ADDRESS:
-        if (byte == 0) //General call
-        {
-          operation_str = "General call address ";
-          operation_str_short = "G ";
-        }
-        else if (byte == 1) //General call
-        {
-          operation_str = "Start byte ";
-          operation_str_short = "SB ";
-        }
-        else if ((byte>>1) == 1) //CBUS
-        {
-          operation_str = "CBUS address ";
-          operation_str_short = "CBUS ";
-        }
-        else if ((byte >> 1) == 0x8)  //SMBus Host
-        {
-          operation_str = "SMBus host address ";
-          operation_str_short = "HOST ";
-        }
-        else if ((byte >> 1) == 0xC)  //SMBus Alert response
-        {
-          operation_str = "SMBus Alert response address ";
-          operation_str_short = "ALERT ";
-        }
-        else if ((byte>>3) == 1) //HS-mode master code
-        {
-          hs_mode = true;
-          operation_str = "NOT SUPPORTED: HS-Mode master code ";
-          operation_str_short = "! HS ";
-          ScanaStudio.dec_item_emphasize_warning();
-        }
-        else if ((byte >> 3) == 0x1E) //10 bit (extended) address
-        {
-          add_10b = true;
-          ext_add = (byte>>1) & 0x3;
-          if (byte & 0x1)
-          {
-            operation_str = "NOT SUPPORTED: Read from 10 bit address ";
-            operation_str_short = "! 10R ";
-            ScanaStudio.dec_item_emphasize_warning();
-          }
-          else
-          {
-            operation_str = "NOT SUPPORTED: Write to 10 bit address ";
-            operation_str_short = "! 10W ";
-            ScanaStudio.dec_item_emphasize_warning();
-          }
-        }
-        else if (((byte>>1) == 2) || ((byte>>1) == 3) || ((byte>>3) == 0x1F)) //Reserved
-        {
-          operation_str = "Reserved address ";
-          operation_str_short = "RES ";
-          ScanaStudio.dec_item_emphasize_warning();
-        }
-        else if (byte & 0x1)
-        {
-          operation_str = "Read from address ";
-          operation_str_short = "RD ";
-        }
-        else
-        {
-          operation_str = "Write to address ";
-          operation_str_short = "WR ";
-        }
+	if (item.content.indexOf("RE-START") >= 0)
+	{
+		ScanaStudio.dec_item_add_content("RE-START");
+		ScanaStudio.dec_item_add_content("RS");
+		ScanaStudio.dec_item_add_content("R");
+		frame_state = SMB.ADDRESS;
+	}
+	else if (item.content.indexOf("START") >= 0)
+	{
+		ScanaStudio.dec_item_add_content("START");
+		ScanaStudio.dec_item_add_content("S");
+		frame_state = SMB.ADDRESS;
+		crc8_reset();
+	}
+	else if (item.content.indexOf("STOP") >= 0)
+	{
+		ScanaStudio.dec_item_add_content("STOP");
+		ScanaStudio.dec_item_add_content("P");
+		frame_state = SMB.ADDRESS;
+	}
+	else if (item.content.indexOf("NACK") >= 0)
+	{
+		ScanaStudio.dec_item_add_content("NACK");
+		ScanaStudio.dec_item_add_content("N");
+	}
+	else if (item.content.indexOf("ACK") >= 0)
+	{
+		ScanaStudio.dec_item_add_content("ACK");
+		ScanaStudio.dec_item_add_content("A");
+	}
+	else //It's any other address or data byte
+	{
+		var byte = Number(item.content);
 
-        if (address_opt == 0) //7 bit standard address convention
-        {
-          add_len = 7
-          add_shift = 1;
-        }
-        else
-        {
-          add_len = 8;
-          add_shift = 0;
-        }
+		switch (frame_state)
+		{
+		  	case SMB.ADDRESS:
+			    if (byte == 0) //General call
+			    {
+			      operation_str = "General call address ";
+			      operation_str_short = "G ";
+			    }
+			    else if (byte == 1) //General call
+			    {
+			      operation_str = "Start byte ";
+			      operation_str_short = "SB ";
+			    }
+			    else if ((byte>>1) == 1) //CBUS
+			    {
+			      operation_str = "CBUS address ";
+			      operation_str_short = "CBUS ";
+			    }
+			    else if ((byte >> 1) == 0x8)  //SMBus Host
+			    {
+			      operation_str = "SMBus host address ";
+			      operation_str_short = "HOST ";
+			    }
+			    else if ((byte >> 1) == 0xC)  //SMBus Alert response
+			    {
+			      operation_str = "SMBus Alert response address ";
+			      operation_str_short = "ALERT ";
+			    }
+			    else if ((byte>>3) == 1) //HS-mode master code
+			    {
+			      hs_mode = true;
+			      operation_str = "NOT SUPPORTED: HS-Mode master code ";
+			      operation_str_short = "! HS ";
+			      ScanaStudio.dec_item_emphasize_warning();
+			    }
+			    else if ((byte >> 3) == 0x1E) //10 bit (extended) address
+			    {
+			      add_10b = true;
+			      ext_add = (byte>>1) & 0x3;
+			      if (byte & 0x1)
+			      {
+			        operation_str = "NOT SUPPORTED: Read from 10 bit address ";
+			        operation_str_short = "! 10R ";
+			        ScanaStudio.dec_item_emphasize_warning();
+			      }
+			      else
+			      {
+			        operation_str = "NOT SUPPORTED: Write to 10 bit address ";
+			        operation_str_short = "! 10W ";
+			        ScanaStudio.dec_item_emphasize_warning();
+			      }
+			    }
+			    else if (((byte>>1) == 2) || ((byte>>1) == 3) || ((byte>>3) == 0x1F)) //Reserved
+			    {
+			      operation_str = "Reserved address ";
+			      operation_str_short = "RES ";
+			      ScanaStudio.dec_item_emphasize_warning();
+			    }
+			    else if (byte & 0x1)
+			    {
+			      operation_str = "Read from address ";
+			      operation_str_short = "RD ";
+			    }
+			    else
+			    {
+			      operation_str = "Write to address ";
+			      operation_str_short = "WR ";
+			    }
 
-        ScanaStudio.dec_item_add_content(operation_str + format_content(byte >> add_shift,address_format,add_len) + " - R/W = " + (byte & 0x1).toString());
-        ScanaStudio.dec_item_add_content(operation_str + format_content(byte >> add_shift,address_format,add_len));
-        ScanaStudio.dec_item_add_content(operation_str_short + format_content(byte >> add_shift,address_format,add_len));
-        ScanaStudio.dec_item_add_content(format_content(byte >> add_shift,address_format,add_len));
+			    if (address_opt == 0) //7 bit standard address convention
+			    {
+			      add_len = 7
+			      add_shift = 1;
+			    }
+			    else
+			    {
+			      add_len = 8;
+			      add_shift = 0;
+			    }
 
-        frame_state = SMB.CMD;
+			    ScanaStudio.dec_item_add_content(operation_str + format_content(byte >> add_shift,address_format,add_len) + " - R/W = " + (byte & 0x1).toString());
+			    ScanaStudio.dec_item_add_content(operation_str + format_content(byte >> add_shift,address_format,add_len));
+			    ScanaStudio.dec_item_add_content(operation_str_short + format_content(byte >> add_shift,address_format,add_len));
+			    ScanaStudio.dec_item_add_content(format_content(byte >> add_shift,address_format,add_len));
 
-        crc8_calc(byte);
-        break;
-      case SMB.CMD:
-        if (!isNaN(byte))
-        {
-          ScanaStudio.dec_item_add_content("PM Bus command: " + PMB_COMMANDS[byte] + " (" + format_content(byte,data_format,8) + ")");
-          ScanaStudio.dec_item_add_content(PMB_COMMANDS[byte] + " (" + format_content(byte,data_format,8) + ")");
-          ScanaStudio.dec_item_add_content(format_content(byte,data_format,8));
-        }
-        frame_state = SMB.DATA;
-      case SMB.DATA:
-        var title = "DATA = ";
-        if (item.pec == true)
-        {
-          title = "PEC = ";
-          if (byte == crc8_get())
-          {
-            ScanaStudio.dec_item_add_content("PEC = " + format_content(byte,data_format,8) + " OK!");
-            ScanaStudio.dec_item_add_content(format_content(byte,data_format,8));
-            ScanaStudio.dec_item_emphasize_success();
-          }
-          else
-          {
-            ScanaStudio.dec_item_add_content("Wrong PEC = " + format_content(byte,data_format,8) + " Should be = " + format_content(crc8_get(),data_format,8));
-            ScanaStudio.dec_item_add_content("Wrong PEC = " + format_content(byte,data_format,8) + " / " + format_content(crc8_get(),data_format,8));
-            ScanaStudio.dec_item_add_content("Err !" + format_content(byte,data_format,8));
-            ScanaStudio.dec_item_add_content("!" + format_content(byte,data_format,8));
-            ScanaStudio.dec_item_add_content(format_content(byte,data_format,8));
-            ScanaStudio.dec_item_emphasize_error();
-          }
-        }
-        else
-        {
-          crc8_calc(byte);
-          ScanaStudio.dec_item_add_content("Data = " + format_content(byte,data_format,8));
-          ScanaStudio.dec_item_add_content(format_content(byte,data_format,8));
-        }
-        frame_state = SMB.DATA;
-      default:
-    }
-  }
+			    frame_state = SMB.CMD;
+
+			    crc8_calc(byte);
+		    break;
+
+		  case SMB.CMD:
+			    if (!isNaN(byte))
+			    {
+			      ScanaStudio.dec_item_add_content("PM Bus command: " + PMB_COMMANDS[byte] + " (" + format_content(byte,data_format,8) + ")");
+			      ScanaStudio.dec_item_add_content(PMB_COMMANDS[byte] + " (" + format_content(byte,data_format,8) + ")");
+			      ScanaStudio.dec_item_add_content(format_content(byte,data_format,8));
+			    }
+			    frame_state = SMB.DATA;
+
+		  case SMB.DATA:
+			    var title = "DATA = ";
+			    if (item.pec == true)
+			    {
+			      title = "PEC = ";
+			      if (byte == crc8_get())
+			      {
+			        ScanaStudio.dec_item_add_content("PEC = " + format_content(byte,data_format,8) + " OK!");
+			        ScanaStudio.dec_item_add_content(format_content(byte,data_format,8));
+			        ScanaStudio.dec_item_emphasize_success();
+			      }
+			      else
+			      {
+			        ScanaStudio.dec_item_add_content("Wrong PEC = " + format_content(byte,data_format,8) + " Should be = " + format_content(crc8_get(),data_format,8));
+			        ScanaStudio.dec_item_add_content("Wrong PEC = " + format_content(byte,data_format,8) + " / " + format_content(crc8_get(),data_format,8));
+			        ScanaStudio.dec_item_add_content("Err !" + format_content(byte,data_format,8));
+			        ScanaStudio.dec_item_add_content("!" + format_content(byte,data_format,8));
+			        ScanaStudio.dec_item_add_content(format_content(byte,data_format,8));
+			        ScanaStudio.dec_item_emphasize_error();
+			      }
+			    }
+			    else
+			    {
+			      crc8_calc(byte);
+			      ScanaStudio.dec_item_add_content("Data = " + format_content(byte,data_format,8));
+			      ScanaStudio.dec_item_add_content(format_content(byte,data_format,8));
+			    }
+			    frame_state = SMB.DATA;
+		  default:
+		}
+	}
+
+	ScanaStudio.dec_item_end();
 }
 
 

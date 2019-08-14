@@ -3,14 +3,15 @@
 <DESCRIPTION>
 My protocol can decode pretty much any logic signal!
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME>  Victor Canoz </AUTHOR_NAME>
 <AUTHOR_URL> v.canoz@ikalogic.com</AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Victor Canoz </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.0:  Initial release.
+V0.2: Added dec_item_end() for each dec_item_new().
+V0.1: Initial release.
 </RELEASE_NOTES>
 */
 
@@ -160,6 +161,7 @@ function on_decode_signals(resume) {
           ScanaStudio.dec_item_new(ch, biphase_items[i - 10].start_sample_index, biphase_items[i].end_sample_index);
           ScanaStudio.dec_item_add_content("Header (‭10000000000‬)");
           ScanaStudio.dec_item_add_content("Header");
+          ScanaStudio.dec_item_end();
           header_cnt = 0;
           last_11_bits = 0;
           data_cnt = 0;
@@ -197,6 +199,7 @@ function on_decode_signals(resume) {
               ScanaStudio.dec_item_new(ch, biphase_items[tag_number_and_country_idx + j].start_sample_index, biphase_items[tag_number_and_country_idx + j].end_sample_index);
               ScanaStudio.dec_item_add_content("Bad control bit!");
               ScanaStudio.dec_item_add_content("Bad!");
+              ScanaStudio.dec_item_end();
 
               break;
             }
@@ -236,6 +239,7 @@ function on_decode_signals(resume) {
             ScanaStudio.dec_item_new(ch, biphase_items[tag_number_and_country_idx + crc_offset].start_sample_index, biphase_items[tag_number_and_country_idx + crc_offset + 16].end_sample_index);
             ScanaStudio.dec_item_add_content("BAD CRC: computed CRC16-CCITT = 0x" + computed_crc.toString(16) + " | CRC read = 0x" + read_crc.toString(16));
             ScanaStudio.dec_item_add_content("BAD CRC!");
+            ScanaStudio.dec_item_end();
           }
         }
         if (ok) state_machine = "parsing";
@@ -270,6 +274,7 @@ function on_decode_signals(resume) {
         ScanaStudio.dec_item_new(ch, biphase_items[tag_number_and_country_idx].start_sample_index, biphase_items[tag_number_and_country_idx + flags_offset - 1].end_sample_index);
         ScanaStudio.dec_item_add_content("ID = " + resultID + " | Country code = " + resultCountry);
         ScanaStudio.dec_item_add_content("ID + Country code");
+        ScanaStudio.dec_item_end();
 
         //Read Animal & Status bit
         var status_bit = (bytes[6] >> 7) & 1;
@@ -278,6 +283,7 @@ function on_decode_signals(resume) {
         ScanaStudio.dec_item_add_content("Flags: Status (data extended) bit = " + status_bit + " | Animal bit = " + animal_bit);
         ScanaStudio.dec_item_add_content("Flags: Status bit = " + status_bit + " | Animal bit = " + animal_bit);
         ScanaStudio.dec_item_add_content("Flags");
+        ScanaStudio.dec_item_end();
 
         //Display CRC
         if (ok) {
@@ -285,6 +291,7 @@ function on_decode_signals(resume) {
           ScanaStudio.dec_item_add_content("CRC OK ( = 0x" + read_crc.toString(16) + " )");
           ScanaStudio.dec_item_add_content("CRC OK");
           ScanaStudio.dec_item_add_content("CRC");
+          ScanaStudio.dec_item_end();
 
           ScanaStudio.console_info_msg("Successfully read FDX-B tag. Country code = " + resultCountry + " | ID = " + resultID, biphase_items[tag_number_and_country_idx + crc_offset].start_sample_index)
         }
@@ -320,6 +327,7 @@ function on_decode_signals(resume) {
               ScanaStudio.dec_item_new(ch, biphase_items[tag_number_and_country_idx + extra_data_offset + j].start_sample_index, biphase_items[tag_number_and_country_idx + extra_data_offset + j].end_sample_index);
               ScanaStudio.dec_item_add_content("Bad control bit!");
               ScanaStudio.dec_item_add_content("Bad!");
+              ScanaStudio.dec_item_end();
               ok = false;
               state_machine = "reset";
               break;
@@ -354,6 +362,7 @@ function on_decode_signals(resume) {
           ScanaStudio.dec_item_new(ch, biphase_items[tag_number_and_country_idx + extra_data_offset].start_sample_index, biphase_items[tag_number_and_country_idx + extra_data_offset + extended_data_len - 1].end_sample_index);
           ScanaStudio.dec_item_add_content("Extended data = 0x" + resultdata.toString(16));
           ScanaStudio.dec_item_add_content("Extended data");
+          ScanaStudio.dec_item_end();
         }
         state_machine = "reset"
         break;

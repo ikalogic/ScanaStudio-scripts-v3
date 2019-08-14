@@ -10,10 +10,10 @@ PWM (Pulse Width Modulation) module. Can be used to decode and generate PWM sign
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.1:  Initial release.
+V0.2: Added dec_item_end() for each dec_item_new().
+V0.1: Initial release.
 </RELEASE_NOTES>
 */
-
 
 //Decoder GUI
 function on_draw_gui_decoder()
@@ -72,6 +72,7 @@ function on_decode_signals(resume)
             ScanaStudio.dec_item_add_content("D = " + ScanaStudio.engineering_notation(duty,3)    + "%");
             ScanaStudio.dec_item_add_content(ScanaStudio.engineering_notation(duty,3)             + "%");
             ScanaStudio.dec_item_add_content(Math.round(duty).toString());
+            ScanaStudio.dec_item_end();
           }
           last_rising_edge = trs.sample_index;
           state_machine++;
@@ -111,7 +112,7 @@ function on_build_demo_signals()
     0.9); //duty_max
 
   ScanaStudio.builder_add_samples(1,1,samples_to_build);
-    
+
   while (ScanaStudio.builder_get_samples_acc(0) < samples_to_build)
   {
     pwm_builder.build_cycle_sine();

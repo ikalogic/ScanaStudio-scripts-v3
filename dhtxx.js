@@ -3,18 +3,18 @@
 <DESCRIPTION>
 
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.2: Added dec_item_end() for each dec_item_new().
 V0.0:  Initial release.
 </RELEASE_NOTES>
 <HELP_URL>  </HELP_URL>
 */
-
 
 function on_draw_gui_decoder()
 {
@@ -160,6 +160,7 @@ function on_decode_signals(resume)
                     ScanaStudio.dec_item_new(channel, last_trs.sample_index, trs.sample_index);
                     ScanaStudio.dec_item_add_content("Start");
                     ScanaStudio.dec_item_add_content("S");
+                    ScanaStudio.dec_item_end();
 
                     ScanaStudio.packet_view_add_packet(true,
                         channel,
@@ -180,6 +181,7 @@ function on_decode_signals(resume)
                     ScanaStudio.dec_item_new(channel, last_trs.sample_index, trs.sample_index);
                     ScanaStudio.dec_item_add_content("Start");
                     ScanaStudio.dec_item_add_content("S");
+                    ScanaStudio.dec_item_end();
 
                     ScanaStudio.packet_view_add_packet(true,
                         channel,
@@ -209,6 +211,8 @@ function on_decode_signals(resume)
                     ScanaStudio.dec_item_add_content("Wait for start DHTxx");
                     ScanaStudio.dec_item_add_content("Wait for start");
                     ScanaStudio.dec_item_add_content("Wait");
+                    ScanaStudio.dec_item_end();
+
                     step_cnt = 0;
                     start_of_step = 0;
 
@@ -251,6 +255,8 @@ function on_decode_signals(resume)
                     ScanaStudio.dec_item_add_content("Start DHTxx");
                     ScanaStudio.dec_item_add_content("Start");
                     ScanaStudio.dec_item_add_content("S");
+                    ScanaStudio.dec_item_end();
+
                     step_cnt = 0;
                     start_of_step = 0;
                     byte_value = 0;
@@ -348,9 +354,12 @@ function on_decode_signals(resume)
                                 ScanaStudio.dec_item_add_content("Relative Humidity : " + val + "%");
                                 ScanaStudio.dec_item_add_content("RH : " + val + "%");
                                 ScanaStudio.dec_item_add_content(val + "%");
+
                                 if( (val < DHTxx.rh_range_min) || (val > DHTxx.rh_range_max) )
                                 {
                                     ScanaStudio.dec_item_emphasize_warning();
+                                    ScanaStudio.dec_item_end();
+
                                     ScanaStudio.packet_view_add_packet(false,
                                         channel,
                                         start_of_step,
@@ -412,9 +421,12 @@ function on_decode_signals(resume)
                                 ScanaStudio.dec_item_add_content("Temperature : " + val + unity);
                                 ScanaStudio.dec_item_add_content("T : " + val + unity);
                                 ScanaStudio.dec_item_add_content(val + unity);
+
                                 if( (val < DHTxx.temp_range_min_C) || (val > DHTxx.temp_range_max_C) )
                                 {
                                     ScanaStudio.dec_item_emphasize_warning();
+                                    ScanaStudio.dec_item_end();
+
                                     ScanaStudio.packet_view_add_packet(false,
                                         channel,
                                         start_of_step,
@@ -458,12 +470,15 @@ function on_decode_signals(resume)
                                 ScanaStudio.dec_item_add_content("Check-sum OK " + dec_to_str(byte_value, "0x"));
                                 ScanaStudio.dec_item_add_content(dec_to_str(byte_value, "0x") + " OK");
                                 ScanaStudio.dec_item_add_content(dec_to_str(byte_value, "0x"));
+                                ScanaStudio.dec_item_end();
                             }
                             else
                             {
                                 ScanaStudio.dec_item_add_content("Wrong Check-sum " + dec_to_str(byte_value, "0x") + " should be " + dec_to_str(chk_sum, "0x"));
                                 ScanaStudio.dec_item_add_content("Wrong Check-sum " + dec_to_str(byte_value, "0x"));
                                 ScanaStudio.dec_item_add_content("!" + dec_to_str(byte_value, "0x"));
+                                ScanaStudio.dec_item_end();
+
                                 ScanaStudio.packet_view_add_packet(false,
                                     channel,
                                     start_of_step,

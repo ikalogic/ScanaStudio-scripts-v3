@@ -3,14 +3,15 @@
 <DESCRIPTION>
 
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.0:  Initial release.
+V0.2: Added dec_item_end() for each dec_item_new().
+V0.1:  Initial release.
 </RELEASE_NOTES>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 
@@ -267,6 +268,7 @@ function on_decode_signals(resume)
                         {
                             ScanaStudio.dec_item_new(channel, trame[i].start_sample_index, trame[i].end_sample_index);
                             ScanaStudio.dec_item_add_content( "Start" );
+                            ScanaStudio.dec_item_end();
         //for the next release
                             // i_ch = 0;
 
@@ -286,6 +288,7 @@ function on_decode_signals(resume)
                             ScanaStudio.dec_item_add_content( "WRONG Start " + trame[i].content);
                             ScanaStudio.dec_item_add_content( trame[i].content);
                             ScanaStudio.dec_item_emphasize_error();
+                            ScanaStudio.dec_item_end();
 
                             ScanaStudio.packet_view_add_packet(
                                 false,
@@ -302,6 +305,7 @@ function on_decode_signals(resume)
                     {
                         ScanaStudio.dec_item_new(channel,trame[i].start_sample_index,trame[i].end_sample_index);
                         ScanaStudio.dec_item_add_content(trame[i].content);
+                        ScanaStudio.dec_item_end();
                         ScanaStudio.packet_view_add_packet( false,
                                                             channel,
                                                             trame[i].start_sample_index,

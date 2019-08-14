@@ -3,15 +3,16 @@
 <DESCRIPTION>
 1-Wire protocol analyzer. Decodes Reset, presence and byte fields.
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME> Ibrahim Kamal </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/1-Wire-bus-analyzer-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.1:  Fixed sampling point position for presence pulse.
-V0.0:  Initial release.
+V0.2: Added dec_item_end() for each dec_item_new().
+V0.1: Fixed sampling point position for presence pulse.
+V0.0: Initial release.
 </RELEASE_NOTES>
 */
 
@@ -113,6 +114,7 @@ function on_decode_signals(resume)
           bit_counter = 0;
           device_present = false;
           state_machine = 3;
+
           ScanaStudio.dec_item_new(ch,last_falling_edge,last_rising_edge);
           if (ScanaStudio.is_pre_decoding())
           {
@@ -127,6 +129,7 @@ function on_decode_signals(resume)
             ScanaStudio.dec_item_add_content("R");
             ScanaStudio.dec_item_add_sample_point(last_falling_edge+samples_per_reset_min,"D");
           }
+          ScanaStudio.dec_item_end();
         }
         else if (device_present == true)
         {
@@ -198,6 +201,8 @@ function on_decode_signals(resume)
             ScanaStudio.dec_item_add_content("P!");
             ScanaStudio.dec_item_add_content("!");
             ScanaStudio.dec_item_emphasize_warning();
+            ScanaStudio.dec_item_end();
+
             last_falling_edge = trs.sample_index;
             state_machine = 1;
           }
@@ -224,6 +229,8 @@ function on_decode_signals(resume)
             ScanaStudio.dec_item_add_content("P");
 
           }
+
+          ScanaStudio.dec_item_end();
         }
       default:
         //Todo...
@@ -247,11 +254,14 @@ function append_bit(b,falling_edge)
   {
     ScanaStudio.dec_item_new(ch,byte_start,falling_edge+(bit_sampling_point*1.25));
     ScanaStudio.dec_item_add_content(suffix+byte.toString(format));
+
     var s = 0;
     for (s = 0; s < sample_points.length; s++)
     {
       ScanaStudio.dec_item_add_sample_point(sample_points[s],(byte >> s) & 0x1);
     }
+
+    ScanaStudio.dec_item_end();
     bit_counter = 0;
     byte = 0;
     sample_points = []; //clear array

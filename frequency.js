@@ -5,13 +5,14 @@ Analyze logic signals to shows its frequency. This script's main aim
 is to provide a simple example to be inspired from when creating a
 new decoder.
 </DESCRIPTION>
-<VERSION> 0.0 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.0:  Initial release.
+V0.2: Added dec_item_end() for each dec_item_new().
+V0.1: Initial release.
 </RELEASE_NOTES>
 */
 
@@ -62,6 +63,7 @@ function on_decode_signals(resume)
           {
             period = (trs.sample_index - last_rising_edge) / sampling_rate; //period in [s]
             frequency = 1/period; //in [Hz]
+
             ScanaStudio.dec_item_new(freq_ch,last_rising_edge,trs.sample_index);
             ScanaStudio.dec_item_add_content("Frequency = " + ScanaStudio.engineering_notation(frequency,5) + "Hz");
             ScanaStudio.dec_item_add_content("Frequency = " + ScanaStudio.engineering_notation(frequency,4) + "Hz");
@@ -69,6 +71,7 @@ function on_decode_signals(resume)
             ScanaStudio.dec_item_add_content("F = " + ScanaStudio.engineering_notation(frequency,3)         + "Hz");
             ScanaStudio.dec_item_add_content(ScanaStudio.engineering_notation(frequency,3)                  + "Hz");
             ScanaStudio.dec_item_add_content(ScanaStudio.engineering_notation(frequency,3));
+            ScanaStudio.dec_item_end();
 
             //Add byte to hex view
             if (frequency > 255e3)

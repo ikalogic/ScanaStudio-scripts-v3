@@ -3,14 +3,15 @@
 <DESCRIPTION>
 Synchronous Serial Interface analyzer
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME>  Ibrahim Kamal </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim Kamal </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.1:  Initial release.
+V0.2: Added dec_item_end() for each dec_item_new().
+V0.1: Initial release.
 </RELEASE_NOTES>
 */
 
@@ -18,7 +19,6 @@ V0.1:  Initial release.
 Todo
   * add pre_decoding support
 */
-
 
 //Decoder GUI
 function on_draw_gui_decoder()
@@ -139,6 +139,7 @@ function add_dec_item(start_sample,end_sample,data,bits)
   if (bits.length > 53)
   {
     ScanaStudio.dec_item_emphasize_error();
+    ScanaStudio.dec_item_end();
     ScanaStudio.console_error_msg("Maximum integer value reached, displayed results may not be correct.", start_sample);
   }
 }

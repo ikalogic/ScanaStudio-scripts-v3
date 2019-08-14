@@ -3,16 +3,16 @@
 <DESCRIPTION>
 gray code support for ScanaStudio.
 </DESCRIPTION>
-<VERSION> 1.1 </VERSION>
+<VERSION> 0.3 </VERSION>
 <AUTHOR_NAME>	Juille Neil, Ibrahim KAMAL	</AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/ </HELP_URL>
 <COPYRIGHT> Copyright 2019 Ikalogic SAS </COPYRIGHT>
 <LICENSE>	This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-	V1.1: Added CSV plotting option
-	V1.0: Initial release and create builder demo
-	V1.1: Decode signial
+	V0.3: Added dec_item_end() for each dec_item_new().
+	V0.2: Added CSV plotting option
+	V0.1: Initial release and create builder demo
 </RELEASE_NOTES>
 */
 
@@ -338,6 +338,7 @@ function on_decode_signals(resume)
 					ScanaStudio.dec_item_add_content(binary_code.toString(10) + direction_text + encoder_value_text);
 					ScanaStudio.dec_item_add_content(binary_code.toString(10) + direction_text);
 					ScanaStudio.dec_item_add_content(binary_code.toString(10) + direction_short_text);
+					ScanaStudio.dec_item_end();
 
 					if (file_handle >= 0)
 					{
