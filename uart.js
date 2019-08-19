@@ -405,13 +405,14 @@ function add_uart_dec_item(ch, start_edge, value)
         {
             ScanaStudio.dec_item_add_sample_point(start_edge + ((b+0.5) * samples_per_bit),"P");
         }
-
-        ScanaStudio.dec_item_end();
+        
         if (value > 255) value = 255;
         if (value < 0) value = 255;
 
         ScanaStudio.hex_view_add_byte(ch,start_edge,start_edge + (nbits * samples_per_bit) ,value);
     }
+
+    ScanaStudio.dec_item_end();
 }
 
 /*  A helper function add leading "0"s to numbers
