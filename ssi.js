@@ -139,9 +139,9 @@ function add_dec_item(start_sample,end_sample,data,bits)
   if (bits.length > 53)
   {
     ScanaStudio.dec_item_emphasize_error();
-    ScanaStudio.dec_item_end();
     ScanaStudio.console_error_msg("Maximum integer value reached, displayed results may not be correct.", start_sample);
   }
+  ScanaStudio.dec_item_end();
 }
 
 function get_gui_values()
