@@ -275,6 +275,7 @@ function process_i2c_bit(value,sample_index)
           ScanaStudio.dec_item_add_content("0x" + byte.toString(16));
           bit_counter = 0;
           frame_state = I2C.ACK;
+          ScanaStudio.dec_item_end();
           break;
         }
         if (byte == 0) //General call
