@@ -10,8 +10,9 @@
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.5: Added hex view
 V0.2: Added dec_item_end() for each dec_item_new().
-V0.1:  Initial release.
+V0.1: Initial release.
 </RELEASE_NOTES>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 
@@ -23,8 +24,7 @@ function on_draw_gui_decoder()
 {
     ScanaStudio.gui_add_ch_selector("ch","Channel to decode","DMX-512");
 
-
-//for the next release
+    //for the next release
     // ScanaStudio.gui_add_new_selectable_containers_group("select_decoder_option","Select decoder option");
     //     ScanaStudio.gui_add_new_container("Decode and display all the data", true);
     //         ScanaStudio.gui_add_info_label("text");
@@ -36,7 +36,6 @@ function on_draw_gui_decoder()
     //         }
     //     ScanaStudio.gui_end_container();
     // ScanaStudio.gui_end_selectable_containers_group();
-
 
     ScanaStudio.gui_add_hidden_field("baud",250000);
 
@@ -53,7 +52,7 @@ function on_draw_gui_decoder()
 
 function on_eval_gui_decoder()
 {
-//for the next release
+    //for the next release
     // if( Number(ScanaStudio.gui_get_value("select_decoder_option") ) )
     // {
     //     var at_least_one_selected = false;
@@ -72,7 +71,7 @@ function on_eval_gui_decoder()
     //     }
     // }
 
-    if(Number(ScanaStudio.gui_get_value("baud")*8) >= (ScanaStudio.get_capture_sample_rate()) )
+    if (Number(ScanaStudio.gui_get_value("baud")*8) >= (ScanaStudio.get_capture_sample_rate()))
     {
         return "Sampling rate is too low compared to DMX-512 baudrate (250kb/s). Sampling rate should be at least 8 times greater than the bauderate.";
     }
@@ -115,7 +114,6 @@ const   ENUM_STATE_BREAK    = 0,
 //for the next release
 // const NBR_MAX_CHANNEL = 30;//512;
 
-
 const   COLOR_T_1    = "#3399CC",
         COLOR_T_2    = "#339999",
         COLOR_C_1    = "#5BC1F4",
@@ -125,8 +123,9 @@ const   COLOR_T_1    = "#3399CC",
 
 function reload_dec_gui_values()
 {
-    channel = Number(ScanaStudio.gui_get_value("ch") );
-//for the next release
+    channel = Number(ScanaStudio.gui_get_value("ch"));
+
+    //for the next release
     // select_decoder = Number(ScanaStudio.gui_get_value("select_decoder_option") );
     // list_channel = [];
     // if(select_decoder == 1)
@@ -141,8 +140,7 @@ function reload_dec_gui_values()
     // }
 }
 
-
-function on_decode_signals(resume)
+function on_decode_signals (resume)
 {
     if (!resume)
     {
@@ -171,14 +169,15 @@ function on_decode_signals(resume)
         }
     }
 
-    for(var j=0; (j<uart_items.length) && (!ScanaStudio.abort_is_requested()); j++)
+    for (var j=0; (j<uart_items.length) && (!ScanaStudio.abort_is_requested()); j++)
     {
         var ignore_item = false;
-        while((last_trs.sample_index < uart_items[j].start_sample_index) && (ScanaStudio.trs_is_not_last(channel)) && (!ScanaStudio.abort_is_requested()))
+
+        while ((last_trs.sample_index < uart_items[j].start_sample_index) && (ScanaStudio.trs_is_not_last(channel)) && (!ScanaStudio.abort_is_requested()))
         {
-            if( (trs.value==1)//start condition is BREAK + MAB
+            if ((trs.value == 1)  // start condition is BREAK + MAB
                 && (trs.sample_index - last_trs.sample_index >= sample_rate*CONST_t_break_min)
-                && (trs.sample_index - last_trs.sample_index <= sample_rate*CONST_t_break_max) )
+                && (trs.sample_index - last_trs.sample_index <= sample_rate*CONST_t_break_max))
             {
                 if(trame_started)//searching for end condition
                 {
@@ -260,16 +259,17 @@ function on_decode_signals(resume)
                                                     "#0000FF",
                                                     ScanaStudio.get_channel_color(channel));
 
-                for(var i=0; (i<trame.length) && (!ScanaStudio.abort_is_requested()); i++)
+                for (var i=0; (i<trame.length) && (!ScanaStudio.abort_is_requested()); i++)
                 {
-                    if(i==0)
+                    if (i==0)
                     {
-                        if( (trame[i].content == "0x00") )
+                        if ((trame[i].content == "0x00"))
                         {
                             ScanaStudio.dec_item_new(channel, trame[i].start_sample_index, trame[i].end_sample_index);
-                            ScanaStudio.dec_item_add_content( "Start" );
+                            ScanaStudio.dec_item_add_content("Start");
                             ScanaStudio.dec_item_end();
-        //for the next release
+
+                            //for the next release
                             // i_ch = 0;
 
                             ScanaStudio.packet_view_add_packet(
@@ -306,6 +306,7 @@ function on_decode_signals(resume)
                         ScanaStudio.dec_item_new(channel,trame[i].start_sample_index,trame[i].end_sample_index);
                         ScanaStudio.dec_item_add_content(trame[i].content);
                         ScanaStudio.dec_item_end();
+                        ScanaStudio.hex_view_add_byte(channel, trame[i].start_sample_index, trame[i].end_sample_index, trame[i].content);
                         ScanaStudio.packet_view_add_packet( false,
                                                             channel,
                                                             trame[i].start_sample_index,
