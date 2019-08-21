@@ -358,8 +358,6 @@ function on_decode_signals(resume)
                                 if( (val < DHTxx.rh_range_min) || (val > DHTxx.rh_range_max) )
                                 {
                                     ScanaStudio.dec_item_emphasize_warning();
-                                    ScanaStudio.dec_item_end();
-
                                     ScanaStudio.packet_view_add_packet(false,
                                         channel,
                                         start_of_step,
@@ -380,25 +378,29 @@ function on_decode_signals(resume)
                                         COLOR_T_RH,
                                         COLOR_C_RH);
                                 }
+
+                                ScanaStudio.dec_item_end();
                             }
-                            else if( state_machine==ENUM_STATE_T_DATA_DEC )
+                            else if (state_machine==ENUM_STATE_T_DATA_DEC)
                             {
                                 var unity = "°C";
                                 var val, val_mod;
-                                if(DHTxx.device_name == DHT11.device_name)
+
+                                if (DHTxx.device_name == DHT11.device_name)
                                 {
                                     val = frame[frame.length-2] + frame[frame.length-1]/100;
                                 }
-                                else if(DHTxx.device_name == DHT22.device_name)
+                                else if (DHTxx.device_name == DHT22.device_name)
                                 {
-                                    val = ( (frame[frame.length-2] & 0x7F)<<8 | frame[frame.length-1] )/10;
-                                    if( (frame[frame.length-2]>>7)==0x01 )
+                                    val = ((frame[frame.length-2] & 0x7F)<<8 | frame[frame.length-1]) / 10;
+
+                                    if ((frame[frame.length-2]>>7)==0x01)
                                     {
                                         val = -val;
                                     }
                                 }
 
-                                switch(temperature_unit)
+                                switch (temperature_unit)
                                 {
                                     default:
                                     case 0://Celsius
@@ -422,7 +424,7 @@ function on_decode_signals(resume)
                                 ScanaStudio.dec_item_add_content("T : " + val + unity);
                                 ScanaStudio.dec_item_add_content(val + unity);
 
-                                if( (val < DHTxx.temp_range_min_C) || (val > DHTxx.temp_range_max_C) )
+                                if ((val < DHTxx.temp_range_min_C) || (val > DHTxx.temp_range_max_C))
                                 {
                                     ScanaStudio.dec_item_emphasize_warning();
                                     ScanaStudio.dec_item_end();
@@ -448,15 +450,17 @@ function on_decode_signals(resume)
                                         COLOR_C_T);
                                 }
 
+                                ScanaStudio.dec_item_end();
                             }
 
                             byte_value = 0;
                             step_cnt = 0;
                             state_machine++;
                         }
-                        else if(state_machine == ENUM_STATE_CHECKSUM)
+                        else if (state_machine == ENUM_STATE_CHECKSUM)
                         {
                             var chk_sum = 0;
+
                             for(var i=0; i<4; i++)
                             {
                                 chk_sum += frame[i];
@@ -465,19 +469,18 @@ function on_decode_signals(resume)
                             chk_sum = chk_sum & 0xFF;
 
                             ScanaStudio.dec_item_new(channel, start_of_step, trs.sample_index);
-                            if(chk_sum == byte_value)
+
+                            if (chk_sum == byte_value)
                             {
                                 ScanaStudio.dec_item_add_content("Check-sum OK " + dec_to_str(byte_value, "0x"));
                                 ScanaStudio.dec_item_add_content(dec_to_str(byte_value, "0x") + " OK");
                                 ScanaStudio.dec_item_add_content(dec_to_str(byte_value, "0x"));
-                                ScanaStudio.dec_item_end();
                             }
                             else
                             {
                                 ScanaStudio.dec_item_add_content("Wrong Check-sum " + dec_to_str(byte_value, "0x") + " should be " + dec_to_str(chk_sum, "0x"));
                                 ScanaStudio.dec_item_add_content("Wrong Check-sum " + dec_to_str(byte_value, "0x"));
                                 ScanaStudio.dec_item_add_content("!" + dec_to_str(byte_value, "0x"));
-                                ScanaStudio.dec_item_end();
 
                                 ScanaStudio.packet_view_add_packet(false,
                                     channel,
@@ -488,11 +491,11 @@ function on_decode_signals(resume)
                                     COLOR_T_ERROR,
                                     COLOR_C_ERROR);
                             }
+
+                            ScanaStudio.dec_item_end();
                             state_machine = ENUM_STATE_WAIT_FOR_START;
                         }
-
-                    }//end if step_cnt == 16
-
+                    }
                 }
                 else
                 {
@@ -507,40 +510,38 @@ function on_decode_signals(resume)
                         COLOR_C_ERROR);
                 }
                 break;
-            }//end ENUM_STATE_RH_DATA_INT or ENUM_STATE_RH_DATA_DEC or ENUM_STATE_T_DATA_INT or ENUM_STATE_T_DATA_DEC or ENUM_STATE_CHECKSUM
-
-        }//end switch
-
+            }
+        }
 
         last_trs = trs;
         trs = ScanaStudio.trs_get_next(channel);
-    }//end while
+    }
 }
-
 
 function on_build_demo_signals()
 {
     var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
     var dhtxx_builder = ScanaStudio.BuilderObject;
-    reload_dec_gui_values();
-    dhtxx_builder.config(channel, DHTxx, ScanaStudio.builder_get_sample_rate());
 
+    reload_dec_gui_values();
+
+    dhtxx_builder.config(channel, DHTxx, ScanaStudio.builder_get_sample_rate());
     dhtxx_builder.put_silence(0.01);
-    while( ScanaStudio.builder_get_samples_acc(channel) < samples_to_build )
+
+    while (ScanaStudio.builder_get_samples_acc(channel) < samples_to_build)
     {
-        var rng_temp = Math.random()*(DHTxx.temp_range_max_C - DHTxx.temp_range_min_C) + DHTxx.temp_range_min_C;
-        var rng_rh = Math.random()*(DHTxx.rh_range_max - DHTxx.rh_range_min) + DHTxx.rh_range_min;
+        var rng_temp = Math.random() * (DHTxx.temp_range_max_C - DHTxx.temp_range_min_C) + DHTxx.temp_range_min_C;
+        var rng_rh = Math.random() * (DHTxx.rh_range_max - DHTxx.rh_range_min) + DHTxx.rh_range_min;
 
         dhtxx_builder.put_frame_device(rng_rh, rng_temp);
-
         dhtxx_builder.put_silence(1);
     }
 }
 
 //Builder object that can be shared to other scripts
-ScanaStudio.BuilderObject = {
-
-    config : function(_ch, _DHTxx, sample_rate)
+ScanaStudio.BuilderObject =
+{
+    config : function (_ch, _DHTxx, sample_rate)
     {
         this.DHTxx = _DHTxx;
         this.ch = _ch;
@@ -550,25 +551,30 @@ ScanaStudio.BuilderObject = {
 
     put_silence : function (duration_s)
     {
-        var samples_count = duration_s*this.sample_rate;
+        var samples_count = duration_s * this.sample_rate;
+
         if (samples_count == 0)
+        {
             samples_count = 1;
+        }
 
         ScanaStudio.builder_add_samples(this.ch, 1, samples_count);
     },
 
     put_start_from_master : function()
     {
-        var wait_for_response_s = Math.random()*(CONST_wait_for_response_max - CONST_wait_for_response_min) + CONST_wait_for_response_min;
+        var wait_for_response_s = Math.random() * (CONST_wait_for_response_max - CONST_wait_for_response_min) + CONST_wait_for_response_min;
         var start_from_master_s;
-        if(this.DHTxx.device_name == DHT11.device_name)
+
+        if (this.DHTxx.device_name == DHT11.device_name)
         {
-            start_from_master_s = Math.random()*(CONST_start_from_master_max - CONST_DHT11_start_from_master_min) + CONST_DHT11_start_from_master_min;
+            start_from_master_s = Math.random() * (CONST_start_from_master_max - CONST_DHT11_start_from_master_min) + CONST_DHT11_start_from_master_min;
         }
         else
         {
-            start_from_master_s = Math.random()*(CONST_start_from_master_max - CONST_start_from_master_min) + CONST_start_from_master_min;
+            start_from_master_s = Math.random() * (CONST_start_from_master_max - CONST_start_from_master_min) + CONST_start_from_master_min;
         }
+
         var samples_start_count = start_from_master_s * this.sample_rate;
         var samples_wait_count = wait_for_response_s * this.sample_rate;
         ScanaStudio.builder_add_samples(this.ch, 0, samples_start_count);
@@ -577,8 +583,8 @@ ScanaStudio.BuilderObject = {
 
     put_start_from_device : function()
     {
-        var count_l_s = Math.random()*(CONST_start_from_device_l_max - CONST_start_from_device_l_min) + CONST_start_from_device_l_min;
-        var count_h_s = Math.random()*(CONST_start_from_device_h_max - CONST_start_from_device_h_min) + CONST_start_from_device_h_min;
+        var count_l_s = Math.random() * (CONST_start_from_device_l_max - CONST_start_from_device_l_min) + CONST_start_from_device_l_min;
+        var count_h_s = Math.random() * (CONST_start_from_device_h_max - CONST_start_from_device_h_min) + CONST_start_from_device_h_min;
         var samples_count_l = count_l_s * this.sample_rate;
         var samples_count_h = count_h_s * this.sample_rate;
 
@@ -588,18 +594,18 @@ ScanaStudio.BuilderObject = {
 
     put_bit_from_device : function(bit)
     {
-        var count_start_of_bit = Math.random()*(CONST_bit_low_max - CONST_bit_low_min) + CONST_bit_low_min;
+        var count_start_of_bit = Math.random() * (CONST_bit_low_max - CONST_bit_low_min) + CONST_bit_low_min;
         var samples_count_start_of_bit = count_start_of_bit * this.sample_rate;
         var samples_count_highlvl;
         var rng_len;
 
-        if(bit==0)
+        if (bit == 0)
         {
-            rng_len = Math.random()*(CONST_bit_high_0_max - CONST_bit_high_0_min) + CONST_bit_high_0_min;
+            rng_len = Math.random() * (CONST_bit_high_0_max - CONST_bit_high_0_min) + CONST_bit_high_0_min;
         }
         else
         {
-            rng_len = Math.random()*(CONST_bit_high_1_max - CONST_bit_high_1_min) + CONST_bit_high_1_min;
+            rng_len = Math.random() * (CONST_bit_high_1_max - CONST_bit_high_1_min) + CONST_bit_high_1_min;
         }
 
         samples_count_highlvl = rng_len * this.sample_rate;
@@ -609,9 +615,9 @@ ScanaStudio.BuilderObject = {
 
     put_char_from_device : function(char)
     {
-        for(var i=7; i>=0; i--)
+        for (var i=7; i>=0; i--)
         {
-            this.put_bit_from_device( (char>>i) & 0x01 ); //MSB first
+            this.put_bit_from_device((char >> i) & 0x01);   // MSB first
         }
     },
 
@@ -620,7 +626,7 @@ ScanaStudio.BuilderObject = {
         var eof_s = Math.random()*(CONST_device_eof_max - CONST_device_eof_min) + CONST_device_eof_min;
         var samples_count_eof = eof_s * this.sample_rate;
         ScanaStudio.builder_add_samples(this.ch, 0, samples_count_eof);
-        ScanaStudio.builder_add_samples(this.ch, 1, 1);//Release the channel
+        ScanaStudio.builder_add_samples(this.ch, 1, 1);     // Release the channel
     },
 
     put_frame_device : function(relative_humidity, temperature_C)
@@ -631,17 +637,16 @@ ScanaStudio.BuilderObject = {
         var T_dec = 0;
         var chk_sum = 0;
 
-        if(relative_humidity>100)
+        if (relative_humidity>100)
         {
             relative_humidity = 100;
         }
-        if(relative_humidity<0)
+        if (relative_humidity<0)
         {
             relative_humidity = 0;
         }
 
-
-        if(DHTxx.device_name == DHT11.device_name)
+        if (DHTxx.device_name == DHT11.device_name)
         {
             RH_int = Math.floor(relative_humidity);
             RH_dec = Math.floor(relative_humidity*100 - RH_int*100);
@@ -649,56 +654,49 @@ ScanaStudio.BuilderObject = {
             T_int = Math.floor(temperature_C);
             T_dec = Math.floor( temperature_C*100 - T_int*100);
         }
-        else if(DHTxx.device_name == DHT22.device_name)
+        else if (DHTxx.device_name == DHT22.device_name)
         {
-            RH_int = (Math.floor(relative_humidity*10) >> 8) & 0xFF;
-            RH_dec = Math.floor(relative_humidity*10) & 0xFF;
+            RH_int = (Math.floor(relative_humidity * 10) >> 8) & 0xFF;
+            RH_dec = Math.floor(relative_humidity * 10) & 0xFF;
 
-            if(temperature_C<0)
+            if (temperature_C < 0)
             {
                 temperature_C = -temperature_C;
-                T_int = (Math.floor(temperature_C*10) >> 8) & 0x7F;
+                T_int = (Math.floor(temperature_C * 10) >> 8) & 0x7F;
                 T_int |= 0x80;
-                T_dec = Math.floor(temperature_C*10) & 0xFF;
+                T_dec = Math.floor(temperature_C * 10) & 0xFF;
             }
             else
             {
-                T_int = (Math.floor(temperature_C*10) >> 8) & 0x7F;
-                T_dec = Math.floor(temperature_C*10) & 0xFF;
+                T_int = (Math.floor(temperature_C * 10) >> 8) & 0x7F;
+                T_dec = Math.floor(temperature_C * 10) & 0xFF;
             }
         }
-
-
 
         chk_sum = RH_int + RH_dec + T_int + T_dec;
         chk_sum = chk_sum & 0xFF;
 
-
         this.put_start_from_master();
-
         this.put_start_from_device();
-
         this.put_char_from_device(RH_int);
         this.put_char_from_device(RH_dec);
         this.put_char_from_device(T_int);
         this.put_char_from_device(T_dec);
         this.put_char_from_device(chk_sum);
-
         this.put_eof_from_device();
     },
 };
 
-function dec_to_str(dec, prefix)
+function dec_to_str (dec, prefix)
 {
     var str = "";
     str += prefix;
 
-    if(dec<16)
+    if (dec < 16)
     {
-        str+="0";
+        str += "0";
     }
 
     str += dec.toString(16).toUpperCase();
-
     return str;
 }
