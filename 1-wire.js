@@ -3,7 +3,7 @@
 <DESCRIPTION>
 1-Wire protocol analyzer. Decodes Reset, presence and byte fields.
 </DESCRIPTION>
-<VERSION> 0.2 </VERSION>
+<VERSION> 0.5 </VERSION>
 <AUTHOR_NAME> Ibrahim Kamal </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/1-Wire-bus-analyzer-documentation </HELP_URL>
