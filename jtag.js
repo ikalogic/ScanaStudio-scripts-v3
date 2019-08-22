@@ -9,14 +9,14 @@
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
-<HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/JTAG-ScanaStudio-script-documentation </HELP_URL>
+<HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <RELEASE_NOTES>
+V0.3: Change url and added packet view.
 V0.2: Added dec_item_end() for each dec_item_new().
 V0.1: Initial release.
 </RELEASE_NOTES>
 */
 
-//Type "template..." in Atom.io editor (with ScanaStudio plugin) to generate code examples.
 function on_draw_gui_decoder()
 {
     ScanaStudio.gui_add_ch_selector("ch_tck","TCK (test clock)","TCK");
@@ -282,6 +282,25 @@ function add_dec_item_value_tdio(ch_td, start_sample, end_sample, sample_pt, td_
     }
 
     ScanaStudio.dec_item_end();
+
+    var packet_name = (ch_td == ch_tdo) ?"TDO":"TDI";
+    if(state_machine >= ENUM_SELECT_IR_SCAN)
+    {
+        packet_name += " IR";
+    }
+    else
+    {
+        packet_name += " DR";
+    }
+
+    ScanaStudio.packet_view_add_packet( true,
+                                        ch_td,
+                                        start_sample,
+                                        end_sample,
+                                        packet_name,
+                                        str_value,
+                                        ScanaStudio.get_channel_color(ch_td),
+                                        "#5BC1C1");
 }
 
 function on_decode_signals(resume)

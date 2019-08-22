@@ -1,7 +1,7 @@
 /* Protocol meta info:
 <NAME> FDX-B </NAME>
 <DESCRIPTION>
-My protocol can decode pretty much any logic signal!
+This protocol can decode FDX-B Animal Identification signals. Refer to ISO 11784/5 for more information.
 </DESCRIPTION>
 <VERSION> 0.2 </VERSION>
 <AUTHOR_NAME>  Victor Canoz </AUTHOR_NAME>
