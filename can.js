@@ -3,16 +3,17 @@
 <DESCRIPTION>
 CAN bus protocol analyzer
 </DESCRIPTION>
-<VERSION> 0.3 </VERSION>
+<VERSION> 0.5 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Nicolas Bastit </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com, n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.3: Added dec_item_end() for each dec_item_new().
-V0.2:  Added error detection, added GUI validation, fixed bit stuffing errors.
-V0.1:  Initial release.
+V0.5: Added packet view
+V0.3: Added dec_item_end() for each dec_item_new()
+V0.2: Added error detection, added GUI validation, fixed bit stuffing errors
+V0.1: Initial release
 </RELEASE_NOTES>
 */
 
@@ -20,7 +21,6 @@ V0.1:  Initial release.
 // TODO in future releases
 // documentation
 // Add trigger support
-// Hex and Packet view
 */
 
 //Decoder GUI
@@ -100,6 +100,8 @@ Bit flow through the decoder:
 function on_decode_signals(resume)
 {
   var is_stuffed_bit;
+  var start_sample, end_sample;
+
   if (!resume) //If resume == false, it's the first call to this function.
   {
       //initialization code goes here, ex:
@@ -133,11 +135,8 @@ function on_decode_signals(resume)
       ScanaStudio.trs_reset(ch);
   }
 
-
-
   while (ScanaStudio.abort_is_requested() == false)
   {
-
     if (!ScanaStudio.trs_is_not_last(ch))
     {
       break;
@@ -303,6 +302,7 @@ var CAN =
   SEEK_CRC_DEL     : 100,
   SEEK_ACK         : 110,
 };
+
 var can_state_machine = CAN.SEEK_IDLE;
 var can_destuffed_bit_counter = 0; //count real bit (discarding stuffed bits)
 var can_bits = [];
@@ -312,6 +312,7 @@ var is_can_fd_frame;
 var is_fd_mode;
 var last_packet_boudry; //TODO
 var last_processed_bit;
+
 function can_process_bit(b,sample_point,is_stuffed_bit)
 {
   var i;
@@ -321,14 +322,16 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
   }
   if (is_stuffed_bit && (last_processed_bit == b)) //Bit stuffing error!
   {
-    ScanaStudio.dec_item_new( ch,
-                                  sample_point - sample_point_offset_std + dec_item_margin,
-                                  sample_point - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
+
+    start_sample = sample_point - sample_point_offset_std + dec_item_margin;
+    end_sample = sample_point - sample_point_offset_std + samples_per_bit_std - dec_item_margin;
+    ScanaStudio.dec_item_new( ch, start_sample,end_sample);
     ScanaStudio.dec_item_add_content("Stuffing error");
     ScanaStudio.dec_item_add_content("Error");
     ScanaStudio.dec_item_add_content("!E");
     ScanaStudio.dec_item_emphasize_error();
     ScanaStudio.dec_item_end();
+    ScanaStudio.packet_view_add_packet(true, ch, start_sample, end_sample, "Error", "Stuffing error", ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
   }
   last_processed_bit = b;
   crc_acc(b,is_stuffed_bit);
@@ -356,15 +359,19 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         stuffing_check(0);
         crc_reset();
         crc_acc(0,false);
+
         //Add start bit item
-        ScanaStudio.dec_item_new( ch,
-                                  sample_point - sample_point_offset_std + dec_item_margin,
-                                  sample_point - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
+        start_sample = sample_point - sample_point_offset_std + dec_item_margin;
+        end_sample = sample_point - sample_point_offset_std + samples_per_bit_std - dec_item_margin;
+        ScanaStudio.dec_item_new( ch, start_sample, end_sample);
         ScanaStudio.dec_item_add_content("Start Of Frame");
         ScanaStudio.dec_item_add_content("SOF");
         ScanaStudio.dec_item_add_content("S");
         ScanaStudio.dec_item_add_sample_point(sample_point,"U");
         ScanaStudio.dec_item_end();
+        ScanaStudio.packet_view_add_packet(true, ch, start_sample, -1, "CAN", "CH" + (ch + 1),
+                                           ScanaStudio.get_channel_color(ch), ScanaStudio.get_channel_color(ch));
+        ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "SOF", "", ScanaStudio.PacketColors.Wrap.Title, ScanaStudio.PacketColors.Wrap.Content);
 
         can_bits = [];
         fd_mode = false;
@@ -388,64 +395,78 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         can_r0 = interpret_can_bits(can_bits,13,1);
 
         //Base ID field
-        ScanaStudio.dec_item_new( ch,
-                                  can_base_id.start - sample_point_offset_std + dec_item_margin,
-                                  can_base_id.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
+        start_sample = can_base_id.start - sample_point_offset_std + dec_item_margin;
+        end_sample = can_base_id.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin;
+        ScanaStudio.dec_item_new( ch, start_sample, end_sample);
         ScanaStudio.dec_item_add_content("Base ID = " + format_content(can_base_id.value,id_format,11));
         ScanaStudio.dec_item_add_content(format_content(can_base_id.value,id_format,11));
         add_can_bits_sampling_points(can_bits,0,11);
         ScanaStudio.dec_item_end();
+        ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "Base ID", format_content(can_base_id.value,id_format,11),
+                                           ScanaStudio.PacketColors.Head.Title, ScanaStudio.PacketColors.Head.Content);
 
         //RTR / R1 field
-        ScanaStudio.dec_item_new( ch,
-                                    can_rtr_r1.start - sample_point_offset_std + dec_item_margin,
-                                    can_rtr_r1.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
+        start_sample = can_rtr_r1.start - sample_point_offset_std + dec_item_margin;
+        end_sample = can_rtr_r1.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin;
+        ScanaStudio.dec_item_new( ch, start_sample, end_sample);
         add_can_bits_sampling_points(can_bits,11,1);
         if (can_ide.value == 0)
         {
           if (can_r0.value == 0)
           {
             ScanaStudio.dec_item_add_content("RTR");
+            ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "RTR", "",
+                                               ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
             can_state_machine = CAN.SEEK_CAN_DLC;
           }
           else
           {
             is_can_fd_frame = true;
             ScanaStudio.dec_item_add_content("R1");
+            ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "R1", "",
+                                               ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
             can_state_machine = CAN.SEEK_FD_R0_BRS;
           }
         }
         else
         {
           ScanaStudio.dec_item_add_content("SRR");
+          ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "SRR", "",
+                                             ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
           can_state_machine = CAN.SEEK_IDE;
         }
-
         ScanaStudio.dec_item_end();
+
         //IDE Field
-        ScanaStudio.dec_item_new( ch,
-                                    can_ide.start - sample_point_offset_std + dec_item_margin,
-                                    can_ide.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
+        start_sample = can_ide.start - sample_point_offset_std + dec_item_margin;
+        end_sample = can_ide.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin;
+        ScanaStudio.dec_item_new( ch, start_sample, end_sample);
         add_can_bits_sampling_points(can_bits,12,1);
         ScanaStudio.dec_item_add_content("IDE = " + can_ide.value.toString());
         ScanaStudio.dec_item_add_content("IDE");
         ScanaStudio.dec_item_end();
+        ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "IDE", can_ide.value.toString(),
+                                           ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
 
         //R0 - EDL (if not IDE)
         if (can_state_machine != CAN.SEEK_IDE)
         {
-          ScanaStudio.dec_item_new( ch,
-          can_r0.start - sample_point_offset_std + dec_item_margin,
-          can_r0.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
+          start_sample = can_r0.start - sample_point_offset_std + dec_item_margin;
+          end_sample = can_r0.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin;
+          ScanaStudio.dec_item_new( ch, start_sample, end_sample);
           if (can_r0.value == 0)
           {
             ScanaStudio.dec_item_add_content("R0 = " + can_r0.value.toString());
             ScanaStudio.dec_item_add_content("R0");
+            ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "R0", can_r0.value.toString(),
+                                               ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
           }
           else
           {
             ScanaStudio.dec_item_add_content("EDL = " + can_r0.value.toString());
             ScanaStudio.dec_item_add_content("EDL");
+            ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "EDL", can_r0.value.toString(),
+                                               ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
           }
           add_can_bits_sampling_points(can_bits,13,1);
           ScanaStudio.dec_item_end();
@@ -471,56 +492,65 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         can_r0 = interpret_can_bits(can_bits,20,1);
 
         //Base ID field
-        ScanaStudio.dec_item_new( ch,
-                                  can_id_ext.start - sample_point_offset_std + dec_item_margin,
-                                  can_id_ext.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
+        start_sample = can_id_ext.start - sample_point_offset_std + dec_item_margin;
+        end_sample = can_id_ext.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin;
+        ScanaStudio.dec_item_new( ch, start_sample, end_sample);
         ScanaStudio.dec_item_add_content("Full Extended ID = "+  format_content(can_full_id,id_format,29) + " (" + format_content(can_base_id.value,id_format,11) + " + " + format_content(can_id_ext.value,id_format,18) + ")");
         ScanaStudio.dec_item_add_content("Full ID " + format_content(can_full_id,id_format,29));
         ScanaStudio.dec_item_add_content(format_content(can_full_id,id_format,29));
         ScanaStudio.dec_item_add_content("ID Ext.");
         add_can_bits_sampling_points(can_bits,0,18);
         ScanaStudio.dec_item_end();
+        ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "Full ID", format_content(can_full_id,id_format,29),
+                                           ScanaStudio.PacketColors.Head.Title, ScanaStudio.PacketColors.Head.Content);
 
         if (can_r1_edl.value == 0) //CAN Frame
         {
           //RTR
-          ScanaStudio.dec_item_new( ch,
-                                    can_rtr_r1.start - sample_point_offset_std + dec_item_margin,
-                                    can_rtr_r1.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
+          start_sample = can_rtr_r1.start - sample_point_offset_std + dec_item_margin;
+          end_sample = can_rtr_r1.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin;
+          ScanaStudio.dec_item_new( ch, start_sample, end_sample);
           add_can_bits_sampling_points(can_bits,18,1);
           ScanaStudio.dec_item_add_content("RTR = " + can_rtr_r1.value.toString());
           ScanaStudio.dec_item_add_content("RTR");
           ScanaStudio.dec_item_end();
-
+          ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "RTR", can_rtr_r1.value.toString(),
+                                             ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
           //R1
-          ScanaStudio.dec_item_new( ch,
-                                    can_r1_edl.start - sample_point_offset_std + dec_item_margin,
-                                    can_r1_edl.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
+          start_sample = can_r1_edl.start - sample_point_offset_std + dec_item_margin;
+          end_sample = can_r1_edl.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin;
+          ScanaStudio.dec_item_new( ch, start_sample, end_sample);
           add_can_bits_sampling_points(can_bits,19,1);
           ScanaStudio.dec_item_add_content("R1 = " + can_r1_edl.value.toString());
           ScanaStudio.dec_item_add_content("R1");
           ScanaStudio.dec_item_end();
+          ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "R1", can_r1_edl.value.toString(),
+                                             ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
         }
         else //CAN FD frame
         {
           is_can_fd_frame = true;
           //R1
-          ScanaStudio.dec_item_new( ch,
-                                    can_rtr_r1.start - sample_point_offset_std + dec_item_margin,
-                                    can_rtr_r1.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
+          start_sample = can_rtr_r1.start - sample_point_offset_std + dec_item_margin;
+          end_sample = can_rtr_r1.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin;
+          ScanaStudio.dec_item_new( ch, start_sample, end_sample);
           add_can_bits_sampling_points(can_bits,18,1);
           ScanaStudio.dec_item_add_content("R1 = " + can_rtr_r1.value.toString());
           ScanaStudio.dec_item_add_content("R1");
           ScanaStudio.dec_item_end();
+          ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "R1", can_rtr_r1.value.toString(),
+                                             ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
 
           //EDL
-          ScanaStudio.dec_item_new( ch,
-                                    can_r1_edl.start - sample_point_offset_std + dec_item_margin,
-                                    can_r1_edl.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
+          start_sample = can_r1_edl.start - sample_point_offset_std + dec_item_margin;
+          end_sample = can_r1_edl.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin;
+          ScanaStudio.dec_item_new( ch, start_sample, end_sample);
           add_can_bits_sampling_points(can_bits,19,1);
           ScanaStudio.dec_item_add_content("EDL = " + can_r1_edl.value.toString());
           ScanaStudio.dec_item_add_content("EDL");
           ScanaStudio.dec_item_end();
+          ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "EDL", can_r1_edl.value.toString(),
+                                             ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
         }
 
         if (is_can_fd_frame)
@@ -532,14 +562,15 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         else
         {
           //R0
-          ScanaStudio.dec_item_new( ch,
-                                    can_r0.start - sample_point_offset_std + dec_item_margin,
-                                    can_r0.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
+          start_sample = can_r0.start - sample_point_offset_std + dec_item_margin;
+          end_sample = can_r0.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin;
+          ScanaStudio.dec_item_new( ch, start_sample, end_sample);
           add_can_bits_sampling_points(can_bits,20,1);
           ScanaStudio.dec_item_add_content("R0 = " + can_r0.value.toString());
           ScanaStudio.dec_item_add_content("R0");
           ScanaStudio.dec_item_end();
-
+          ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "R0", can_r0.value.toString(),
+                                             ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
           can_state_machine = CAN.SEEK_CAN_DLC;
           can_destuffed_bit_counter = 0;
           can_bits = [];
@@ -555,13 +586,15 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         can_len = can_dlc.value;
         if (can_len > 8) can_len = 8;
 
-        ScanaStudio.dec_item_new( ch,
-                                  can_dlc.start - sample_point_offset_std + dec_item_margin,
-                                  can_dlc.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
+        start_sample = can_dlc.start - sample_point_offset_std + dec_item_margin;
+        end_sample = can_dlc.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin;
+        ScanaStudio.dec_item_new( ch, start_sample, end_sample);
         ScanaStudio.dec_item_add_content("DLC = " + can_dlc.value.toString());
         ScanaStudio.dec_item_add_content(can_dlc.value.toString());
         add_can_bits_sampling_points(can_bits,0,4);
         ScanaStudio.dec_item_end();
+        ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "DLC", can_dlc.value.toString(),
+                                           ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
 
         if (can_len > 0)
         {
@@ -592,21 +625,24 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         can_r0 = interpret_can_bits(can_bits,0,1);
         can_brs = interpret_can_bits(can_bits,1,1);
 
-        ScanaStudio.dec_item_new( ch,
-                                can_r0.start - sample_point_offset_std + dec_item_margin,
-                                can_r0.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
+        start_sample = can_r0.start - sample_point_offset_std + dec_item_margin;
+        end_sample = can_r0.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin;
+        ScanaStudio.dec_item_new( ch, start_sample, end_sample);
         ScanaStudio.dec_item_add_content("R0");
         add_can_bits_sampling_points(can_bits,0,1);
         ScanaStudio.dec_item_end();
-
+        ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "R0", "",
+                                           ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
         if (can_brs.value == 1)
         {
-          ScanaStudio.dec_item_new( ch,
-                                    can_brs.start - sample_point_offset_std + (samples_per_brs_bit/50),
-                                    can_brs.end - sample_point_offset_std + samples_per_brs_bit - (samples_per_brs_bit/50));
+          start_sample = can_brs.start - sample_point_offset_std + (samples_per_brs_bit/50);
+          end_sample = can_brs.end - sample_point_offset_std + samples_per_brs_bit - (samples_per_brs_bit/50);
+          ScanaStudio.dec_item_new( ch, start_sample, end_sample);
           ScanaStudio.dec_item_add_content("BRS = 1 (Switching bit rate)");
           ScanaStudio.dec_item_add_content("BRS = 1");
           ScanaStudio.dec_item_end();
+          ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "BRS", "Switching bit rate",
+                                             ScanaStudio.PacketColors.Misc.Title, ScanaStudio.PacketColors.Misc.Content);
 
           //scanastudio.console_info_msg("Switching to high bit rate on next bit, at cursor = " + sample_point,sample_point);
           switch_to_high_baud_rate = true;
@@ -616,11 +652,13 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         }
         else
         {
-          ScanaStudio.dec_item_new( ch,
-                                    can_brs.start - sample_point_offset_std + dec_item_margin,
-                                    can_brs.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
+          start_sample = can_brs.start - sample_point_offset_std + dec_item_margin;
+          end_sample = can_brs.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin;
+          ScanaStudio.dec_item_new( ch, start_sample, end_sample);
           ScanaStudio.dec_item_add_content("BRS = 0 (No bitrate switch)");
           ScanaStudio.dec_item_add_content("BRS = 0");
+          ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "BRS", "No bitrate switch",
+                                             ScanaStudio.PacketColors.Misc.Title, ScanaStudio.PacketColors.Misc.Content);
         }
         add_can_bits_sampling_points(can_bits,1,1);
         ScanaStudio.dec_item_end();
@@ -638,9 +676,9 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         can_dlc = interpret_can_bits(can_bits,1,4);
         can_len = get_data_len(can_dlc.value);
 
-        ScanaStudio.dec_item_new( ch,
-                                  can_esi.start - sample_point_offset + dec_item_margin,
-                                  can_esi.end - sample_point_offset + samples_per_bit - dec_item_margin);
+        start_sample = can_esi.start - sample_point_offset + dec_item_margin;
+        end_sample = can_esi.end - sample_point_offset + samples_per_bit - dec_item_margin;
+        ScanaStudio.dec_item_new( ch, start_sample, end_sample);
         ScanaStudio.dec_item_add_content("ESI = " + can_esi.value.toString());
         ScanaStudio.dec_item_add_content("ESI");
         if (can_esi.value == 0)
@@ -649,16 +687,20 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         }
         add_can_bits_sampling_points(can_bits,0,1);
         ScanaStudio.dec_item_end();
+        ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "ESI", can_esi.value.toString(),
+                                           ScanaStudio.PacketColors.Misc.Title, ScanaStudio.PacketColors.Misc.Content);
 
-        ScanaStudio.dec_item_new( ch,
-                                  can_dlc.start - sample_point_offset + dec_item_margin,
-                                  can_dlc.end - sample_point_offset + samples_per_bit - dec_item_margin);
+        start_sample = can_dlc.start - sample_point_offset + dec_item_margin;
+        end_sample = can_dlc.end - sample_point_offset + samples_per_bit - dec_item_margin;
+        ScanaStudio.dec_item_new( ch, start_sample, end_sample);
         ScanaStudio.dec_item_add_content("DLC = " + can_dlc.value.toString() + ", Data length = " + can_len.toString());
         ScanaStudio.dec_item_add_content("Length = " + can_len.toString());
         ScanaStudio.dec_item_add_content(can_len.toString());
         add_can_bits_sampling_points(can_bits,1,4);
         ScanaStudio.dec_item_end();
-
+        ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "DLC",
+                                           "DLC = " + can_dlc.value.toString() + ", Data length = " + can_len.toString(),
+                                           ScanaStudio.PacketColors.Misc.Title, ScanaStudio.PacketColors.Misc.Content);
         if (can_len > 0)
         {
           can_state_machine = CAN.SEEK_DATA;
@@ -688,14 +730,15 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         can_destuffed_bit_counter = 0;
         can_data = interpret_can_bits(can_bits,0,8);
 
-        ScanaStudio.dec_item_new( ch,
-                                  can_data.start - sample_point_offset + dec_item_margin,
-                                  can_data.end - sample_point_offset + samples_per_bit - dec_item_margin);
+        start_sample = can_data.start - sample_point_offset + dec_item_margin;
+        end_sample = can_data.end - sample_point_offset + samples_per_bit - dec_item_margin;
+        ScanaStudio.dec_item_new( ch, start_sample, end_sample);
         ScanaStudio.dec_item_add_content("DATA = " + format_content(can_data.value,data_format,8));
         ScanaStudio.dec_item_add_content(format_content(can_data.value,data_format,8));
         add_can_bits_sampling_points(can_bits,0,8);
         ScanaStudio.dec_item_end();
-
+        ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "Data", format_content(can_data.value,data_format,8),
+                                           ScanaStudio.PacketColors.Data.Title, ScanaStudio.PacketColors.Data.Content);
         can_byte_counter++;
         can_bits = [];
         if (can_byte_counter >= can_len)
@@ -730,18 +773,25 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         can_destuffed_bit_counter = 0;
         can_crc = interpret_can_bits(can_bits,0,crc_len);
 
-        ScanaStudio.dec_item_new( ch,
-                                  can_crc.start - sample_point_offset + dec_item_margin,
-                                  can_crc.end - sample_point_offset + samples_per_bit - dec_item_margin);
+        start_sample = can_crc.start - sample_point_offset + dec_item_margin;
+        end_sample = can_crc.end - sample_point_offset + samples_per_bit - dec_item_margin;
+        ScanaStudio.dec_item_new( ch, start_sample, end_sample);
+
         if (can_crc.value == recalculated_crc)
         {
           ScanaStudio.dec_item_emphasize_success();
           ScanaStudio.dec_item_add_content("CRC = " + format_content(can_crc.value,data_format,crc_len) + " OK!");
+          ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "CRC",
+                                             format_content(can_crc.value,data_format,crc_len) + " OK",
+                                             ScanaStudio.PacketColors.Check.Title, ScanaStudio.PacketColors.Check.Content);
         }
         else
         {
           ScanaStudio.dec_item_emphasize_warning();
           ScanaStudio.dec_item_add_content("CRC = " + format_content(can_crc.value,data_format,crc_len) + ", should be 0x" + recalculated_crc.toString(16));
+          ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample,
+                                             "CRC", format_content(can_crc.value, data_format, crc_len) + ", should be 0x" + recalculated_crc.toString(16),
+                                             ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
         }
         ScanaStudio.dec_item_add_content(format_content(can_crc.value,data_format,crc_len));
         add_can_bits_sampling_points(can_bits,0,crc_len);
@@ -758,19 +808,20 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
       {
         can_destuffed_bit_counter = 0;
         can_crc_del = interpret_can_bits(can_bits,0,1);
+
         //CRC Delimiter
         if (is_fd_mode)
         {
-          ScanaStudio.dec_item_new( ch,
-                                    can_crc_del.start - sample_point_offset + dec_item_margin,
-                                    can_crc_del.end - sample_point_offset + samples_per_fd_crc_del_bit - dec_item_margin);
+          start_sample = can_crc_del.start - sample_point_offset + dec_item_margin;
+          end_sample = can_crc_del.end - sample_point_offset + samples_per_fd_crc_del_bit - dec_item_margin;
         }
         else
         {
-          ScanaStudio.dec_item_new( ch,
-                                    can_crc_del.start - sample_point_offset_std + dec_item_margin,
-                                    can_crc_del.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
+          start_sample = can_crc_del.start - sample_point_offset_std + dec_item_margin;
+          end_sample = can_crc_del.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin;
         }
+
+        ScanaStudio.dec_item_new( ch, start_sample, end_sample);
 
         if (can_crc_del.value == 1)
         {
@@ -785,6 +836,7 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
           ScanaStudio.dec_item_add_content("!CRC Del.");
           ScanaStudio.dec_item_add_content("!Del.");
           ScanaStudio.dec_item_emphasize_error();
+          ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "Delimiter", "CRC Delimiter missing", ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
         }
         add_can_bits_sampling_points(can_bits,0,1);
         ScanaStudio.dec_item_end();
@@ -808,14 +860,17 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         can_eof = interpret_can_bits(can_bits,2,1);
 
         //ACK
-        ScanaStudio.dec_item_new( ch,
-                                  can_ack.start - sample_point_offset_std + dec_item_margin,
-                                  can_ack.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
+        start_sample = can_ack.start - sample_point_offset_std + dec_item_margin;
+        end_sample = can_ack.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin;
+        ScanaStudio.dec_item_new( ch, start_sample, end_sample);
+
         if (can_ack.value == 0)
         {
           ScanaStudio.dec_item_add_content("Acknowledge");
           ScanaStudio.dec_item_add_content("ACK");
           ScanaStudio.dec_item_add_content("A");
+          ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "ACK", "",
+                                             ScanaStudio.PacketColors.Check.Title, ScanaStudio.PacketColors.Check.Content);
         }
         else
         {
@@ -823,15 +878,18 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
           ScanaStudio.dec_item_add_content("NO ACK");
           ScanaStudio.dec_item_add_content("!A");
           ScanaStudio.dec_item_emphasize_warning();
+          ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "NACK", "",
+                                             ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
         }
 
         add_can_bits_sampling_points(can_bits,0,1);
         ScanaStudio.dec_item_end();
 
         //ACK DEL
-        ScanaStudio.dec_item_new( ch,
-                                  can_ack_del.start - sample_point_offset_std + dec_item_margin,
-                                  can_ack_del.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
+        start_sample = can_ack_del.start - sample_point_offset_std + dec_item_margin;
+        end_sample = can_ack_del.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin;
+        ScanaStudio.dec_item_new( ch, start_sample, end_sample);
+
         if (can_ack_del.value == 1)
         {
           ScanaStudio.dec_item_add_content("Acknowledge Delimiter");
@@ -845,20 +903,25 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
           ScanaStudio.dec_item_add_content("!ACK Del.");
           ScanaStudio.dec_item_add_content("!Del.");
           ScanaStudio.dec_item_emphasize_error();
+          ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "Delimiter", "ACK Delimiter missing",
+                                             ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
         }
 
         add_can_bits_sampling_points(can_bits,1,1);
         ScanaStudio.dec_item_end();
 
         //EOF
-        ScanaStudio.dec_item_new( ch,
-                                  can_eof.start - sample_point_offset_std + dec_item_margin,
-                                  can_eof.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin);
+        start_sample = can_eof.start - sample_point_offset_std + dec_item_margin;
+        end_sample = can_eof.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin;
+        ScanaStudio.dec_item_new( ch, start_sample, end_sample);
+
         if (can_eof.value == 1)
         {
           ScanaStudio.dec_item_add_content("End of Frame");
           ScanaStudio.dec_item_add_content("EOF");
           ScanaStudio.dec_item_add_content("E");
+          ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "EOF", "",
+                                             ScanaStudio.PacketColors.Wrap.Title, ScanaStudio.PacketColors.Wrap.Content);
         }
         else
         {
@@ -866,6 +929,9 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
           ScanaStudio.dec_item_add_content("!EOF");
           ScanaStudio.dec_item_add_content("!E");
           ScanaStudio.dec_item_emphasize_error();
+
+          ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "EOF missing", "",
+                                             ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
         }
 
         add_can_bits_sampling_points(can_bits,2,1);
