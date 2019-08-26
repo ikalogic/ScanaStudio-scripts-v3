@@ -11,10 +11,11 @@ Serial UART (Universal asynchronous receiver/transmitter) Protocol Decoder.
 <COPYRIGHT> Copyright 2019 Ikalogic SAS </COPYRIGHT>
 <LICENSE>	This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V1.51: Fixed bug that could cause decoder to freeze
 V1.50: Added dec_item_end() for each dec_item_new().
 V1.49: Fixed sampling points drawing
 V1.48: Added trigger, added GUI validation
-V1.47: Fixed freez condition.
+V1.47: Fixed freeze condition.
 V1.46: Fixed a bug that caused start bit to be drawn at the end of a capture
 V1.45: Migrated this script to new V3 API.
 V1.44: Improved demo signals builder performance
@@ -155,6 +156,7 @@ function on_decode_signals(resume)
     var bit_value;
     var parity_value;
 
+    var end_loop = false;
     var stop_bits_ok;
     if (!resume) //If resume == false, it's the first call to this function.
     {
@@ -236,6 +238,8 @@ function on_decode_signals(resume)
                 }
                 else {
                     //ScanaStudio.console_info_msg("Waiting for start bit",ScanaStudio.get_available_samples(channel));
+                    end_loop = true;
+                    break;
                 }
             case 2:
                 //Wait until there is enough samples to capture a whole word
@@ -339,7 +343,7 @@ function on_decode_signals(resume)
         //if we reach this point, it means there is no enough data to continue
         //(even if we may have not reached the last transition)
         //there is no sense to continue decoding.
-        if (state_machine == 2)
+        if ((state_machine == 2) || (end_loop))
         {
             break;
         }
@@ -405,7 +409,7 @@ function add_uart_dec_item(ch, start_edge, value)
         {
             ScanaStudio.dec_item_add_sample_point(start_edge + ((b+0.5) * samples_per_bit),"P");
         }
-        
+
         if (value > 255) value = 255;
         if (value < 0) value = 255;
 
