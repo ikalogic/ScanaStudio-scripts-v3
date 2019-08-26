@@ -143,8 +143,10 @@ function on_decode_signals (resume)
                     }
 
                     ScanaStudio.dec_item_end();
-                    ScanaStudio.packet_view_add_packet(true, ch, -1, -1, "1-Wire", "CH" + (ch + 1), ScanaStudio.get_channel_color(ch), ScanaStudio.get_channel_color(ch));
-                    ScanaStudio.packet_view_add_packet(false, ch, last_falling_edge, last_rising_edge, "Reset", "", "#FF66CC", "#FF99CC");
+                    ScanaStudio.packet_view_add_packet(true, ch, -1, -1, "1-Wire", "CH" + (ch + 1), ScanaStudio.get_channel_color(ch),
+                                                       ScanaStudio.get_channel_color(ch));
+                    ScanaStudio.packet_view_add_packet(false, ch, last_falling_edge, last_rising_edge, "Reset", "",
+                                                       ScanaStudio.PacketColors.Wrap.Title, ScanaStudio.PacketColors.Wrap.Content);
                 }
                 else if (device_present == true)
                 {
@@ -221,7 +223,8 @@ function on_decode_signals (resume)
                         ScanaStudio.dec_item_add_content("!");
                         ScanaStudio.dec_item_emphasize_warning();
                         ScanaStudio.dec_item_end();
-                        ScanaStudio.packet_view_add_packet(false, ch, last_falling_edge, trs.sample_index, "No Presence", "", "#FF0000", "#FF8080");
+                        ScanaStudio.packet_view_add_packet(false, ch, last_falling_edge, trs.sample_index, "No Presence", "",
+                                                           ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
 
                         last_falling_edge = trs.sample_index;
                         state_machine = 1;
@@ -252,7 +255,8 @@ function on_decode_signals (resume)
                     }
 
                     ScanaStudio.dec_item_end();
-                    ScanaStudio.packet_view_add_packet(false, ch, last_falling_edge, trs.sample_index, "Presence", "", "#FF9966", "#FFCC66");
+                    ScanaStudio.packet_view_add_packet(false, ch, last_falling_edge, trs.sample_index, "Presence", "",
+                                                       ScanaStudio.PacketColors.Head.Title, ScanaStudio.PacketColors.Head.Content);
                 }
             break;
 
@@ -285,7 +289,8 @@ function append_bit (b, falling_edge)
         }
 
         ScanaStudio.dec_item_end();
-        ScanaStudio.packet_view_add_packet(false, ch, byte_start, falling_edge + (bit_sampling_point * 1.25), suffix + byte.toString(format), "", "#33FFFF", "#99FFFF");
+        ScanaStudio.packet_view_add_packet(false, ch, byte_start, falling_edge + (bit_sampling_point * 1.25), "Data", suffix + byte.toString(format),
+                                           ScanaStudio.PacketColors.Data.Title, ScanaStudio.PacketColors.Data.Content);
         ScanaStudio.hex_view_add_byte(ch, byte_start, falling_edge + (bit_sampling_point * 1.25), byte);
 
         bit_counter = 0;
