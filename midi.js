@@ -3,15 +3,16 @@
 <DESCRIPTION>
 MIDI 1.0 protocol
 </DESCRIPTION>
-<VERSION> 0.2 </VERSION>
+<VERSION> 0.5 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.2: Added dec_item_end() for each dec_item_new().
-V0.1: Initial release.
+V0.5: Added packet view
+V0.2: Added dec_item_end() for each dec_item_new()
+V0.1: Initial release
 </RELEASE_NOTES>
 */
 
@@ -21,7 +22,6 @@ V0.1: Initial release.
 TODO:
 * Display format options
 * Document
-* Packet View
 
 Future release (Volunteers welcome!)
 * Create MIDI file from captured data (to be able to play it on PC)
@@ -31,38 +31,38 @@ Future release (Volunteers welcome!)
 //Decoder GUI
 function on_draw_gui_decoder()
 {
-  ScanaStudio.gui_add_ch_selector("ch","Midi channel","MIDI");
-  ScanaStudio.gui_add_new_tab("Advanced options",false);
+    ScanaStudio.gui_add_ch_selector("ch","Midi channel","MIDI");
+    ScanaStudio.gui_add_new_tab("Advanced options",false);
     ScanaStudio.gui_add_baud_selector("baud","BAUD Rate",31250);
     ScanaStudio.gui_add_combo_box("invert","Idle level");
       ScanaStudio.gui_add_item_to_combo_box("Logic 1 (UART default)",true);
       ScanaStudio.gui_add_item_to_combo_box("Logic 0 (Inversed)",false);
-  ScanaStudio.gui_end_tab();
+    ScanaStudio.gui_end_tab();
 
-  //Hiden items for UART decoder
-  ScanaStudio.gui_add_hidden_field("format_hex",0);
-  ScanaStudio.gui_add_hidden_field("format_ascii",0);
-  ScanaStudio.gui_add_hidden_field("format_dec",0);
-  ScanaStudio.gui_add_hidden_field("format_bin",0);
-  ScanaStudio.gui_add_hidden_field("nbits",3);
-  ScanaStudio.gui_add_hidden_field("parity",0);
-  ScanaStudio.gui_add_hidden_field("stop",1);
-  ScanaStudio.gui_add_hidden_field("order",0); //LSB first
+    //Hiden items for UART decoder
+    ScanaStudio.gui_add_hidden_field("format_hex",0);
+    ScanaStudio.gui_add_hidden_field("format_ascii",0);
+    ScanaStudio.gui_add_hidden_field("format_dec",0);
+    ScanaStudio.gui_add_hidden_field("format_bin",0);
+    ScanaStudio.gui_add_hidden_field("nbits",3);
+    ScanaStudio.gui_add_hidden_field("parity",0);
+    ScanaStudio.gui_add_hidden_field("stop",1);
+    ScanaStudio.gui_add_hidden_field("order",0); //LSB first
 }
 
 //Evaluate decoder GUI
 function on_eval_gui_decoder()
 {
-  reload_gui_values();
-  ScanaStudio.set_script_instance_name("MIDI on CH " + ch.toString());
-  return "" //All good.
+    reload_gui_values();
+    ScanaStudio.set_script_instance_name("MIDI on CH " + ch.toString());
+    return "" //All good.
 }
 
 function reload_gui_values()
 {
-  ch = ScanaStudio.gui_get_value("ch");
-  baud = ScanaStudio.gui_get_value("baud");
-  invert = ScanaStudio.gui_get_value("invert");
+    ch = ScanaStudio.gui_get_value("ch");
+    baud = ScanaStudio.gui_get_value("baud");
+    invert = ScanaStudio.gui_get_value("invert");
 }
 
 //Global variables
@@ -103,11 +103,9 @@ function on_decode_signals(resume)
         }
         if (Number(uart_items[i].content) & 0x80) //found
         {
-          ScanaStudio.dec_item_new(ch,uart_items[i].start_sample_index,uart_items[i].end_sample_index);
           midi_status = Number(uart_items[i].content);
           midi_cmd = get_midi_cmd(midi_status);
-          build_midi_header_dec_item(midi_cmd,midi_status);
-          ScanaStudio.dec_item_end();
+          build_midi_header_dec_item(midi_cmd, midi_status, uart_items[i].start_sample_index, uart_items[i].end_sample_index);
 
           pkt_data = [];
           if (midi_cmd.len != 0)
@@ -116,25 +114,29 @@ function on_decode_signals(resume)
           }
         }
         break;
+
       case MIDI_WAIT_DATA:
         if (isNaN(uart_items[i].content))
         {
           break;
         }
-        ScanaStudio.console_info_msg("parsing data: " + uart_items[i].content,uart_items[i].start_sample_index);
+
+        // ScanaStudio.console_info_msg("parsing data: " + uart_items[i].content,uart_items[i].start_sample_index);
         if (Number(uart_items[i].content) & 0x80) //Unexpted here!
         {
           state_machine = MIDI_WAIT_STATUS;
-          ScanaStudio.console_info_msg("Unexpted data: " + uart_items[i].content,uart_items[i].start_sample_index);
+          // ScanaStudio.console_info_msg("Unexpted data: " + uart_items[i].content,uart_items[i].start_sample_index);
           i--;
         }
         else //accumulate the data
         {
           if (midi_cmd.len == -1)
           {
-            ScanaStudio.dec_item_new(ch,uart_items[i].start_sample_index,uart_items[i].end_sample_index);
+            ScanaStudio.dec_item_new(ch, uart_items[i].start_sample_index, uart_items[i].end_sample_index);
             ScanaStudio.dec_item_add_content(uart_items[i].content);
             ScanaStudio.dec_item_end();
+
+            ScanaStudio.packet_view_add_packet(false, ch, uart_items[i].start_sample_index, uart_items[i].end_sample_index, "Data", uart_items[i].content, "#33FFFF", "#99FFFF");
           }
           else
           {
@@ -145,7 +147,7 @@ function on_decode_signals(resume)
             pkt_data.push(Number(uart_items[i].content));
             if (pkt_data.length >= midi_cmd.len)
             {
-              build_midi_data_dec_items(midi_cmd,pkt_data,pkt_start,uart_items[i].end_sample_index);
+              build_midi_data_dec_items(midi_cmd, pkt_data, pkt_start, uart_items[i].end_sample_index);
               state_machine = MIDI_WAIT_STATUS;
             }
           }
@@ -308,25 +310,34 @@ function get_midi_cmd(status)
   return new midi_cmd_t(status,0xFF,"?","Unknown command",DATA_TYPE_UNKNOWN,-1);
 }
 
-function build_midi_header_dec_item(cmd,status)
+function build_midi_header_dec_item (cmd, status, start_sample, end_sample)
 {
-  var ch_text = "";
-  var ch_text_short = "";
-  if (cmd.status_mask == 0xF0)
-  {
-    ch_text = ", CH " +  ((status & 0x0F)+1).toString();
-    ch_text_short =  " " + ((status & 0x0F)+1).toString();
-  }
-  ScanaStudio.dec_item_add_content(cmd.long_name+ch_text);
-  ScanaStudio.dec_item_add_content(cmd.short_name+ch_text_short);
-  ScanaStudio.dec_item_add_content(cmd.short_name);
+    var ch_text = "";
+    var ch_text_short = "";
+
+    if (cmd.status_mask == 0xF0)
+    {
+        ch_text = ", CH " +  ((status & 0x0F) + 1).toString();
+        ch_text_short =  " " + ((status & 0x0F) + 1).toString();
+    }
+
+    ScanaStudio.dec_item_new(ch, start_sample, end_sample);
+    ScanaStudio.dec_item_add_content(cmd.long_name + ch_text);
+    ScanaStudio.dec_item_add_content(cmd.short_name + ch_text_short);
+    ScanaStudio.dec_item_add_content(cmd.short_name);
+    ScanaStudio.dec_item_end();
+
+    ScanaStudio.packet_view_add_packet(true, ch, start_sample, -1, "MIDI", "CH" + (ch + 1), ScanaStudio.get_channel_color(ch), ScanaStudio.get_channel_color(ch));
+    ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "Message", cmd.long_name + ch_text, "#FF66CC", "#FF99CC");
 }
 
-function build_midi_data_dec_items(midi_cmd,data_array,start_sample,end_sample)
+function build_midi_data_dec_items(midi_cmd, data_array, start_sample, end_sample)
 {
-  ScanaStudio.dec_item_new(ch,start_sample,end_sample);
+  ScanaStudio.dec_item_new(ch, start_sample, end_sample);
+
   var content_long = "";
   var content_short = "";
+
   switch (midi_cmd.data_type) {
     case DATA_TYPE_NOTE_VELOCITY:
       content_long = "Note = " + tab_note[data_array[0]] + ", velocity = " + data_array[1];
@@ -486,7 +497,9 @@ function build_midi_data_dec_items(midi_cmd,data_array,start_sample,end_sample)
   {
     ScanaStudio.dec_item_add_content(content_short);
   }
+
   ScanaStudio.dec_item_end();
+  ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "Data", content_long, "#33FFFF", "#99FFFF");
 }
 
 function midi_cmd_t(status,status_mask,short_name,long_name,data_type,len)
