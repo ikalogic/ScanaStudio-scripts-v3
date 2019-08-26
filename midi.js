@@ -136,7 +136,8 @@ function on_decode_signals(resume)
             ScanaStudio.dec_item_add_content(uart_items[i].content);
             ScanaStudio.dec_item_end();
 
-            ScanaStudio.packet_view_add_packet(false, ch, uart_items[i].start_sample_index, uart_items[i].end_sample_index, "Data", uart_items[i].content, "#33FFFF", "#99FFFF");
+            ScanaStudio.packet_view_add_packet(false, ch, uart_items[i].start_sample_index, uart_items[i].end_sample_index, "Data",
+                                               uart_items[i].content, ScanaStudio.PacketColors.Data.Title, ScanaStudio.PacketColors.Data.Content);
           }
           else
           {
@@ -328,7 +329,8 @@ function build_midi_header_dec_item (cmd, status, start_sample, end_sample)
     ScanaStudio.dec_item_end();
 
     ScanaStudio.packet_view_add_packet(true, ch, start_sample, -1, "MIDI", "CH" + (ch + 1), ScanaStudio.get_channel_color(ch), ScanaStudio.get_channel_color(ch));
-    ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "Message", cmd.long_name + ch_text, "#FF66CC", "#FF99CC");
+    ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "Message", cmd.long_name + ch_text,
+                                       ScanaStudio.PacketColors.Head.Title, ScanaStudio.PacketColors.Head.Content);
 }
 
 function build_midi_data_dec_items(midi_cmd, data_array, start_sample, end_sample)
@@ -499,7 +501,8 @@ function build_midi_data_dec_items(midi_cmd, data_array, start_sample, end_sampl
   }
 
   ScanaStudio.dec_item_end();
-  ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "Data", content_long, "#33FFFF", "#99FFFF");
+  ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "Data", content_long,
+                                     ScanaStudio.PacketColors.Data.Title, ScanaStudio.PacketColors.Data.Content);
 }
 
 function midi_cmd_t(status,status_mask,short_name,long_name,data_type,len)
