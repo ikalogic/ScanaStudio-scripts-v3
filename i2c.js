@@ -145,14 +145,17 @@ function on_decode_signals (resume)
                                 ScanaStudio.dec_item_add_content("RE-START");
                                 ScanaStudio.dec_item_add_content("RS");
                                 ScanaStudio.dec_item_add_content("R");
-                                ScanaStudio.packet_view_add_packet(false, ch_sda, item_st_sample, item_end_sample, "Re-start", "", "#33FF66", "#66FF99");
+                                ScanaStudio.packet_view_add_packet(false, ch_sda, item_st_sample, item_end_sample, "Re-start", "",
+                                                                   ScanaStudio.PacketColors.Wrap.Title, ScanaStudio.PacketColors.Wrap.Content);
                             }
                             else
                             {
                                 ScanaStudio.dec_item_add_content("START");
                                 ScanaStudio.dec_item_add_content("S");
-                                ScanaStudio.packet_view_add_packet(true, ch_sda, item_st_sample, -1, "I2C", "CH" + (ch_sda + 1), ScanaStudio.get_channel_color(ch_sda), ScanaStudio.get_channel_color(ch_sda));
-                                ScanaStudio.packet_view_add_packet(false, ch_sda, item_st_sample, item_end_sample, "Start", "", "#33FF66", "#66FF99");
+                                ScanaStudio.packet_view_add_packet(true, ch_sda, item_st_sample, -1, "I2C", "CH" + (ch_sda + 1), ScanaStudio.get_channel_color(ch_sda),
+                                                                   ScanaStudio.get_channel_color(ch_sda));
+                                ScanaStudio.packet_view_add_packet(false, ch_sda, item_st_sample, item_end_sample, "Start", "", ScanaStudio.PacketColors.Wrap.Title,
+                                                                   ScanaStudio.PacketColors.Wrap.Content);
                             }
 
                             ScanaStudio.dec_item_end();
@@ -187,7 +190,8 @@ function on_decode_signals (resume)
                             ScanaStudio.dec_item_add_content("STOP");
                             ScanaStudio.dec_item_add_content("P");
                             ScanaStudio.dec_item_end();
-                            ScanaStudio.packet_view_add_packet(false, ch_sda, item_st_sample, item_end_sample, "Stop", "", "#FF66CC", "#FF99CC");
+                            ScanaStudio.packet_view_add_packet(false, ch_sda, item_st_sample, item_end_sample, "Stop", "", ScanaStudio.PacketColors.Wrap.Title,
+                                                               ScanaStudio.PacketColors.Wrap.Content);
 
                             //ScanaStudio.console_error_msg("STOP found!",last_trs_sda.sample_index);
                             hs_mode = false;
@@ -257,7 +261,8 @@ function process_i2c_bit (value, sample_index)
             {
                 ScanaStudio.dec_item_add_content("NACK");
                 ScanaStudio.dec_item_add_content("N");
-                ScanaStudio.packet_view_add_packet(false, ch_sda, item_st_sample, item_end_sample, "Nack", "", "#FF0000", "#FF8080");
+                ScanaStudio.packet_view_add_packet(false, ch_sda, item_st_sample, item_end_sample, "Nack", "",
+                                                   ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
             }
             else
             {
@@ -386,9 +391,9 @@ function process_i2c_bit (value, sample_index)
             ScanaStudio.dec_item_add_content(format_content(byte >> add_shift, address_format, add_len));
             add_sample_points();
             ScanaStudio.dec_item_end();
-
-            ScanaStudio.packet_view_add_packet(false, ch_sda, item_st_sample, item_end_sample, "Address", operation_str + format_content(byte >> add_shift, address_format, add_len), "#FF9966", "#FFCC66");
-
+            ScanaStudio.packet_view_add_packet(false, ch_sda, item_st_sample, item_end_sample, "Address",
+                                               operation_str + format_content(byte >> add_shift, address_format, add_len), ScanaStudio.PacketColors.Preamble.Title,
+                                               ScanaStudio.PacketColors.Preamble.Content);
             bit_counter = 0;
             frame_state = I2C.ACK;
         }
@@ -419,9 +424,9 @@ function process_i2c_bit (value, sample_index)
             ScanaStudio.dec_item_add_content(format_content(ext_add, address_format, 10));
             add_sample_points();
             ScanaStudio.dec_item_end();
-
-            ScanaStudio.packet_view_add_packet(false, ch_sda, item_st_sample, item_end_sample, "Address", "10 bit address = " + format_content(ext_add,address_format, 10), "#FF9966", "#FFCC66");
-
+            ScanaStudio.packet_view_add_packet(false, ch_sda, item_st_sample, item_end_sample,
+                                               "Address", "10 bit address = " + format_content(ext_add,address_format, 10),
+                                               ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
             bit_counter = 0;
             frame_state = I2C.ACK;
         }
@@ -460,7 +465,8 @@ function process_i2c_bit (value, sample_index)
 
             ScanaStudio.dec_item_end();
             ScanaStudio.hex_view_add_byte(ch_sda, item_st_sample, item_end_sample, byte);
-            ScanaStudio.packet_view_add_packet(false, ch_sda, item_st_sample, item_end_sample, "Data", format_content(byte, data_format, 8), "#33FFFF", "#99FFFF");
+            ScanaStudio.packet_view_add_packet(false, ch_sda, item_st_sample, item_end_sample, "Data", format_content(byte, data_format, 8),
+                                               ScanaStudio.PacketColors.Data.Title, ScanaStudio.PacketColors.Data.Content);
 
             bit_counter = 0;
             frame_state = I2C.ACK;
