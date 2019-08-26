@@ -135,7 +135,8 @@ function on_decode_signals (resume)
 					break_width = trs.sample_index - cursor;
 					cursor = trs.sample_index;
 
-					ScanaStudio.packet_view_add_packet(true, ch_lin, break_start, -1, "LIN", "CH" + (ch_lin + 1), ScanaStudio.get_channel_color(ch_lin), ScanaStudio.get_channel_color(ch_lin));
+					ScanaStudio.packet_view_add_packet(true, ch_lin, break_start, -1, "LIN", "CH" + (ch_lin + 1),
+					                                   ScanaStudio.get_channel_color(ch_lin), ScanaStudio.get_channel_color(ch_lin));
 
 					if (break_width > min_break_width)
 					{
@@ -144,7 +145,8 @@ function on_decode_signals (resume)
 						ScanaStudio.dec_item_add_content("BRK");
 						ScanaStudio.dec_item_add_content("B");
 						ScanaStudio.dec_item_end();
-						ScanaStudio.packet_view_add_packet(false, ch_lin, break_start, cursor, "Break", "", "#FF66CC", "#FF99CC");
+						ScanaStudio.packet_view_add_packet(false, ch_lin, break_start, cursor, "Break", "",
+						                                   ScanaStudio.PacketColors.Wrap.Title, ScanaStudio.PacketColors.Wrap.Content);
 
 						bit_counter = 0;
 						state_machine++;
@@ -159,7 +161,8 @@ function on_decode_signals (resume)
 						ScanaStudio.dec_item_add_content("!");
 						ScanaStudio.dec_item_emphasize_error();
 						ScanaStudio.dec_item_end();
-						ScanaStudio.packet_view_add_packet(false, ch_lin, break_start, cursor, "Invalid Break", "", "#FF0000", "#FF8080");
+						ScanaStudio.packet_view_add_packet(false, ch_lin, break_start, cursor, "Invalid Break", "",
+						                                   ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
 
 						//ScanaStudio.console_info_msg("Invalid break",cursor);
 						state_machine = 0;
@@ -198,7 +201,8 @@ function on_decode_signals (resume)
 					ScanaStudio.dec_item_add_content("!");
 					ScanaStudio.dec_item_emphasize_error();
 					ScanaStudio.dec_item_end();
-					ScanaStudio.packet_view_add_packet(false, ch_lin, first_sync_edge, cursor, "Invalid Sync", "", "#FF0000", "#FF8080");
+					ScanaStudio.packet_view_add_packet(false, ch_lin, first_sync_edge, cursor, "Invalid Sync", "",
+					                                   ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
 					//ScanaStudio.console_info_msg("Ivalid sync filed:"+last_sync_bit_width+"/"+sync_bit_width,cursor);
 					state_machine = 0;
 			    }
@@ -210,7 +214,8 @@ function on_decode_signals (resume)
 					ScanaStudio.dec_item_add_content("!");
 					ScanaStudio.dec_item_emphasize_error();
 					ScanaStudio.dec_item_end();
-					ScanaStudio.packet_view_add_packet(false, ch_lin, first_sync_edge, cursor, "Invalid Sync", "", "#FF0000", "#FF8080");
+					ScanaStudio.packet_view_add_packet(false, ch_lin, first_sync_edge, cursor, "Invalid Sync", "",
+					                                   ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
 
 					// ScanaStudio.console_info_msg("Ivalid sync filed(2):"+sync_bit_width+"/"+break_width,cursor);
 					state_machine = 0;
@@ -231,7 +236,8 @@ function on_decode_signals (resume)
 					ScanaStudio.dec_item_add_content("SYNC");
 					ScanaStudio.dec_item_add_content("S");
 					ScanaStudio.dec_item_end();
-					ScanaStudio.packet_view_add_packet(false, ch_lin, sync_start, sync_end, "Sync", baud.toString() + " baud(s)", "#FF9966", "#FFCC66");
+					ScanaStudio.packet_view_add_packet(false, ch_lin, sync_start, sync_end, "Sync", baud.toString() + " baud(s)",
+					                                   ScanaStudio.PacketColors.Head.Title, ScanaStudio.PacketColors.Head.Content);
 
 					ScanaStudio.dec_item_new(ch_lin, sync_end, cursor);
 					ScanaStudio.dec_item_add_content("STOP");
@@ -295,7 +301,8 @@ function on_decode_signals (resume)
 							ScanaStudio.dec_item_add_content("! S");
 							ScanaStudio.dec_item_add_content("!");
 							ScanaStudio.dec_item_emphasize_error();
-							ScanaStudio.packet_view_add_packet(false, ch_lin, cursor, cursor + samples_per_bit, "Invalid Start", "", "#FF0000", "#FF8080");
+							ScanaStudio.packet_view_add_packet(false, ch_lin, cursor, cursor + samples_per_bit, "Invalid Start", "",
+							                                   ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
 						}
 
 						ScanaStudio.dec_item_end();
@@ -307,15 +314,21 @@ function on_decode_signals (resume)
 						ScanaStudio.dec_item_add_content(format_content(lin_id, id_format, 6));
 						ScanaStudio.dec_item_end();
 
-						ScanaStudio.packet_view_add_packet(false, ch_lin, cursor + (samples_per_bit * 1), cursor + (samples_per_bit * 7), "ID", format_content(lin_id, id_format, 6), "#FF9966", "#FFCC66");
-						ScanaStudio.packet_view_add_packet(false, ch_lin, cursor + (samples_per_bit * 1), cursor + (samples_per_bit * 7), "Data Length", get_lin_data_len(lin_id), "#FF9966", "#FFCC66");
+						ScanaStudio.packet_view_add_packet(false, ch_lin, cursor + (samples_per_bit * 1), cursor + (samples_per_bit * 7), "ID",
+						                                   format_content(lin_id, id_format, 6), ScanaStudio.PacketColors.Preamble.Title,
+														   ScanaStudio.PacketColors.Preamble.Content);
+						ScanaStudio.packet_view_add_packet(false, ch_lin, cursor + (samples_per_bit * 1), cursor + (samples_per_bit * 7), "Data Length",
+						                                   get_lin_data_len(lin_id), ScanaStudio.PacketColors.Preamble.Title,
+														   ScanaStudio.PacketColors.Preamble.Content);
 
 						ScanaStudio.dec_item_new(ch_lin, cursor + (samples_per_bit * 7), cursor + (samples_per_bit * 9));
 						ScanaStudio.dec_item_add_content("Parity = " + format_content(lin_par, parity_format, 2));
 						ScanaStudio.dec_item_add_content("P = " + format_content(lin_par, parity_format, 2));
 						ScanaStudio.dec_item_add_content(format_content(lin_par, parity_format, 2));
 						ScanaStudio.dec_item_end();
-						ScanaStudio.packet_view_add_packet(false, ch_lin, cursor + (samples_per_bit * 7), cursor + (samples_per_bit * 9), "Parity", format_content(lin_par, parity_format, 2), "#FF9966", "#FFCC66");
+						ScanaStudio.packet_view_add_packet(false, ch_lin, cursor + (samples_per_bit * 7), cursor + (samples_per_bit * 9), "Parity",
+						                                   format_content(lin_par, parity_format, 2), ScanaStudio.PacketColors.Check.Title,
+														   ScanaStudio.PacketColors.Check.Content);
 
 						ScanaStudio.dec_item_new(ch_lin, cursor + (samples_per_bit * 9), cursor + (samples_per_bit * 10));
 
@@ -330,7 +343,8 @@ function on_decode_signals (resume)
 							ScanaStudio.dec_item_add_content("! S");
 							ScanaStudio.dec_item_add_content("!");
 							ScanaStudio.dec_item_emphasize_error();
-							ScanaStudio.packet_view_add_packet(false, ch_lin, cursor + (samples_per_bit * 9), cursor + (samples_per_bit * 10), "Missing Stop", "", "#FF0000", "#FF8080");
+							ScanaStudio.packet_view_add_packet(false, ch_lin, cursor + (samples_per_bit * 9), cursor + (samples_per_bit * 10),
+							                                   "Missing Stop", "", ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Conent);
 						}
 
 						ScanaStudio.dec_item_end();
@@ -395,7 +409,8 @@ function on_decode_signals (resume)
 							ScanaStudio.dec_item_add_content("! S");
 							ScanaStudio.dec_item_add_content("!");
 							ScanaStudio.dec_item_emphasize_error();
-							ScanaStudio.packet_view_add_packet(false, ch_lin, cursor, cursor + samples_per_bit, "Invalid Start", "", "#FF0000", "#FF8080");
+							ScanaStudio.packet_view_add_packet(false, ch_lin, cursor, cursor + samples_per_bit, "Invalid Start", "",
+							                                   ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
 						}
 
 						ScanaStudio.dec_item_end();
@@ -410,7 +425,9 @@ function on_decode_signals (resume)
 							ScanaStudio.dec_item_add_content(format_content(lin_data, data_format, 8));
 							ScanaStudio.dec_item_end();
 
-							ScanaStudio.packet_view_add_packet(false, ch_lin, cursor + (samples_per_bit * 1), cursor + (samples_per_bit * 9), "Data", format_content(lin_data, data_format, 8), "#33FFFF", "#99FFFF");
+							ScanaStudio.packet_view_add_packet(false, ch_lin, cursor + (samples_per_bit * 1), cursor + (samples_per_bit * 9), "Data",
+							                                   format_content(lin_data, data_format, 8), ScanaStudio.PacketColors.Data.Title,
+															   ScanaStudio.PacketColors.Data.Content);
 							ScanaStudio.hex_view_add_byte(ch_lin, cursor + (samples_per_bit * 1), cursor + (samples_per_bit * 9), lin_data);
 						}
 						else
@@ -423,7 +440,9 @@ function on_decode_signals (resume)
 								ScanaStudio.dec_item_add_content("CHECKSUM = " + format_content(lin_data, data_format, 8) + " OK");
 								ScanaStudio.dec_item_add_content(format_content(lin_data, data_format, 8) + " OK");
 								ScanaStudio.dec_item_add_content(format_content(lin_data, data_format, 8));
-								ScanaStudio.packet_view_add_packet(false, ch_lin, cursor + (samples_per_bit * 1), cursor + (samples_per_bit * 9), "Checksum", format_content(lin_data, data_format, 8) + " OK", "#33FF66", "#66FF99");
+								ScanaStudio.packet_view_add_packet(false, ch_lin, cursor + (samples_per_bit * 1), cursor + (samples_per_bit * 9),
+								                                   "Checksum", format_content(lin_data, data_format, 8) + " OK", ScanaStudio.PacketColors.Check.Title,
+																   ScanaStudio.PacketColors.Check.Content);
 							}
 							else
 							{
@@ -432,7 +451,9 @@ function on_decode_signals (resume)
 								ScanaStudio.dec_item_add_content("! " + format_content(lin_data, data_format, 8));
 								ScanaStudio.dec_item_add_content("!");
 								ScanaStudio.dec_item_emphasize_error();
-								ScanaStudio.packet_view_add_packet(false, ch_lin, cursor + (samples_per_bit * 1), cursor + (samples_per_bit * 9), "Invalid Checksum", format_content(chksum, data_format, 8), "#FF0000", "#FF8080")
+								ScanaStudio.packet_view_add_packet(false, ch_lin, cursor + (samples_per_bit * 1), cursor + (samples_per_bit * 9),
+								                                   "Invalid Checksum", format_content(chksum, data_format, 8),
+																   ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
 							}
 
 							ScanaStudio.dec_item_end();
@@ -451,7 +472,8 @@ function on_decode_signals (resume)
 							ScanaStudio.dec_item_add_content("! S");
 							ScanaStudio.dec_item_add_content("!");
 							ScanaStudio.dec_item_emphasize_error();
-							ScanaStudio.packet_view_add_packet(false, ch_lin, cursor + (samples_per_bit * 9), cursor + (samples_per_bit * 10), "Missing Stop", "", "#FF0000", "#FF8080");
+							ScanaStudio.packet_view_add_packet(false, ch_lin, cursor + (samples_per_bit * 9), cursor + (samples_per_bit * 10), "Missing Stop",
+							                                   "", ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
 						}
 
 						ScanaStudio.dec_item_end();
