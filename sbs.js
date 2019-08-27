@@ -3,18 +3,18 @@
 <DESCRIPTION>
 Smart Battery System data analyzer (Compliant to specifications V1.1)
 </DESCRIPTION>
-<VERSION> 0.2 </VERSION>
+<VERSION> 0.5 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.2: Added dec_item_end() for each dec_item_new().
-V0.1: Initial release.
+V0.5: Added packet and hex views
+V0.2: Added dec_item_end() for each dec_item_new()
+V0.1: Initial release
 </RELEASE_NOTES>
 */
-
 
 /*
 	Note:
@@ -31,14 +31,12 @@ Future releases
 ~~~~~~~~~~~~~~~~
 * Add pre-decoding support
 * Write online documentation
-* Add hex view support
-* Add packet view support
 */
 
 var SMB =
 {
 	ADDRESS : 0x01,
-  CMD : 0x02,
+  	CMD : 0x02,
 	DATA  : 0x04,
 };
 
@@ -115,19 +113,25 @@ function on_decode_signals(resume)
 
 function process_pm_item(item)
 {
-  ScanaStudio.dec_item_new(item.channel_index,item.start_sample_index,item.end_sample_index);
+  ScanaStudio.dec_item_new(item.channel_index, item.start_sample_index, item.end_sample_index);
 
   if (item.content.indexOf("RE-START") >= 0)
   {
     ScanaStudio.dec_item_add_content("RE-START");
     ScanaStudio.dec_item_add_content("RS");
     ScanaStudio.dec_item_add_content("R");
+	ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "Re-start", "",
+									   ScanaStudio.PacketColors.Wrap.Title, ScanaStudio.PacketColors.Wrap.Content);
     frame_state = SMB.ADDRESS;
   }
   else if (item.content.indexOf("START") >= 0)
   {
     ScanaStudio.dec_item_add_content("START");
     ScanaStudio.dec_item_add_content("S");
+	ScanaStudio.packet_view_add_packet(true, item.channel_index, item.start_sample_index, -1, "SBS", "CH" + (item.channel_index + 1),
+									   ScanaStudio.get_channel_color(item.channel_index), ScanaStudio.get_channel_color(item.channel_index));
+	ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "Start", "",
+									   ScanaStudio.PacketColors.Wrap.Title, ScanaStudio.PacketColors.Wrap.Content);
     frame_state = SMB.ADDRESS;
     crc8_reset();
   }
@@ -135,12 +139,16 @@ function process_pm_item(item)
   {
     ScanaStudio.dec_item_add_content("STOP");
     ScanaStudio.dec_item_add_content("P");
+	ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "Stop", "",
+									   ScanaStudio.PacketColors.Wrap.Title, ScanaStudio.PacketColors.Wrap.Content);
     frame_state = SMB.ADDRESS;
   }
   else if (item.content.indexOf("NACK") >= 0)
   {
     ScanaStudio.dec_item_add_content("NACK");
     ScanaStudio.dec_item_add_content("N");
+	ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "NACK", "",
+									   ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
   }
   else if (item.content.indexOf("ACK") >= 0)
   {
@@ -233,9 +241,10 @@ function process_pm_item(item)
         ScanaStudio.dec_item_add_content(operation_str + format_content(byte >> add_shift,address_format,add_len));
         ScanaStudio.dec_item_add_content(operation_str_short + format_content(byte >> add_shift,address_format,add_len));
         ScanaStudio.dec_item_add_content(format_content(byte >> add_shift,address_format,add_len));
-
+		ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "Address",
+		                                   operation_str + format_content(byte >> add_shift,address_format,add_len),
+										   ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
         frame_state = SMB.CMD;
-
         crc8_calc(byte);
         break;
       case SMB.CMD:
@@ -246,6 +255,9 @@ function process_pm_item(item)
           ScanaStudio.dec_item_add_content("SBS: " + sbs_cmd[byte] + " (" + format_content(byte,data_format,8) + ")");
           ScanaStudio.dec_item_add_content(sbs_cmd[byte] + " (" + format_content(byte,data_format,8) + ")");
           ScanaStudio.dec_item_add_content(format_content(byte,data_format,8));
+		  ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "Command",
+		                                     sbs_cmd[byte] + " (" + format_content(byte,data_format,8) + ")",
+											 ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
         }
         frame_state = SMB.DATA;
       case SMB.DATA:
@@ -258,6 +270,9 @@ function process_pm_item(item)
             ScanaStudio.dec_item_add_content("PEC = " + format_content(byte,data_format,8) + " OK!");
             ScanaStudio.dec_item_add_content(format_content(byte,data_format,8));
             ScanaStudio.dec_item_emphasize_success();
+			ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "PEC",
+			                                   format_content(byte,data_format,8) + " OK",
+											   ScanaStudio.PacketColors.Check.Title, ScanaStudio.PacketColors.Check.Content);
           }
           else
           {
@@ -267,6 +282,8 @@ function process_pm_item(item)
             ScanaStudio.dec_item_add_content("!" + format_content(byte,data_format,8));
             ScanaStudio.dec_item_add_content(format_content(byte,data_format,8));
             ScanaStudio.dec_item_emphasize_error();
+			ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "PEC", format_content(byte,data_format,8),
+											   ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
           }
         }
         else
@@ -274,6 +291,9 @@ function process_pm_item(item)
           crc8_calc(byte);
           ScanaStudio.dec_item_add_content("Data = " + format_content(byte,data_format,8));
           ScanaStudio.dec_item_add_content(format_content(byte,data_format,8));
+		  ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "Data",
+											 format_content(byte,data_format,8), ScanaStudio.PacketColors.Data.Title, ScanaStudio.PacketColors.Data.Content);
+		  ScanaStudio.hex_view_add_byte(item.channel_index, item.start_sample_index, item.end_sample_index, byte);
         }
         frame_state = SMB.DATA;
       default:
