@@ -4,13 +4,14 @@
 <DESCRIPTION>
 Serial UART (Universal asynchronous receiver/transmitter) Protocol Decoder.
 </DESCRIPTION>
-<VERSION> 1.50 </VERSION>
+<VERSION> 1.51 </VERSION>
 <AUTHOR_NAME>	Vladislav Kosinov, Ibrahim Kamal, Nicolas Bastit </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/UART-ScanaStudio-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright 2019 Ikalogic SAS </COPYRIGHT>
 <LICENSE>	This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V1.52: Fixed a bug that caused stop bits to go undetected.
 V1.51: Fixed bug that could cause decoder to freeze
 V1.50: Added dec_item_end() for each dec_item_new().
 V1.49: Fixed sampling points drawing
@@ -43,13 +44,11 @@ V1.00: Initial release
 */
 
 /*
-Work in progress
-================
+Work in progress / TODO
+========================
 still Todo:
-* Test Trigger sequences
+* Further test trigger sequences
 * Write documentation
-* Sampling points
-* Packet View
 */
 
 //Decoder GUI
@@ -74,7 +73,8 @@ function on_draw_gui_decoder()
         {
             ScanaStudio.gui_add_item_to_combo_box(i.toString(10),true);
         }
-        else {
+        else
+        {
             ScanaStudio.gui_add_item_to_combo_box(i.toString(10),false);
         }
     }
@@ -297,8 +297,13 @@ function on_decode_signals(resume)
 
                     //analyze stop bits
                     stop_bits_ok = true;
+                    //ScanaStudio.console_info_msg("bit_sampler_init:"+channel+","+cursor+","+samples_per_bit*0.5,cursor);
+
                     ScanaStudio.bit_sampler_init(channel,cursor,samples_per_bit*0.5);
-                    for (stop_bits_counter = 0; stop_bits_counter < stop; stop_bits_counter+=0.5)
+                    //advance cursor by half a bit to be at the center of stop bit
+                    ScanaStudio.bit_sampler_next(channel);
+                    //Now analyze whole stop bit(s) field, composed of 1, 1.5 or 2 bits
+                    for (stop_bits_counter = 0.5; stop_bits_counter < stop; stop_bits_counter+=0.5)
                     {
                         if (ScanaStudio.bit_sampler_next(channel) != stop_bit_value)
                         {
