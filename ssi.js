@@ -3,15 +3,16 @@
 <DESCRIPTION>
 Synchronous Serial Interface analyzer
 </DESCRIPTION>
-<VERSION> 0.2 </VERSION>
+<VERSION> 0.3 </VERSION>
 <AUTHOR_NAME>  Ibrahim Kamal </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim Kamal </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.2: Added dec_item_end() for each dec_item_new().
-V0.1: Initial release.
+V0.3: Added hex view
+V0.2: Added dec_item_end() for each dec_item_new()
+V0.1: Initial release
 </RELEASE_NOTES>
 */
 
@@ -131,16 +132,25 @@ function add_dec_item(start_sample,end_sample,data,bits)
 {
   ScanaStudio.dec_item_new(ch_data,start_sample,end_sample);
   ScanaStudio.dec_item_add_content(format_content(word_value,data_format,bits.length));
-  var b;
-  for (b = 0; b < bits.length; b++)
+
+  var i;
+  for (i = 0; i < bits.length; i++)
   {
-    ScanaStudio.dec_item_add_sample_point(bits[b],"U");
+    ScanaStudio.dec_item_add_sample_point(bits[i],"U");
   }
+
+  byte_arr = word_to_byte_arr(word_value, bits.length);
+  for (i = 0; i < byte_arr.length; i++)
+  {
+    ScanaStudio.hex_view_add_byte(ch_data, start_sample, end_sample, byte_arr[i]);
+  }
+
   if (bits.length > 53)
   {
     ScanaStudio.dec_item_emphasize_error();
     ScanaStudio.console_error_msg("Maximum integer value reached, displayed results may not be correct.", start_sample);
   }
+
   ScanaStudio.dec_item_end();
 }
 
@@ -284,4 +294,19 @@ function to_binary_str(value, size)
 function pad(num_str, size) {
     while (num_str.length < size) num_str = "0" + num_str;
     return num_str;
+}
+
+function word_to_byte_arr (word, size_bits)
+{
+    var bytes = [];
+    var bytes_num = Math.ceil(size_bits / 8);
+
+    do
+    {
+      bytes[--bytes_num] = word & (0xFF);
+      word = word >> 8;
+    }
+    while (bytes_num);
+
+    return bytes;
 }
