@@ -1,15 +1,18 @@
 /* Protocol meta info:
-<NAME> I2C scanner script </NAME>
+<NAME> I2C scanner</NAME>
 <DESCRIPTION>
-
+This signal builder can be used to generate a series of I2C address calls
+to scan the whole range of possible addresses. This can be useful to test
+a number of I2C devices and see which addresses are acknowledged.
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME> Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com, v.canoz@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.2:  Added description.
 V0.1:  Initial release.
 </RELEASE_NOTES>
 */
