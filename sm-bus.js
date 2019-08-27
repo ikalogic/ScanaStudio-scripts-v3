@@ -3,13 +3,14 @@
 <DESCRIPTION>
 System Management Bus (SMBus) protocol analyzer.
 </DESCRIPTION>
-<VERSION> 0.3 </VERSION>
+<VERSION> 0.5 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.5: Added packet and hex views
 V0.3: Added dec_item_end() for each dec_item_new().
 V0.2: Added pre-decoding support
 V0.1: Initial release.
@@ -22,8 +23,6 @@ Future releases
 * Detect SMBus host address (when the slave is alerting the host)
 * Add pre-decoding support (done, to be tested)
 * Write online documentation
-* Add hex view support
-* Add packet view support
 */
 
 var SMB =
@@ -113,12 +112,18 @@ function process_sm_item(item)
     ScanaStudio.dec_item_add_content("RE-START");
     ScanaStudio.dec_item_add_content("RS");
     ScanaStudio.dec_item_add_content("R");
+	ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "Re-start", "",
+									   ScanaStudio.PacketColors.Wrap.Title, ScanaStudio.PacketColors.Wrap.Content);
     frame_state = SMB.ADDRESS;
   }
   else if (item.content.indexOf("START") >= 0)
   {
     ScanaStudio.dec_item_add_content("START");
     ScanaStudio.dec_item_add_content("S");
+	ScanaStudio.packet_view_add_packet(true, item.channel_index, item.start_sample_index, -1, "SMBUS", "CH" + (item.channel_index + 1),
+									   ScanaStudio.get_channel_color(item.channel_index), ScanaStudio.get_channel_color(item.channel_index));
+	ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "Start", "",
+									   ScanaStudio.PacketColors.Wrap.Title, ScanaStudio.PacketColors.Wrap.Content);
     frame_state = SMB.ADDRESS;
     crc8_reset();
   }
@@ -126,6 +131,8 @@ function process_sm_item(item)
   {
     ScanaStudio.dec_item_add_content("STOP");
     ScanaStudio.dec_item_add_content("P");
+	ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "Stop", "",
+									   ScanaStudio.PacketColors.Wrap.Title, ScanaStudio.PacketColors.Wrap.Content);
     frame_state = SMB.ADDRESS;
     //We have a full packet, process it:
   }
@@ -133,6 +140,8 @@ function process_sm_item(item)
   {
     ScanaStudio.dec_item_add_content("NACK");
     ScanaStudio.dec_item_add_content("N");
+	ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "NACK", "",
+									   ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
   }
   else if (item.content.indexOf("ACK") >= 0)
   {
@@ -146,7 +155,7 @@ function process_sm_item(item)
       case SMB.ADDRESS:
         if (byte == 0) //General call
         {
-          operation_str = "General call address ";
+          operation_str = "General call addr ";
           operation_str_short = "G ";
         }
         else if (byte == 1) //General call
@@ -166,7 +175,7 @@ function process_sm_item(item)
         }
         else if ((byte >> 1) == 0xC)  //SMBus Alert response
         {
-          operation_str = "SMBus Alert response address ";
+          operation_str = "SMBus Alert response addr ";
           operation_str_short = "ALERT ";
         }
         else if ((byte>>3) == 1) //HS-mode master code
@@ -182,13 +191,13 @@ function process_sm_item(item)
           ext_add = (byte>>1) & 0x3;
           if (byte & 0x1)
           {
-            operation_str = "NOT SUPPORTED: Read from 10 bit address ";
+            operation_str = "NOT SUPPORTED: Rd from 10bit addr ";
             operation_str_short = "! 10R ";
             ScanaStudio.dec_item_emphasize_warning();
           }
           else
           {
-            operation_str = "NOT SUPPORTED: Write to 10 bit address ";
+            operation_str = "NOT SUPPORTED: Wr to 10bit addr ";
             operation_str_short = "! 10W ";
             ScanaStudio.dec_item_emphasize_warning();
           }
@@ -231,6 +240,21 @@ function process_sm_item(item)
           ScanaStudio.dec_item_add_content(operation_str + format_content(byte >> add_shift,address_format,add_len));
           ScanaStudio.dec_item_add_content(operation_str_short + format_content(byte >> add_shift,address_format,add_len));
           ScanaStudio.dec_item_add_content(format_content(byte >> add_shift,address_format,add_len));
+
+		  var packet_str = operation_str + format_content(byte >> add_shift,address_format,add_len);
+		  if (packet_str.length > ScanaStudio.PacketMaxWidth.Content)
+		  {
+			  ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "Address",
+												 operation_str, ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
+			  ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "Address",
+												 format_content(byte >> add_shift,address_format,add_len),
+												 ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
+		  }
+		  else
+		  {
+			  ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "Address",
+												 packet_str, ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
+		  }
         }
 
         frame_state = SMB.DATA;
@@ -247,6 +271,9 @@ function process_sm_item(item)
             ScanaStudio.dec_item_add_content("PEC = " + format_content(byte,data_format,8) + " OK!");
             ScanaStudio.dec_item_add_content(format_content(byte,data_format,8));
             ScanaStudio.dec_item_emphasize_success();
+			ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "PEC",
+											   format_content(byte,data_format,8) + " OK",
+											   ScanaStudio.PacketColors.Check.Title, ScanaStudio.PacketColors.Check.Content);
           }
           else
           {
@@ -256,6 +283,9 @@ function process_sm_item(item)
             ScanaStudio.dec_item_add_content("!" + format_content(byte,data_format,8));
             ScanaStudio.dec_item_add_content(format_content(byte,data_format,8));
             ScanaStudio.dec_item_emphasize_error();
+			ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "PEC",
+											   format_content(byte,data_format,8) + " WRONG",
+											   ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
           }
         }
         else
@@ -263,6 +293,9 @@ function process_sm_item(item)
           crc8_calc(byte);
           ScanaStudio.dec_item_add_content("Data = " + format_content(byte,data_format,8));
           ScanaStudio.dec_item_add_content(format_content(byte,data_format,8));
+		  ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "Data",
+											 format_content(byte,data_format,8), ScanaStudio.PacketColors.Data.Title, ScanaStudio.PacketColors.Data.Content);
+		  ScanaStudio.hex_view_add_byte(item.channel_index, item.start_sample_index, item.end_sample_index, byte);
         }
         frame_state = SMB.DATA;
         break;
