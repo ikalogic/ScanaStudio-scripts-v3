@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Smart Battery System data analyzer (Compliant to specifications V1.1)
 </DESCRIPTION>
-<VERSION> 0.5 </VERSION>
+<VERSION> 0.6 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.6: Update packet view color scheme
 V0.5: Added packet and hex views
 V0.2: Added dec_item_end() for each dec_item_new()
 V0.1: Initial release
@@ -241,12 +242,26 @@ function process_pm_item(item)
         ScanaStudio.dec_item_add_content(operation_str + format_content(byte >> add_shift,address_format,add_len));
         ScanaStudio.dec_item_add_content(operation_str_short + format_content(byte >> add_shift,address_format,add_len));
         ScanaStudio.dec_item_add_content(format_content(byte >> add_shift,address_format,add_len));
-		ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "Address",
-		                                   operation_str + format_content(byte >> add_shift,address_format,add_len),
-										   ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
+
+		var packet_str = operation_str + format_content(byte >> add_shift,address_format,add_len);
+		if (packet_str.length > ScanaStudio.PacketMaxWidth.Content)
+		{
+			ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "Address",
+											   operation_str, ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
+			ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "Address",
+											   format_content(byte >> add_shift,address_format,add_len),
+											   ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
+		}
+		else
+		{
+			ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "Address",
+											   packet_str, ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
+		}
+
         frame_state = SMB.CMD;
         crc8_calc(byte);
         break;
+
       case SMB.CMD:
         if (!isNaN(byte))
         {
@@ -282,7 +297,8 @@ function process_pm_item(item)
             ScanaStudio.dec_item_add_content("!" + format_content(byte,data_format,8));
             ScanaStudio.dec_item_add_content(format_content(byte,data_format,8));
             ScanaStudio.dec_item_emphasize_error();
-			ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "PEC", format_content(byte,data_format,8),
+			ScanaStudio.packet_view_add_packet(false, item.channel_index, item.start_sample_index, item.end_sample_index, "PEC",
+			                                   format_content(byte,data_format,8) + " WRONG",
 											   ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
           }
         }
