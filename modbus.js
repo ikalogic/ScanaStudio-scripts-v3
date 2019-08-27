@@ -3,13 +3,14 @@
 <DESCRIPTION>
 
 </DESCRIPTION>
-<VERSION> 0.2 </VERSION>
+<VERSION> 0.3 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.3: Updated packet view color palette
 V0.2: Added dec_item_end() for each dec_item_new().
 V0.1: Initial release.
 </RELEASE_NOTES>
@@ -150,20 +151,6 @@ const   ENUM_STATE_SOF = 0,
         ERROR_GATEWAY_PATH_UNAVAILABLE = 0x0A,
         ERROR_GATEWAY_TARGET_DEVICE_FAILED_TO_RESPOND = 0x0B;
 
-
-const   COLOR_T_ADDR    = "#FF9966",
-        COLOR_T_FCT     = "#FF66CC",
-        COLOR_T_DATA    = "#33FFFF",
-        COLOR_T_CRC     = "#33FF66",
-        COLOR_T_ERROR   = "#FF0000",
-        COLOR_C_ADDR    = "#FFCC66",
-        COLOR_C_FCT     = "#FF99CC",
-        COLOR_C_DATA    = "#99FFFF",
-        COLOR_C_CRC     = "#66FF99",
-        COLOR_C_ERROR   = "#FF8080";
-
-
-
 function on_decode_signals_RTU_mode(uart_items)
 {
     // Remove any element that do not contain data, e.g.: Start, Stop, parity
@@ -277,16 +264,16 @@ function on_decode_signals_RTU_mode(uart_items)
                                                                 trame[trame.length-1].end_sample_index,
                                                                 "Modbus RTU",
                                                                 "CH" + (channel + 1),
-                                                                "#0000FF",
-                                                                ScanaStudio.get_channel_color(channel));//"#8080FF");
+                                                                ScanaStudio.get_channel_color(channel),
+                                                                ScanaStudio.get_channel_color(channel));
                             ScanaStudio.packet_view_add_packet( false,
                                                                 channel,
                                                                 trame[i].start_sample_index,
                                                                 trame[i].end_sample_index,
                                                                 "Slave Addr:",
                                                                 "@" + trame[i].content,
-                                                                COLOR_T_ADDR,
-                                                                COLOR_C_ADDR);
+                                                                ScanaStudio.PacketColors.Preamble.Title,
+                                                                ScanaStudio.PacketColors.Preamble.Content);
                             state_machine = ENUM_STATE_FUNCTION;
                             break;
                         }//end ENUM_STATE_SLAVE_ADDR
@@ -390,8 +377,8 @@ function on_decode_signals_RTU_mode(uart_items)
                                                                 trame[i].end_sample_index,
                                                                 "Function",
                                                                 function_to_str(fct_code&0x7F,fct_type_dec),
-                                                                (error ? COLOR_T_ERROR : COLOR_T_FCT),
-                                                                (error ? COLOR_C_ERROR : COLOR_C_FCT));
+                                                                (error ? ScanaStudio.PacketColors.Error.Title : ScanaStudio.PacketColors.Misc.Title),
+                                                                (error ? ScanaStudio.PacketColors.Error.Content : ScanaStudio.PacketColors.Misc.Content));
 
                             state_machine = ENUM_STATE_AFTER_FUNCTION;
                             break;
@@ -1006,8 +993,8 @@ function on_decode_signals_RTU_mode(uart_items)
                                                                 trame[i].end_sample_index,
                                                                 pkt_str,
                                                                 (exception_code != 0) ? exception_to_str(exception_code&0x7F) : trame[i].content,
-                                                                (exception_code != 0) ? COLOR_T_ERROR : COLOR_T_DATA,
-                                                                (exception_code != 0) ? COLOR_C_ERROR : COLOR_C_DATA);
+                                                                (exception_code != 0) ? ScanaStudio.PacketColors.Error.Title : ScanaStudio.PacketColors.Data.Title,
+                                                                (exception_code != 0) ? ScanaStudio.PacketColors.Error.Content : ScanaStudio.PacketColors.Data.Content);
                             if(i == trame.length - 3)
                             {
                                 state_machine = ENUM_STATE_CRC;
@@ -1053,8 +1040,8 @@ function on_decode_signals_RTU_mode(uart_items)
                                                                     trame[i].end_sample_index,
                                                                     "CRC",
                                                                     crc_str + " OK",
-                                                                    COLOR_T_CRC,
-                                                                    COLOR_C_CRC);
+                                                                    ScanaStudio.PacketColors.Check.Title,
+                                                                    ScanaStudio.PacketColors.Check.Content);
                             }
                             else //wrong CRC
                             {
@@ -1075,8 +1062,8 @@ function on_decode_signals_RTU_mode(uart_items)
                                                                     trame[i].end_sample_index,
                                                                     "CRC",
                                                                     crc_str + " Wrong, should be " + crc_c_str,
-                                                                    COLOR_T_ERROR,
-                                                                    COLOR_C_ERROR);
+                                                                    ScanaStudio.PacketColors.Error.Title,
+                                                                    ScanaStudio.PacketColors.Error.Content);
                             }
                             ScanaStudio.dec_item_end();
                             break;
@@ -1213,8 +1200,8 @@ function on_decode_signals_ASCII_mode(uart_items)
                                                     trame[i].end_sample_index,
                                                     "!SOF",
                                                     String.fromCharCode(trame[i].content),
-                                                    COLOR_T_ERROR,
-                                                    COLOR_T_ERROR);
+                                                    ScanaStudio.PacketColors.Error.Title,
+                                                    ScanaStudio.PacketColors.Error.Title);
                             break;
                         }
                     }
@@ -1301,8 +1288,8 @@ function on_decode_signals_ASCII_mode(uart_items)
                                                                 trame[i].end_sample_index,
                                                                 "Slave Addr:",
                                                                 "@" + dec_to_str(byte_value, "0x"),
-                                                                COLOR_T_ADDR,
-                                                                COLOR_C_ADDR);
+                                                                ScanaStudio.PacketColors.Preamble.Title,
+                                                                ScanaStudio.PacketColors.Preamble.Content);
                             lrc += byte_value;
                             state_machine = ENUM_STATE_FUNCTION;
                             break;
@@ -1407,8 +1394,8 @@ function on_decode_signals_ASCII_mode(uart_items)
                                                                 trame[i].end_sample_index,
                                                                 "Function",
                                                                 function_to_str(fct_code&0x7F,fct_type_dec),
-                                                                (error ? COLOR_T_ERROR : COLOR_T_FCT),
-                                                                (error ? COLOR_C_ERROR : COLOR_C_FCT));
+                                                                (error ? ScanaStudio.PacketColors.Error.Title : ScanaStudio.PacketColors.Misc.Title),
+                                                                (error ? ScanaStudio.PacketColors.Error.Content : ScanaStudio.PacketColors.Misc.Content));
 
                             state_machine = ENUM_STATE_AFTER_FUNCTION;
                             break;
@@ -2022,8 +2009,8 @@ function on_decode_signals_ASCII_mode(uart_items)
                                                                 trame[i].end_sample_index,
                                                                 pkt_str,
                                                                 (exception_code != 0) ? exception_to_str(exception_code&0x7F) : dec_to_str(byte_value, "0x"),
-                                                                (exception_code != 0) ? COLOR_T_ERROR : COLOR_T_DATA,
-                                                                (exception_code != 0) ? COLOR_C_ERROR : COLOR_C_DATA);
+                                                                (exception_code != 0) ? ScanaStudio.PacketColors.Error.Title : ScanaStudio.PacketColors.Data.Title,
+                                                                (exception_code != 0) ? ScanaStudio.PacketColors.Error.Content : ScanaStudio.PacketColors.Data.Content);
                             if(i == trame.length - 5)
                             {
                                 state_machine = ENUM_STATE_LRC;
@@ -2052,8 +2039,8 @@ function on_decode_signals_ASCII_mode(uart_items)
                                                                     trame[i].end_sample_index,
                                                                     "LRC",
                                                                     dec_to_str(byte_value, "0x") + " OK",
-                                                                    COLOR_T_CRC,
-                                                                    COLOR_C_CRC);
+                                                                    ScanaStudio.PacketColors.Check.Title,
+                                                                    ScanaStudio.PacketColors.Check.Content);
                             }
                             else //wrong LRC
                             {
@@ -2068,8 +2055,8 @@ function on_decode_signals_ASCII_mode(uart_items)
                                                                     trame[i].end_sample_index,
                                                                     "LRC",
                                                                     dec_to_str(byte_value, "0x") + " Wrong, should be " +  dec_to_str(lrc, "0x"),
-                                                                    COLOR_T_ERROR,
-                                                                    COLOR_C_ERROR);
+                                                                    ScanaStudio.PacketColors.Error.Title,
+                                                                    ScanaStudio.PacketColors.Error.Content);
                             }
 
                             state_machine = ENUM_STATE_EOF;
