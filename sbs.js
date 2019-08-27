@@ -199,13 +199,13 @@ function process_pm_item(item)
           ext_add = (byte>>1) & 0x3;
           if (byte & 0x1)
           {
-            operation_str = "NOT SUPPORTED: Read from 10 bit address ";
+            operation_str = "NOT SUPPORTED: Rd from 10bit addr ";
             operation_str_short = "! 10R ";
             ScanaStudio.dec_item_emphasize_warning();
           }
           else
           {
-            operation_str = "NOT SUPPORTED: Write to 10 bit address ";
+            operation_str = "NOT SUPPORTED: Wr to 10bit addr ";
             operation_str_short = "! 10W ";
             ScanaStudio.dec_item_emphasize_warning();
           }
