@@ -1,24 +1,21 @@
 /* Protocol meta info:
 <NAME> DMX-512 </NAME>
 <DESCRIPTION>
-
 </DESCRIPTION>
-<VERSION> 0.2 </VERSION>
+<VERSION> 0.6 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.6: Updated packet view color palette
 V0.5: Added hex view
 V0.2: Added dec_item_end() for each dec_item_new().
 V0.1: Initial release.
 </RELEASE_NOTES>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
-
 */
-
-//for the next release : add choice to decode only some chan of the datas...
 
 function on_draw_gui_decoder()
 {
@@ -113,13 +110,6 @@ const   ENUM_STATE_BREAK    = 0,
 
 //for the next release
 // const NBR_MAX_CHANNEL = 30;//512;
-
-const   COLOR_T_1    = "#3399CC",
-        COLOR_T_2    = "#339999",
-        COLOR_C_1    = "#5BC1F4",
-        COLOR_C_2    = "#5BC1C1",
-        COLOR_T_ERROR   = "#FF0000",
-        COLOR_C_ERROR   = "#FF8080";
 
 function reload_dec_gui_values()
 {
@@ -256,7 +246,7 @@ function on_decode_signals (resume)
                                                     trame[trame.length-1].end_sample_index,
                                                     "DMX-512",
                                                     "CH" + (channel + 1),
-                                                    "#0000FF",
+                                                    ScanaStudio.get_channel_color(channel),
                                                     ScanaStudio.get_channel_color(channel));
 
                 for (var i=0; (i<trame.length) && (!ScanaStudio.abort_is_requested()); i++)
@@ -279,8 +269,8 @@ function on_decode_signals (resume)
                                 trame[i].end_sample_index,
                                 "Start",
                                 "Ok",
-                                "#0000FF",
-                                "#8080FF");
+                                ScanaStudio.PacketColors.Wrap.Title,
+                                ScanaStudio.PacketColors.Wrap.Content);
                         }
                         else
                         {
@@ -297,8 +287,8 @@ function on_decode_signals (resume)
                                 trame[i].end_sample_index,
                                 "Start",
                                 "Wrong",
-                                COLOR_T_ERROR,
-                                COLOR_C_ERROR);
+                                ScanaStudio.PacketColors.Error.Title,
+                                ScanaStudio.PacketColors.Error.Content);
                         }
                     }
                     else
@@ -313,8 +303,8 @@ function on_decode_signals (resume)
                                                             trame[i].end_sample_index,
                                                             "Chan " + i,
                                                             trame[i].content,
-                                                            (i%2) ? COLOR_T_1 : COLOR_T_2,
-                                                            (i%2) ? COLOR_C_1 : COLOR_C_2);
+                                                            ScanaStudio.PacketColors.Data.Title,
+                                                            ScanaStudio.PacketColors.Data.Content);
                     }
                 }//en for each item in trame
             }//end if trame ended
