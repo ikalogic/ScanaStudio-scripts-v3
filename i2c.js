@@ -3,13 +3,14 @@
 <DESCRIPTION>
 I2C support for ScanaStudio.
 </DESCRIPTION>
-<VERSION> 0.6 </VERSION>
+<VERSION> 0.7 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.7: Updated packet view
 V0.6: Added hex and packet views
 V0.5: Added dec_item_end() for each dec_item_new()
 V0.4: Fixed warnings in script log when decoding random non-I2C signals
@@ -44,15 +45,28 @@ function on_draw_gui_decoder()
 //Global variables
 var I2C =
 {
-    ADDRESS : 0x01,
-    ACK  : 0x02,
-    DATA  : 0x04,
+    ADDRESS     : 0x01,
+    ACK         : 0x02,
+    DATA        : 0x04,
     ADDRESS_EXT : 0x08,
+};
+
+function I2cPacketObject (root, st_sample, end_sample, title, content, title_color, content_color)
+{
+    this.root = root;
+    this.st_sample = st_sample;
+    this.end_sample = end_sample;
+    this.title = title;
+    this.content = content;
+    this.title_color = title_color;
+    this.content_color = content_color;
 };
 
 var sampling_rate;
 var state_machine;
+var frame_state, last_frame_state;
 var i2c_sample_points = [];
+var i2c_packet_arr = [];
 
 function on_decode_signals (resume)
 {
@@ -82,6 +96,7 @@ function on_decode_signals (resume)
         ext_add = 0;
         hs_mode = false;
         frame_state = I2C.ADDRESS;
+        last_frame_state = frame_state;
         packet_started = false;
         byte_counter = 0;
         bit_counter = 0;
@@ -145,17 +160,20 @@ function on_decode_signals (resume)
                                 ScanaStudio.dec_item_add_content("RE-START");
                                 ScanaStudio.dec_item_add_content("RS");
                                 ScanaStudio.dec_item_add_content("R");
-                                ScanaStudio.packet_view_add_packet(false, ch_sda, item_st_sample, item_end_sample, "Re-start", "",
-                                                                   ScanaStudio.PacketColors.Wrap.Title, ScanaStudio.PacketColors.Wrap.Content);
+
+                                i2c_packet_arr.push(new I2cPacketObject(false, item_st_sample, item_end_sample, "Re-start", "",
+                                                    ScanaStudio.PacketColors.Wrap.Title, ScanaStudio.PacketColors.Wrap.Content));
                             }
                             else
                             {
                                 ScanaStudio.dec_item_add_content("START");
                                 ScanaStudio.dec_item_add_content("S");
-                                ScanaStudio.packet_view_add_packet(true, ch_sda, item_st_sample, -1, "I2C", "CH" + (ch_sda + 1), ScanaStudio.get_channel_color(ch_sda),
-                                                                   ScanaStudio.get_channel_color(ch_sda));
-                                ScanaStudio.packet_view_add_packet(false, ch_sda, item_st_sample, item_end_sample, "Start", "", ScanaStudio.PacketColors.Wrap.Title,
-                                                                   ScanaStudio.PacketColors.Wrap.Content);
+
+                                update_packet_view();
+                                i2c_packet_arr.push(new I2cPacketObject(true, item_st_sample, item_end_sample, "I2C", "CH" + (ch_sda + 1),
+                                                    ScanaStudio.get_channel_color(ch_sda), ScanaStudio.get_channel_color(ch_sda)));
+                                i2c_packet_arr.push(new I2cPacketObject(false, item_st_sample, item_end_sample, "Start", "",
+                                                    ScanaStudio.PacketColors.Wrap.Title, ScanaStudio.PacketColors.Wrap.Content));
                             }
 
                             ScanaStudio.dec_item_end();
@@ -166,6 +184,7 @@ function on_decode_signals (resume)
                             byte_counter = 0;
                             bit_counter = 0;
                             i2c_sample_points = []; //clear
+                            last_frame_state = frame_state;
                             frame_state = I2C.ADDRESS;
                         }
                         else
@@ -190,8 +209,10 @@ function on_decode_signals (resume)
                             ScanaStudio.dec_item_add_content("STOP");
                             ScanaStudio.dec_item_add_content("P");
                             ScanaStudio.dec_item_end();
-                            ScanaStudio.packet_view_add_packet(false, ch_sda, item_st_sample, item_end_sample, "Stop", "", ScanaStudio.PacketColors.Wrap.Title,
-                                                               ScanaStudio.PacketColors.Wrap.Content);
+
+                            i2c_packet_arr.push(new I2cPacketObject(false, item_st_sample, item_end_sample, "Stop", "",
+                                                ScanaStudio.PacketColors.Wrap.Title, ScanaStudio.PacketColors.Wrap.Content));
+                            update_packet_view();
 
                             //ScanaStudio.console_error_msg("STOP found!",last_trs_sda.sample_index);
                             hs_mode = false;
@@ -261,17 +282,39 @@ function process_i2c_bit (value, sample_index)
             {
                 ScanaStudio.dec_item_add_content("NACK");
                 ScanaStudio.dec_item_add_content("N");
-                ScanaStudio.packet_view_add_packet(false, ch_sda, item_st_sample, item_end_sample, "Nack", "",
-                                                   ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
+
+                var title = "Nack";
+                var title_color = ScanaStudio.PacketColors.Check.Title;
+                var content_color = ScanaStudio.PacketColors.Check.Content;
+
+                if (last_frame_state == I2C.ADDRESS)
+                {
+                    title = "Addr Nack";
+                    title_color = ScanaStudio.PacketColors.Error.Title;
+                    content_color = ScanaStudio.PacketColors.Error.Content;
+                }
+
+                i2c_packet_arr.push(new I2cPacketObject(false, item_st_sample, item_end_sample, title, "", title_color, content_color));
             }
             else
             {
                 ScanaStudio.dec_item_add_content("ACK");
                 ScanaStudio.dec_item_add_content("A");
+
+                var title = "Ack";
+
+                if (last_frame_state == I2C.ADDRESS)
+                {
+                    title = "Addr Ack";
+                }
+
+                i2c_packet_arr.push(new I2cPacketObject(false, item_st_sample, item_end_sample, title, "",
+                                    ScanaStudio.PacketColors.Check.Title, ScanaStudio.PacketColors.Check.Content));
             }
 
             add_sample_points();
             ScanaStudio.dec_item_end();
+            last_frame_state = frame_state;
 
             if (hs_mode)
             {
@@ -315,6 +358,7 @@ function process_i2c_bit (value, sample_index)
             {
                 ScanaStudio.dec_item_add_content("0x" + byte.toString(16));
                 bit_counter = 0;
+                last_frame_state = frame_state;
                 frame_state = I2C.ACK;
                 ScanaStudio.dec_item_end();
                 break;
@@ -391,10 +435,12 @@ function process_i2c_bit (value, sample_index)
             ScanaStudio.dec_item_add_content(format_content(byte >> add_shift, address_format, add_len));
             add_sample_points();
             ScanaStudio.dec_item_end();
-            ScanaStudio.packet_view_add_packet(false, ch_sda, item_st_sample, item_end_sample, "Address",
-                                               operation_str + format_content(byte >> add_shift, address_format, add_len), ScanaStudio.PacketColors.Preamble.Title,
-                                               ScanaStudio.PacketColors.Preamble.Content);
+
+            i2c_packet_arr.push(new I2cPacketObject(false, item_st_sample, item_end_sample, "Address",
+                                operation_str + format_content(byte >> add_shift, address_format, add_len),
+                                ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content));
             bit_counter = 0;
+            last_frame_state = frame_state;
             frame_state = I2C.ACK;
         }
       break;
@@ -424,10 +470,12 @@ function process_i2c_bit (value, sample_index)
             ScanaStudio.dec_item_add_content(format_content(ext_add, address_format, 10));
             add_sample_points();
             ScanaStudio.dec_item_end();
-            ScanaStudio.packet_view_add_packet(false, ch_sda, item_st_sample, item_end_sample,
-                                               "Address", "10 bit address = " + format_content(ext_add,address_format, 10),
-                                               ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
+
+            i2c_packet_arr.push(new I2cPacketObject(false, item_st_sample, item_end_sample, "Address",
+                                "10 bit address = " + format_content(ext_add,address_format, 10),
+                                ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content));
             bit_counter = 0;
+            last_frame_state = frame_state;
             frame_state = I2C.ACK;
         }
       break;
@@ -465,10 +513,11 @@ function process_i2c_bit (value, sample_index)
 
             ScanaStudio.dec_item_end();
             ScanaStudio.hex_view_add_byte(ch_sda, item_st_sample, item_end_sample, byte);
-            ScanaStudio.packet_view_add_packet(false, ch_sda, item_st_sample, item_end_sample, "Data", format_content(byte, data_format, 8),
-                                               ScanaStudio.PacketColors.Data.Title, ScanaStudio.PacketColors.Data.Content);
 
+            i2c_packet_arr.push(new I2cPacketObject(false, item_st_sample, item_end_sample, "Data", format_content(byte, data_format, 8),
+                                ScanaStudio.PacketColors.Data.Title, ScanaStudio.PacketColors.Data.Content));
             bit_counter = 0;
+            last_frame_state = frame_state;
             frame_state = I2C.ACK;
         }
       break;
@@ -542,6 +591,40 @@ function pad (num_str, size)
 {
     while (num_str.length < size) num_str = "0" + num_str;
     return num_str;
+}
+
+function update_packet_view()
+{
+    if (i2c_packet_arr.length > 0)
+    {
+        var title_color = "";
+
+        for (i = 0; i < i2c_packet_arr.length; i++)
+        {
+            title_color = i2c_packet_arr[i].title_color;
+
+            if (i2c_packet_arr[i].root != false)
+            {
+                title_color = ScanaStudio.PacketColors.Error.Title;
+
+                for (k = i; k < i2c_packet_arr.length; k++)
+                {
+                    if (i2c_packet_arr[k].title.indexOf("Addr Ack") != -1)
+                    {
+                        title_color = ScanaStudio.get_channel_color(ch_sda);
+                    }
+                }
+            }
+
+            if (i2c_packet_arr[i].title.indexOf("Ack") == -1)
+            {
+                ScanaStudio.packet_view_add_packet(i2c_packet_arr[i].root, ch_sda, i2c_packet_arr[i].st_sample, i2c_packet_arr[i].end_sample,
+                                                   i2c_packet_arr[i].title, i2c_packet_arr[i].content, title_color, i2c_packet_arr[i].content_color);
+            }
+        }
+
+        i2c_packet_arr = [];
+    }
 }
 
 //Function called to generate demo siganls (when no physical device is attached)
