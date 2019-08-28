@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Adressable RGB LED chipsets
 </DESCRIPTION>
-<VERSION> 0.2 </VERSION>
+<VERSION> 0.3 </VERSION>
 <AUTHOR_NAME>  Vladislav Kosinov </AUTHOR_NAME>
 <AUTHOR_URL> v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright 2019 Ikalogic SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.3: Updated packet view color palette
 V0.2: Added dec_item_end() for each dec_item_new().
 V0.1: Initial release.
 </RELEASE_NOTES>
@@ -289,7 +290,8 @@ function on_decode_signals (resume)
                 ScanaStudio.dec_item_end();
 
                 ScanaStudio.packet_view_add_packet(true, ch, -1,  -1, "RGB LED", chip.str, ScanaStudio.get_channel_color(ch), ScanaStudio.get_channel_color(ch));
-                ScanaStudio.packet_view_add_packet(false, ch, (trs_last.sample_index + (chip.t1h * sample_rate)),  trs.sample_index, "LED", "RESET", "#D3D3D3", "#D3D3D3");
+                ScanaStudio.packet_view_add_packet(false, ch, (trs_last.sample_index + (chip.t1h * sample_rate)),  trs.sample_index, "LED", "RESET",
+                                                   ScanaStudio.PacketColors.Wrap.Title, ScanaStudio.PacketColors.Wrap.Content);
             }
             else if ((t >= (chip.t0l - chip.t_var)) && (t <= (chip.t0l + chip.t_var)))
             {
