@@ -3,13 +3,14 @@
 <DESCRIPTION>
 CAN bus protocol analyzer
 </DESCRIPTION>
-<VERSION> 0.5 </VERSION>
+<VERSION> 0.6 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Nicolas Bastit </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com, n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.6: Fix several bugs related to bit stuffing errors.
 V0.5: Added packet view
 V0.3: Added dec_item_end() for each dec_item_new()
 V0.2: Added error detection, added GUI validation, fixed bit stuffing errors
@@ -323,8 +324,8 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
   if (is_stuffed_bit && (last_processed_bit == b)) //Bit stuffing error!
   {
 
-    start_sample = sample_point - sample_point_offset_std + dec_item_margin;
-    end_sample = sample_point - sample_point_offset_std + samples_per_bit_std - dec_item_margin;
+    start_sample = sample_point + dec_item_margin;
+    end_sample = sample_point + samples_per_bit_std - dec_item_margin;
     ScanaStudio.dec_item_new( ch, start_sample,end_sample);
     ScanaStudio.dec_item_add_content("Stuffing error");
     ScanaStudio.dec_item_add_content("Error");
