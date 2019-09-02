@@ -194,7 +194,7 @@ function on_decode_signals(resume)
           }*/
 
           same_bit_value_counter++;
-          if ((same_bit_value_counter > 6) && (can_state_machine != CAN.SEEK_CRC))
+          if ((same_bit_value_counter > 6) && (can_state_machine < CAN.SEEK_CRC))
           {
             same_bit_value_counter = 0;
             cursor = prev_cursor;
@@ -1538,7 +1538,7 @@ function get_dlc(data_len)
   {
     dlc = 11;
   }
-  else if (data_len == 14)
+  else if (data_len == 24)
   {
     dlc = 12;
   }
