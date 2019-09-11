@@ -382,7 +382,6 @@ ScanaStudio.BuilderObject =
     put_bit : function(b)
     {
         ScanaStudio.builder_add_samples(this.channel, 0, sync_bit);
-        ScanaStudio.builder_add_samples(this.channel, 1, sync_bit * 0.1);
         ScanaStudio.builder_add_samples(this.channel, b, bit_sampling_point);
         ScanaStudio.builder_add_samples(this.channel, 1, sync_bit * 0.1);
     },
