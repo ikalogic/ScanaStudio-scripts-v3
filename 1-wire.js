@@ -10,6 +10,7 @@
 <COPYRIGHT> Copyright BASTIT Nicolas </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.7: new skin
 V0.6: Added trigger capability
 V0.5: Added packet and hex views
 V0.2: Added dec_item_end() for each dec_item_new().
