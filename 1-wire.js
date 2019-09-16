@@ -3,7 +3,7 @@
 <DESCRIPTION>
 1-Wire protocol analyzer. Decodes Reset, presence and byte fields.
 </DESCRIPTION>
-<VERSION> 0.0 </VERSION>
+<VERSION> 0.7 </VERSION>
 <AUTHOR_NAME> BASTIT Nicolas </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
