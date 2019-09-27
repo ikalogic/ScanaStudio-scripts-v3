@@ -3,13 +3,14 @@
 <DESCRIPTION>
 This script decodes ARM trace TPIU bus. TRACE CTRL is currently not supported.
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.2:  Faster decoding, fixed bug that caused freeze at the end of decoding, fixed bug that caused wrong TPIU packet decoding, added more advanced options to decoder GUI
 V0.1:  Initial release.
 </RELEASE_NOTES>
 */
@@ -30,7 +31,9 @@ function on_draw_gui_decoder()
     }
     ScanaStudio.gui_add_item_to_combo_box("Not used",((i-first_data_ch) >= default_tpiu_width));
   }
-
+  ScanaStudio.gui_add_check_box("show_sync","Show synchronization packets",false);
+  ScanaStudio.gui_add_check_box("show_hs","Show half-word synchronization packets",false);
+  ScanaStudio.gui_add_info_label("Warning: showing all synchronization packets can dramatically slow down TPIU decoder operation");
   ScanaStudio.gui_add_new_tab("Advanced options",false);
     ScanaStudio.gui_add_combo_box("id_format","ID display format");
       ScanaStudio.gui_add_item_to_combo_box("HEX",true);
@@ -114,7 +117,7 @@ function on_decode_signals(resume)
     //advance all DATA iterators right after the CLK edge
     for (var i = 0; i < tpiu_data_channel.length; i++)
     {
-      while (trs_data[i].sample_index <= trs_clk.sample_index)
+      while ((trs_data[i].sample_index <= trs_clk.sample_index) && (ScanaStudio.trs_is_not_last(tpiu_data_channel[i])))
       {
         trs_data[i] = ScanaStudio.trs_get_next(tpiu_data_channel[i]);
       }
@@ -135,11 +138,11 @@ function on_decode_signals(resume)
     if (sync_word == 0x7FFFFFFF)
     {
       //ScanaStudio.console_info_msg("Sync word found!",trs_clk.sample_index);
-      ScanaStudio.dec_item_new(tpiu_clk_channel,clk_edge_fifo[31-(32/tpiu_data_channel.length)],clk_edge_fifo[31]);
+      /*ScanaStudio.dec_item_new(tpiu_clk_channel,clk_edge_fifo[31-(32/tpiu_data_channel.length)],clk_edge_fifo[31]);
       ScanaStudio.dec_item_add_content("Frame synchronization packet 0x7FFFFFFF");
       ScanaStudio.dec_item_add_content("Sync packet");
       ScanaStudio.dec_item_add_content("Sync");
-      ScanaStudio.dec_item_end();
+      ScanaStudio.dec_item_end();*/
       sync_word = 0;
       partial_word_counter = 0;
       sync_found = true;
@@ -161,12 +164,12 @@ function on_decode_signals(resume)
 
       if (tpiu_word == 0x7FFF)
       {
-        ScanaStudio.dec_item_new(tpiu_clk_channel,clk_edge_fifo[31-(16/tpiu_data_channel.length)],clk_edge_fifo[31]);
+        /*ScanaStudio.dec_item_new(tpiu_clk_channel,clk_edge_fifo[31-(16/tpiu_data_channel.length)],clk_edge_fifo[31]);
         ScanaStudio.dec_item_add_content("Halfword synchronization packet 0x7FFF");
         ScanaStudio.dec_item_add_content("Halfword sync packet");
         ScanaStudio.dec_item_add_content("Half Sync");
         ScanaStudio.dec_item_add_content("HS");
-        ScanaStudio.dec_item_end();
+        ScanaStudio.dec_item_end();*/
       }
       else
       {
@@ -204,12 +207,12 @@ function build_tpiu_bits()
   return bits;
 }
 
-var prev_id; //must be global
+var prev_id = 0; //must be global
 function parse_tpiu_frame(frame)
 {
   var i;
-  var next_id = 0;
-  var next_id_counter = 0;
+  var next_id = prev_id;
+  var next_id_counter = 2;
   ScanaStudio.packet_view_add_packet(true,tpiu_clk_channel,frame[0].start_sample,frame[15].end_sample,
                                     "TPIU TRACE","CH" + (tpiu_clk_channel+1).toString(),
                                     ScanaStudio.get_channel_color(tpiu_clk_channel),ScanaStudio.get_channel_color(tpiu_clk_channel));
