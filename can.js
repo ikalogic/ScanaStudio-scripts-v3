@@ -3,13 +3,14 @@
 <DESCRIPTION>
 CAN bus protocol analyzer
 </DESCRIPTION>
-<VERSION> 0.6 </VERSION>
+<VERSION> 0.7 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Nicolas Bastit </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com, n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.7: Fix bug that caused CAN FD frame with 0 data to have a wrong CRC.
 v0.6: Fix several bugs related to bit stuffing errors.
 V0.5: Added packet view
 V0.3: Added dec_item_end() for each dec_item_new()
@@ -177,23 +178,6 @@ function on_decode_signals(resume)
         if (ScanaStudio.get_available_samples(ch) > (cursor + samples_per_bit))
         {
           bit_to_process = ScanaStudio.bit_sampler_next(ch)
-          /*if ((bit_to_process == 0) && (can_state_machine != CAN.SEEK_CRC)) //TODO Remove this block
-          {
-            dominant_bits_counter++
-            if (dominant_bits_counter > 6)
-            {
-              cursor = prev_cursor;
-              state_machine = 0;
-              fd_mode = false;
-              switch_to_high_baud_rate = false;
-              switch_to_std_baud_rate = false;
-              can_state_machine = CAN.SEEK_IDLE;
-
-              //scanastudio.console_info_msg("More than 6 recessive bits, error! ",cursor);
-              break;
-            }
-          }*/
-
           same_bit_value_counter++;
           if ((same_bit_value_counter > 6) && (can_state_machine < CAN.SEEK_CRC))
           {
@@ -702,6 +686,9 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "DLC",
                                            "DLC = " + can_dlc.value.toString() + ", Data length = " + can_len.toString(),
                                            ScanaStudio.PacketColors.Misc.Title, ScanaStudio.PacketColors.Misc.Content);
+
+        crc_len = crc_get_len(can_len);
+
         if (can_len > 0)
         {
           can_state_machine = CAN.SEEK_DATA;
@@ -709,18 +696,10 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         else
         {
           stuff_mode = 2;
-          if (is_can_fd_frame)
-          {
-            recalculated_crc = crc_calc(crc_bits_all,crc_len)
-          }
-          else
-          {
-            recalculated_crc = crc_calc(crc_bits_destuffed,crc_len)
-          }
+          recalculated_crc = crc_calc(crc_bits_all,crc_len);
           can_state_machine = CAN.SEEK_CRC;
         }
         can_byte_counter = 0;
-        crc_len = crc_get_len(can_len);
         can_bits = [];
       }
       break;
