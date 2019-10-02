@@ -175,7 +175,7 @@ function on_decode_signals(resume)
         }
         break;
       case 1: //process bits until there is a change
-        if (ScanaStudio.get_available_samples(ch) > (cursor + samples_per_bit))
+        if (ScanaStudio.get_available_samples(ch) > (cursor + (samples_per_bit*3)))
         {
           bit_to_process = ScanaStudio.bit_sampler_next(ch)
           same_bit_value_counter++;
