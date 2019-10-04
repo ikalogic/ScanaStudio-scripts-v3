@@ -260,7 +260,6 @@ function on_decode_signals(resume)
         }
         else
         {
-
             data = 0;
             for(var i=0; i<dl_mode.length; i++)
             {
@@ -281,13 +280,27 @@ function on_decode_signals(resume)
                 }
                 else
                 {
-                    if(bit_order == 0)//MSB
+                    if(dl_mode[i] == strobe)
                     {
-                        data = data | (ScanaStudio.trs_get_before(dl_mode[i], trs.sample_index).value)<<(7-i);
+                        if(bit_order == 0)//MSB
+                        {
+                            data = data | (trs.value)<<(dl_mode.length-1-i);
+                        }
+                        else //LSB
+                        {
+                            data = data | (trs.value)<<i;
+                        }
                     }
-                    else //LSB
+                    else
                     {
-                        data = data | (ScanaStudio.trs_get_before(dl_mode[i], trs.sample_index).value)<<i;
+                        if(bit_order == 0)//MSB
+                        {
+                            data = data | (ScanaStudio.trs_get_before(dl_mode[i], trs.sample_index).value)<<(dl_mode.length-1-i);
+                        }
+                        else //LSB
+                        {
+                            data = data | (ScanaStudio.trs_get_before(dl_mode[i], trs.sample_index).value)<<i;
+                        }
                     }
                 }
             }
@@ -336,6 +349,7 @@ function on_decode_signals(resume)
 
             if(!ScanaStudio.trs_is_not_last(strobe))
             {
+                ScanaStudio.console_info_msg("end",next_trs.sample_index);
                 break;
             }
 
@@ -351,6 +365,10 @@ function on_decode_signals(resume)
                 if(ScanaStudio.trs_is_not_last(strobe))
                 {
                     next_trs = ScanaStudio.trs_get_next(strobe);
+                }
+                else
+                {
+                    ScanaStudio.console_info_msg("msg",next_trs.sample_index);
                 }
             }
         }
