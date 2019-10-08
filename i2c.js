@@ -3,13 +3,14 @@
 <DESCRIPTION>
 I2C support for ScanaStudio.
 </DESCRIPTION>
-<VERSION> 0.7 </VERSION>
+<VERSION> 0.8 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.8: Added trigger capability
 V0.7: Updated packet view
 V0.6: Added hex and packet views
 V0.5: Added dec_item_end() for each dec_item_new()
@@ -68,6 +69,22 @@ var frame_state, last_frame_state;
 var i2c_sample_points = [];
 var i2c_packet_arr = [];
 
+var ch_sda;
+var ch_scl;
+var address_opt;
+var address_format;
+var data_format;
+
+function reload_dec_gui_values()
+{
+    //get GUI values
+    ch_sda = ScanaStudio.gui_get_value("ch_sda");
+    ch_scl = ScanaStudio.gui_get_value("ch_scl");
+    address_opt = ScanaStudio.gui_get_value("address_opt");
+    address_format = ScanaStudio.gui_get_value("address_format");
+    data_format = ScanaStudio.gui_get_value("data_format");
+}
+
 function on_decode_signals (resume)
 {
     var i2c_condition_width;
@@ -76,13 +93,7 @@ function on_decode_signals (resume)
     if (!resume) //If resume == false, it's the first call to this function.
     {
         sampling_rate = ScanaStudio.get_capture_sample_rate();
-        //get GUI values
-        ch_sda = ScanaStudio.gui_get_value("ch_sda");
-        ch_scl = ScanaStudio.gui_get_value("ch_scl");
-        address_opt = ScanaStudio.gui_get_value("address_opt");
-        address_format = ScanaStudio.gui_get_value("address_format");
-        data_format = ScanaStudio.gui_get_value("data_format");
-
+        reload_dec_gui_values();
         //Reset iterator
         ScanaStudio.trs_reset(ch_sda);
         ScanaStudio.trs_reset(ch_scl);
@@ -488,7 +499,7 @@ function process_i2c_bit (value, sample_index)
             if (start_sample-i2c_byte_margin <= last_dec_item_end_sample)
             {
                 item_st_sample = last_dec_item_end_sample + 1;
-                item_end_sample = last_dec_item_end_sample + i2c_byte_margin;
+                item_end_sample = sample_index + i2c_byte_margin;
                 last_dec_item_end_sample += i2c_byte_margin;
             }
             else
@@ -626,6 +637,287 @@ function update_packet_view()
         i2c_packet_arr = [];
     }
 }
+
+//Trigger sequence GUI
+function on_draw_gui_trigger()
+{
+    ScanaStudio.gui_add_new_selectable_containers_group("trig_alt","Select trigger type");
+        ScanaStudio.gui_add_new_container("Trigger on any frame", false);
+            ScanaStudio.gui_add_info_label("Trigger on any I2C Frame.");
+            ScanaStudio.gui_add_combo_box("trig_any_frame","Trigger on:")
+                ScanaStudio.gui_add_item_to_combo_box("Valid start condition", true);
+                ScanaStudio.gui_add_item_to_combo_box("Valid stop condition", false);
+                ScanaStudio.gui_add_item_to_combo_box("Any unacknowledged address", false);
+                ScanaStudio.gui_add_item_to_combo_box("Any acknowledged address", false);
+        ScanaStudio.gui_end_container();
+        ScanaStudio.gui_add_new_container("on I2C address", true);
+            ScanaStudio.gui_add_info_label("Type Decimal value (65) or HEX value (0x41). Address is a 7 bit field.");
+            ScanaStudio.gui_add_text_input("trig_addr","Slave address","");
+            ScanaStudio.gui_add_combo_box("trig_access_type","Access type");
+                ScanaStudio.gui_add_item_to_combo_box("Any (read or write)", true);
+                ScanaStudio.gui_add_item_to_combo_box("Read", false);
+                ScanaStudio.gui_add_item_to_combo_box("Write", false);
+            ScanaStudio.gui_add_check_box("trig_chk_ack","Address must be acknowledged by a slave", false);
+        ScanaStudio.gui_end_container();
+    ScanaStudio.gui_end_selectable_containers_group();
+}
+
+var trig_alt;
+var trig_addr;
+var trig_any_frame;
+var trig_access_type
+var trig_chk_ack;
+
+function on_eval_gui_trigger()
+{
+    trig_alt = Number(ScanaStudio.gui_get_value("trig_alt"));
+    trig_addr = Number(ScanaStudio.gui_get_value("trig_addr"));
+
+    if (trig_alt == 1)
+    {
+        if (trig_addr.length == 0)
+        {
+            return "Please specify trigger byte.";
+        }
+        else if (isNaN(trig_addr))
+        {
+            return "Please enter a correct trigger address.";
+        }
+    }
+    return "";
+}
+
+function on_build_trigger()
+{
+    reload_dec_gui_values();
+    trig_alt = Number(ScanaStudio.gui_get_value("trig_alt"));
+    trig_addr = Number(ScanaStudio.gui_get_value("trig_addr"));
+    trig_any_frame = Number(ScanaStudio.gui_get_value("trig_any_frame"));
+    trig_access_type = Number(ScanaStudio.gui_get_value("trig_access_type"));
+    trig_chk_ack = Number(ScanaStudio.gui_get_value("trig_chk_ack"));
+
+    if (trig_alt == 0) //Trig on any frame
+    {
+        switch(trig_any_frame)
+        {
+            case 0://Valid start condition
+            {
+                trig_build_start();
+                break;
+            }
+            case 1://Valid stop condition
+            {
+                trig_build_stop();
+                break;
+            }
+            case 2://Any unacknowledged address
+            {
+                trig_build_start();
+                for(var i=0; i<8; i++)
+                {
+                    trig_build_bit(-1);
+                }
+                trig_build_ack(false);
+                // trig_build_stop();
+                break;
+            }
+            case 3://Any acknowledged address
+            {
+                trig_build_start();
+                for(var i=0; i<8; i++)
+                {
+                    trig_build_bit(-1);
+                }
+                trig_build_ack(true);
+                // trig_build_stop();
+                break;
+            }
+            default:
+            break;
+        }
+    }
+    else if (trig_alt == 1) //Trig on I2C addresses
+    {
+        trig_build_start();
+        for(var i=0; i<7; i++)
+        {
+            trig_build_bit(trig_addr>>(6-i));
+        }
+
+        switch(trig_access_type)
+        {
+            case 0://any (read or write)
+            {
+                trig_build_bit(-1);
+                break;
+            }
+            case 1://Read
+            {
+                trig_build_bit(1);
+                break;
+            }
+            case 2:
+            {
+                trig_build_bit(0);
+                break;
+            }
+            default:
+            {
+                break;
+            }
+        }
+
+        if(trig_chk_ack)
+        {
+            trig_build_ack(true);
+        }
+    }
+    else
+    {
+        ScanaStudio.console_info_msg("error");
+    }
+}
+
+function trig_build_start()
+{
+    var step = "";
+    var return_nbr_step = 0;
+
+    for (var i = 0; i < ScanaStudio.get_device_channels_count(); i++)
+    {
+        if (i == ch_sda)
+        {
+            step = "F" + step;
+        }
+        else if (i == ch_scl)
+        {
+            step = "1" + step;
+        }
+        else
+        {
+            step = "X" + step;
+        }
+    }
+
+    ScanaStudio.flexitrig_append(step,-1, -1);
+    return_nbr_step++;
+
+    return return_nbr_step;
+}
+
+function trig_build_bit(bit)
+{
+    var step = "";
+    var return_nbr_step = 0;
+
+    for (var i = 0; i < ScanaStudio.get_device_channels_count(); i++)
+    {
+        if (i == ch_scl)
+        {
+            step = "R" + step;
+        }
+        else if (i == ch_sda)
+        {
+            if(bit == 1)
+            {
+                step = "1" + step;
+            }
+            else if (bit == 0)
+            {
+                step = "0" + step;
+            }
+            else
+            {
+                step = "X" + step;
+            }
+        }
+        else
+        {
+            step = "X" + step;
+        }
+    }
+
+    ScanaStudio.flexitrig_append(step,-1, -1);
+    return_nbr_step++;
+
+    step = "";
+    for (var i = 0; i < ScanaStudio.get_device_channels_count(); i++)
+    {
+        if (i == ch_scl)
+        {
+            step = "F" + step;
+        }
+        else if (i == ch_sda)
+        {
+            if( bit == 1 )
+            {
+                step = "1" + step;
+            }
+            else if (bit == 0)
+            {
+                step = "0" + step;
+            }
+            else
+            {
+                step = "X" + step;
+            }
+        }
+        else
+        {
+            step = "X" + step;
+        }
+    }
+
+    ScanaStudio.flexitrig_append(step,-1, -1);
+    return_nbr_step++;
+
+    return return_nbr_step;
+}
+
+function trig_build_ack(ack)
+{
+    var return_nbr_step = 0;
+
+    if(ack) //ACK
+    {
+        return_nbr_step += trig_build_bit(0);
+    }
+    else //NACK
+    {
+        return_nbr_step += trig_build_bit(1);
+    }
+
+    return return_nbr_step;
+}
+
+function trig_build_stop()
+{
+    var step = "";
+    var return_nbr_step = 0;
+
+    for (var i = 0; i < ScanaStudio.get_device_channels_count(); i++)
+    {
+        if (i == ch_sda)
+        {
+            step = "R" + step;
+        }
+        else if (i == ch_scl)
+        {
+            step = "1" + step;
+        }
+        else
+        {
+            step = "X" + step;
+        }
+    }
+
+    ScanaStudio.flexitrig_append(step,-1, -1);
+    return_nbr_step++;
+
+    return return_nbr_step;
+}
+
+
 
 //Function called to generate demo siganls (when no physical device is attached)
 function on_build_demo_signals()
