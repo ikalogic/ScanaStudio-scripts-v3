@@ -3,13 +3,14 @@
 <DESCRIPTION>
 1-Wire protocol analyzer. Decodes Reset, presence and byte fields.
 </DESCRIPTION>
-<VERSION> 0.7 </VERSION>
+<VERSION> 0.8 </VERSION>
 <AUTHOR_NAME> BASTIT Nicolas </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright BASTIT Nicolas </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.8: fixed bug related to incrementaiton
 V0.7: new skin
 V0.6: Added trigger capability
 V0.5: Added packet and hex views
@@ -49,6 +50,7 @@ var format;
 var suffix;
 var sampling_rate;
 var state_machine;
+var trs;
 
 const   ENUM_STATE_RESET_F = 0,
         ENUM_STATE_RESET_R = 1,
@@ -191,6 +193,7 @@ function on_decode_signals(resume)
         setup_1wire_parameters(speed);
 
         ScanaStudio.trs_reset(ch);    // Reset the trs iterator.
+        trs = ScanaStudio.trs_get_next(ch);
         last_rising_edge = -1;
         last_falling_edge = -1;
         previous_edge = -1;
@@ -202,8 +205,6 @@ function on_decode_signals(resume)
 
     while ( (ScanaStudio.abort_is_requested() == false) && (ScanaStudio.trs_is_not_last(ch) == true) )
     {
-        trs = ScanaStudio.trs_get_next(ch);
-
         switch (state_machine)
         {
             case ENUM_STATE_RESET_F:
@@ -409,6 +410,14 @@ function on_decode_signals(resume)
             }//end case ENUM_STATE_BIT_R
 
         }// end switch state_machine
+
+
+        var tmp_trs_sample_index;
+        tmp_trs_sample_index = trs.sample_index;
+        while( (tmp_trs_sample_index == trs.sample_index) && (ScanaStudio.trs_is_not_last(ch) == true) )
+        {
+            trs = ScanaStudio.trs_get_next(ch);
+        }
     }//end while
 
 
