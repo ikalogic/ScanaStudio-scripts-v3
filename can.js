@@ -10,6 +10,7 @@ CAN bus protocol analyzer
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.8: Fix bug that caused bit stuffing in CRC field to be ignored
 v0.7: Fix bug that caused CAN FD frame with 0 data to have a wrong CRC.
 v0.6: Fix several bugs related to bit stuffing errors.
 V0.5: Added packet view
@@ -175,7 +176,7 @@ function on_decode_signals(resume)
         }
         break;
       case 1: //process bits until there is a change
-        if (ScanaStudio.get_available_samples(ch) > (cursor + (samples_per_bit*3)))
+        if (ScanaStudio.get_available_samples(ch) > (cursor + (samples_per_bit)))
         {
           bit_to_process = ScanaStudio.bit_sampler_next(ch)
           same_bit_value_counter++;
@@ -587,13 +588,14 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         }
         else
         {
-          stuff_mode = 0; //No more bit stuffing after this point for CAN frames
           if (is_can_fd_frame)
           {
+            stuff_mode = 2;
             recalculated_crc = crc_calc(crc_bits_all,crc_len)
           }
           else
           {
+            stuff_mode = 1;
             recalculated_crc = crc_calc(crc_bits_destuffed,crc_len)
           }
           can_state_machine = CAN.SEEK_CRC;
@@ -729,7 +731,7 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
           }
           else
           {
-            stuff_mode = 0;
+            stuff_mode = 1;
           }
 
           if (is_can_fd_frame)
@@ -1091,8 +1093,8 @@ ScanaStudio.BuilderObject = {
       this.put_word(data_array[i],8);
     }
     crc = crc_calc(crc_bits_destuffed,15);
-    this.stuffing_mode(0); //Switch off bit stuffing starting from here. (no stuff in CRC)
     this.put_word(crc,15); //CRC
+    this.stuffing_mode(0);
     this.put_bit(1); //CRC DEL
     this.put_bit(0); //ACK
     this.put_bit(1); //ACK DEL
@@ -1160,8 +1162,8 @@ ScanaStudio.BuilderObject = {
       this.put_word(data_array[i],8);
     }
     crc = crc_calc(crc_bits_destuffed,15);
-    this.stuffing_mode(0); //Switch off bit stuffing starting from here (no stuff in CRC)
     this.put_word(crc,15); //CRC
+    this.stuffing_mode(0);
     this.put_bit(1); //CRC DEL
     this.put_bit(0); //ACK
     this.put_bit(1); //ACK DEL
