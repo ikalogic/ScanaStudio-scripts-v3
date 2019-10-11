@@ -3,14 +3,15 @@
 <DESCRIPTION>
 CAN bus protocol analyzer
 </DESCRIPTION>
-<VERSION> 0.7 </VERSION>
+<VERSION> 0.8 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Nicolas Bastit </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com, n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-v0.8: Fix bug that caused bit stuffing in CRC field to be ignored
+v0.9: Fix bug that caused error in decoding live streamed samples.
+v0.8: Fix bug that caused bit stuffing in CRC field to be ignored.
 v0.7: Fix bug that caused CAN FD frame with 0 data to have a wrong CRC.
 v0.6: Fix several bugs related to bit stuffing errors.
 V0.5: Added packet view
@@ -91,7 +92,7 @@ var switch_to_high_baud_rate = false;
 var switch_to_std_baud_rate = false;
 var crc_len = 15;
 var dec_item_margin = 1;
-var done = false;
+var exit_while = false;
 /*
 
 Bit flow through the decoder:
@@ -104,6 +105,7 @@ function on_decode_signals(resume)
 {
   var is_stuffed_bit;
   var start_sample, end_sample;
+  exit_while = false;
 
   if (!resume) //If resume == false, it's the first call to this function.
   {
@@ -165,8 +167,8 @@ function on_decode_signals(resume)
             sample_point_offset = sample_point_offset_std;
             ScanaStudio.bit_sampler_init(ch,cursor+sample_point_offset_std,samples_per_bit);
             cursor += sample_point_offset_std;
-            //scanastudio.console_info_msg("Resync at transtion ",cursor);
           }
+
           dec_item_margin = samples_per_bit / 8;
           current_bit_value = trs.value;
           prev_cursor = cursor;
@@ -176,7 +178,7 @@ function on_decode_signals(resume)
         }
         break;
       case 1: //process bits until there is a change
-        if (ScanaStudio.get_available_samples(ch) > (cursor + (samples_per_bit)))
+        if (ScanaStudio.get_available_samples(ch) > (cursor + (samples_per_bit*2)))
         {
           bit_to_process = ScanaStudio.bit_sampler_next(ch)
           same_bit_value_counter++;
@@ -260,14 +262,14 @@ function on_decode_signals(resume)
         }
         else
         {
-          done = true;
+          exit_while = true;
         }
         break;
       default:
         state_machine = 0;
     }
 
-    if (done)
+    if (exit_while)
     {
       break;
     }
