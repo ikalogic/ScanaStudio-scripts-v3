@@ -3,14 +3,14 @@
 <DESCRIPTION>
 CAN bus protocol analyzer
 </DESCRIPTION>
-<VERSION> 0.8 </VERSION>
+<VERSION> 0.9 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Nicolas Bastit </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com, n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-v0.9: Fix bug that caused error in decoding live streamed samples.
+v0.9: Fix bug that caused error in decoding live streamed samples, fixed bug related to bit stuffing of CRC delimiter.
 v0.8: Fix bug that caused bit stuffing in CRC field to be ignored.
 v0.7: Fix bug that caused CAN FD frame with 0 data to have a wrong CRC.
 v0.6: Fix several bugs related to bit stuffing errors.
@@ -783,7 +783,6 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
 
         can_bits = [];
         can_state_machine = CAN.SEEK_CRC_DEL;
-        stuff_mode = 0; //No more bit stuffing after this point (even for CAN FD)
       }
       break;
     case CAN.SEEK_CRC_DEL: //CRC Delimiter, this is also where we switch back from FD mode to std bitrate
@@ -830,6 +829,7 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
           switch_to_std_baud_rate = true;
         }
         can_bits = [];
+        stuff_mode = 0; //No more bit stuffing after this point (even for CAN FD)
         can_state_machine = CAN.SEEK_ACK;
       }
       break;
@@ -1096,8 +1096,8 @@ ScanaStudio.BuilderObject = {
     }
     crc = crc_calc(crc_bits_destuffed,15);
     this.put_word(crc,15); //CRC
-    this.stuffing_mode(0);
     this.put_bit(1); //CRC DEL
+    this.stuffing_mode(0);
     this.put_bit(0); //ACK
     this.put_bit(1); //ACK DEL
     this.put_bit(1); //EOF
@@ -1165,8 +1165,8 @@ ScanaStudio.BuilderObject = {
     }
     crc = crc_calc(crc_bits_destuffed,15);
     this.put_word(crc,15); //CRC
-    this.stuffing_mode(0);
     this.put_bit(1); //CRC DEL
+    this.stuffing_mode(0);
     this.put_bit(0); //ACK
     this.put_bit(1); //ACK DEL
     this.put_bit(1); //EOF
