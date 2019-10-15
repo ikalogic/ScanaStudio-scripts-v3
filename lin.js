@@ -3,13 +3,14 @@
 <DESCRIPTION>
 LIN (Local Interconnect Network) protocol analyzer
 </DESCRIPTION>
-<VERSION> 0.6 </VERSION>
+<VERSION> 0.7 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Vladislav Kosinov </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL, Vladislav Kosinov </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.7: Fixed bug (error in SYNC field interpretation)
 v0.6: Added more information about invlid sync fields
 V0.5: Added hex and packet views
 V0.3: Added dec_item_end() for each dec_item_new()
@@ -193,7 +194,7 @@ function on_decode_signals (resume)
 
 				bit_counter++;
 
-				if ((bit_counter > 2) && ((Math.abs(last_sync_bit_width - sync_bit_width) / sync_bit_width) > 0.3)) //More than 40% variation
+				if ((bit_counter > 2) && (bit_counter < 11)  && ((Math.abs(last_sync_bit_width - sync_bit_width) / sync_bit_width) > 0.3)) //More than 40% variation
 			    {
 						//It's not valid SYNC field
 						ScanaStudio.dec_item_new(ch_lin, first_sync_edge, cursor);
