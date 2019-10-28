@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Highly configurable SPI bus decoder
 </DESCRIPTION>
-<VERSION> 1.77 </VERSION>
+<VERSION> 1.78 </VERSION>
 <AUTHOR_NAME>  Vladislav Kosinov, Ibrahim Kamal </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/SPI-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v1.78: Fixed a bug that caused a false warning about a "missing CS leading edge".
 V1.77: Added dec_item_end() for each dec_item_new().
 V1.76: Fixed bug in binary format display
 V1.75: Fixed bug in trigger sequence builder
@@ -299,7 +300,7 @@ function on_decode_signals(resume)
     {
       case 0: //search for CS leading edge
         trs_cs = ScanaStudio.trs_get_next(ch_cs);
-        if (trs_cs.value == cspol) //leading edge found!
+        if ((trs_cs.value == cspol) && (trs_cs.sample_index > 0)) //leading edge found!
         {
           cs_start_sample = trs_cs.sample_index;
           //goto next state
@@ -322,9 +323,9 @@ function on_decode_signals(resume)
                 ScanaStudio.dec_item_new(ch_cs,cs_start_sample,cs_end_sample);
                 ScanaStudio.dec_item_emphasize_warning(); //Display this item as a warning
                 ScanaStudio.dec_item_add_content("Warning: CS leading edge is missing!");
-      			ScanaStudio.dec_item_add_content("Warning: CS!");
-      			ScanaStudio.dec_item_add_content("!CS!");
-      			ScanaStudio.dec_item_add_content("!");
+          			ScanaStudio.dec_item_add_content("Warning: CS!");
+          			ScanaStudio.dec_item_add_content("!CS!");
+          			ScanaStudio.dec_item_add_content("!");
                 ScanaStudio.dec_item_end();
               }
           }
