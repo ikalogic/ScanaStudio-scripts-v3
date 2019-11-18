@@ -3,13 +3,14 @@
 <DESCRIPTION>
 CAN bus protocol analyzer
 </DESCRIPTION>
-<VERSION> 0.9 </VERSION>
+<VERSION> 0.10 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Nicolas Bastit </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com, n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.10: Added trigger capability for normal and extended ID.
 v0.9: Fix bug that caused error in decoding live streamed samples, fixed bug related to bit stuffing of CRC delimiter.
 v0.8: Fix bug that caused bit stuffing in CRC field to be ignored.
 v0.7: Fix bug that caused CAN FD frame with 0 data to have a wrong CRC.
@@ -100,6 +101,7 @@ Bit flow through the decoder:
                       |                      |
                       └----->[CRC_FD calc]   └---->[CRC_STD calc]
 */
+
 
 function on_decode_signals(resume)
 {
@@ -276,6 +278,7 @@ function on_decode_signals(resume)
   }
 }
 
+
 var CAN =
 {
   SEEK_IDLE        : 0,
@@ -290,6 +293,233 @@ var CAN =
   SEEK_CRC_DEL     : 100,
   SEEK_ACK         : 110,
 };
+
+
+
+//Trigger sequence GUI
+function on_draw_gui_trigger()
+{
+  ScanaStudio.gui_add_info_label("Trigger on specific CAN ID (or first bits of that ID). Type hex values (e.g. 0xAB1122) or decimal value (e.g. ‭11211042‬)");
+
+  ScanaStudio.gui_add_new_selectable_containers_group("trg_alt","CAN ID Field length");
+    ScanaStudio.gui_add_new_container("Standard 11-bits ID",true);
+      ScanaStudio.gui_add_text_input("can_id_trig_std","CAN ID","0x123");
+    ScanaStudio.gui_end_container();
+    ScanaStudio.gui_add_new_container("Extended 29-bits ID",false);
+      ScanaStudio.gui_add_text_input("can_id_trig_ext","CAN ID","0x11223344");
+    ScanaStudio.gui_end_container();
+  ScanaStudio.gui_end_selectable_containers_group();
+
+}
+
+//Evaluate trigger GUI
+function on_eval_gui_trigger()
+{
+  var can_id_trig_std = ScanaStudio.gui_get_value("can_id_trig_std");
+  var can_id_trig_ext = ScanaStudio.gui_get_value("can_id_trig_ext");
+  var trg_alt = ScanaStudio.gui_get_value("trg_alt");
+
+  if (trg_alt == 0)
+  {
+      if(isNaN(can_id_trig_std))
+      {
+          return "Invalid CAN ID (not a number)";
+      }
+      else if(can_id_trig_std > 0x7FF)
+      {
+          return "Invalid CAN ID (more than 11 bits)";
+      }
+  }
+  if (trg_alt == 1)
+  {
+      if(isNaN(can_id_trig_ext))
+      {
+          return "Invalid CAN ID (not a number)";
+      }
+      else if(can_id_trig_ext > 0x1FFFFFFF)
+      {
+          return "Invalid CAN ID (more than 29 bits)";
+      }
+  }
+  return "" //All good.
+}
+
+//Build trigger sequence
+function on_build_trigger()
+{
+  var trg = TriggerObject;
+  var can_id_trig_std = ScanaStudio.gui_get_value("can_id_trig_std");
+  var can_id_trig_ext = ScanaStudio.gui_get_value("can_id_trig_ext");
+  var trg_alt = ScanaStudio.gui_get_value("trg_alt");
+
+  trg.configure(ScanaStudio.gui_get_value("ch"),
+                ScanaStudio.gui_get_value("rate"),
+                ScanaStudio.get_capture_sample_rate());
+
+
+  if (trg_alt == 0) //STD, 11 bits ID
+  {
+    trg.build_trg_std(can_id_trig_std);
+  }
+  else
+  {
+    trg.build_trg_ext(can_id_trig_ext);
+  }
+
+  //ScanaStudio.flexitrig_print_steps();
+}
+
+//Builder object that can be shared to other scripts
+TriggerObject = {
+	build_trg_std : function(id)
+  {
+    stuffing_reset();
+    this.put_trig_wait_idle();
+    this.put_bit(0); //SOF
+    this.put_word(id,11);
+    this.put_trig_end();
+  },
+  build_trg_ext : function(id)
+  {
+    stuffing_reset();
+    this.put_trig_wait_idle();
+    this.put_bit(0); //SOF
+    this.put_word((id >> 18),11);
+    this.put_bit(1); //SRR
+    this.put_bit(1); //IDE = 1
+    this.put_word((id) & 0x3FFFF,18);
+    this.put_trig_end();
+  },
+  put_word : function(words,len)
+  {
+    var i;
+    for (i = (len-1); i >= 0; i--)
+    {
+      //ScanaStudio.console_info_msg("put_word:"+((words >> i) & 0x1));
+      this.put_bit((words >> i) & 0x1);
+    }
+  },
+  put_bit : function(b)
+  {
+    var sb = -1; //assume there is not bit stuffing
+    sb = stuffing_build(b);
+    if (sb >= 0) //add stuffed bit if needed
+    {
+      this.put_trig_step(sb);
+    }
+    this.put_trig_step(b);
+  },
+  put_trig_wait_idle : function()
+  {
+    var step_idle = "";
+    var i;
+
+    for (i = 0; i < ScanaStudio.get_device_channels_count(); i++)
+    {
+        if (i == this.channel)
+        {
+            step_idle = "1" + step_idle;
+        }
+        else
+        {
+            step_idle = "X" + step_idle;
+        }
+    }
+    ScanaStudio.flexitrig_append(step_idle,-1,-1);
+    this.last_level = 1;
+    this.bits_count = 10;
+  },
+  put_trig_step : function(b)
+  {
+    var step = "";
+    var i;
+    var step_ch_desc;
+
+    if (b == this.last_level)
+    {
+      this.bits_count++;
+      return;
+    }
+
+    if (b == 0)
+    {
+        step_ch_desc = "F";
+    }
+    else
+    {
+        step_ch_desc = "R";
+    }
+
+
+
+    for (i = 0; i < ScanaStudio.get_device_channels_count(); i++)
+    {
+        if (i == this.channel)
+        {
+            step = step_ch_desc + step;
+        }
+        else
+        {
+            step = "X" + step;
+        }
+    }
+
+    if (this.bits_count > 6) //in case of the start bit, no t_max constraint
+    {
+      //15% slack
+      ScanaStudio.flexitrig_append(step,this.bits_count * this.bit_period * 0.85,-1);
+    }
+    else
+    {
+      //15% slack
+      ScanaStudio.flexitrig_append(step,this.bits_count * this.bit_period * 0.85,this.bits_count * this.bit_period * 1.15);
+    }
+
+    this.last_level = b;
+    this.bits_count = 1;
+  },
+  /*
+  put_trig_end is used to add the very final trigger
+  step, which is different than intermediary steps.
+  The final step has only a "t_min" constrain,
+  */
+  put_trig_end : function()
+  {
+    var step_next = "";
+    var i;
+    var step
+
+    if (this.last_level == 1)
+    {
+      step = "F";
+    }
+    else
+    {
+      step = "R";
+    }
+
+    for (i = 0; i < ScanaStudio.get_device_channels_count(); i++)
+    {
+      if (i == this.channel)
+      {
+        step_next = step + step_next;
+      }
+      else
+      {
+        step_next = "X" + step_next;
+      }
+    }
+    ScanaStudio.flexitrig_append(step_next,this.bits_count * this.bit_period * 0.85,-1);
+  },
+  configure : function(channel,bitrate_std,sample_rate)
+  {
+    this.channel = channel;
+    this.last_level;
+    this.bits_count;
+    this.bit_period = 1/bitrate_std;
+  }
+};
+
 
 var can_state_machine = CAN.SEEK_IDLE;
 var can_destuffed_bit_counter = 0; //count real bit (discarding stuffed bits)
@@ -629,7 +859,6 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
           ScanaStudio.dec_item_new( ch, start_sample, end_sample);
           ScanaStudio.dec_item_add_content("BRS = 1 (Switching bit rate)");
           ScanaStudio.dec_item_add_content("BRS = 1");
-          ScanaStudio.dec_item_end();
           ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "BRS", "Switching bit rate",
                                              ScanaStudio.PacketColors.Misc.Title, ScanaStudio.PacketColors.Misc.Content);
 
@@ -1078,7 +1307,7 @@ ScanaStudio.BuilderObject = {
     this.stuffing_mode(1); //Standard bit stuffing
     this.bitrate_std(); //Ensure we use standard bit rate
     this.put_bit(0); //SOF
-    this.put_word(id,11)
+    this.put_word(id,11);
     if (data_array.length > 0)
     {
         this.put_bit(0); //RTR
