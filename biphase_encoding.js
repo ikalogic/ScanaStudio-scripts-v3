@@ -1,7 +1,7 @@
 /* Protocol meta info:
 <NAME> Biphase Encoding </NAME>
 <DESCRIPTION>
-My protocol can decode pretty much any logic signal!
+Biphase signaling decoder
 </DESCRIPTION>
 <VERSION> 0.2 </VERSION>
 <AUTHOR_NAME>  Victor Canoz </AUTHOR_NAME>
