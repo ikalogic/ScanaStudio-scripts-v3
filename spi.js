@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Highly configurable SPI bus decoder
 </DESCRIPTION>
-<VERSION> 1.78 </VERSION>
+<VERSION> 1.79 </VERSION>
 <AUTHOR_NAME>  Vladislav Kosinov, Ibrahim Kamal </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/SPI-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v1.79: Fixed a bug that force unused channels to clear their name.
 v1.78: Fixed a bug that caused a false warning about a "missing CS leading edge".
 V1.77: Added dec_item_end() for each dec_item_new().
 V1.76: Fixed bug in binary format display
@@ -162,10 +163,15 @@ function on_eval_gui_decoder()
   spi_ch_list.push(ScanaStudio.gui_get_value("ch_miso"));
   spi_ch_list.push(ScanaStudio.gui_get_value("ch_clk"));
   spi_ch_list.push(ScanaStudio.gui_get_value("ch_cs"));
+
+
   if (ScanaStudio.get_device_channels_count() > 4)
   {
-      spi_ch_list.push(ScanaStudio.gui_get_value("ch_io2"));
-      spi_ch_list.push(ScanaStudio.gui_get_value("ch_io3"));
+      if( (ScanaStudio.gui_get_value("dual_io") == true) || (ScanaStudio.gui_get_value("quad_io") == true) )
+      {
+          spi_ch_list.push(ScanaStudio.gui_get_value("ch_io2"));
+          spi_ch_list.push(ScanaStudio.gui_get_value("ch_io3"));
+      }
   }
 
   ch_list = []; //Global
