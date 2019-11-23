@@ -3,13 +3,14 @@
 <DESCRIPTION>
 CAN bus protocol analyzer
 </DESCRIPTION>
-<VERSION> 0.95 </VERSION>
+<VERSION> 0.96 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Nicolas Bastit </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com, n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.96: Added option to trigger on CAN Data bytes.
 v0.95: Added trigger capability for normal and extended ID.
 v0.9: Fix bug that caused error in decoding live streamed samples, fixed bug related to bit stuffing of CRC delimiter.
 v0.8: Fix bug that caused bit stuffing in CRC field to be ignored.
@@ -299,47 +300,42 @@ var CAN =
 //Trigger sequence GUI
 function on_draw_gui_trigger()
 {
-  ScanaStudio.gui_add_info_label("Trigger on specific CAN ID (or first bits of that ID). Type hex values (e.g. 0xAB1122) or decimal value (e.g. ‭11211042‬)");
 
-  ScanaStudio.gui_add_new_selectable_containers_group("trg_alt","CAN ID Field length");
-    ScanaStudio.gui_add_new_container("Standard 11-bits ID",true);
-      ScanaStudio.gui_add_text_input("can_id_trig_std","CAN ID","0x123");
-    ScanaStudio.gui_end_container();
-    ScanaStudio.gui_add_new_container("Extended 29-bits ID",false);
-      ScanaStudio.gui_add_text_input("can_id_trig_ext","CAN ID","0x11223344");
-    ScanaStudio.gui_end_container();
-  ScanaStudio.gui_end_selectable_containers_group();
+  ScanaStudio.gui_add_info_label("For the CAN ID, type hex value (e.g. 0xAB1122) or decimal value (e.g. ‭11211042‬)");
+  ScanaStudio.gui_add_text_input("can_id_trig","CAN ID","0x123");
+  ScanaStudio.gui_add_combo_box("can_trig_ext","ID field lendgth");
+  ScanaStudio.gui_add_item_to_combo_box("Standard 11-bits ID",true);
+  ScanaStudio.gui_add_item_to_combo_box("Extended 29-bits ID",false);
+  ScanaStudio.gui_add_info_label("Data bytes are optionnal. Leave it empty if you don't wish to trigger on specific data bytes. Bytes must be written in the same order as they will appear on the CAN frame. You can either type in hexadecimal, decimal, or a mix of both. byte should be separated by a comma, e.g.: 0xA1,0xA2,0xA3");
+  ScanaStudio.gui_add_text_input("can_trig_data","Data bytes","");
 
 }
 
 //Evaluate trigger GUI
 function on_eval_gui_trigger()
 {
-  var can_id_trig_std = ScanaStudio.gui_get_value("can_id_trig_std");
-  var can_id_trig_ext = ScanaStudio.gui_get_value("can_id_trig_ext");
-  var trg_alt = ScanaStudio.gui_get_value("trg_alt");
+  var can_id_trig = ScanaStudio.gui_get_value("can_id_trig");
+  var can_trig_ext = ScanaStudio.gui_get_value("can_trig_ext");
 
-  if (trg_alt == 0)
+  if(isNaN(can_id_trig))
   {
-      if(isNaN(can_id_trig_std))
-      {
-          return "Invalid CAN ID (not a number)";
-      }
-      else if(can_id_trig_std > 0x7FF)
-      {
-          return "Invalid CAN ID (more than 11 bits)";
-      }
+      return "Invalid CAN ID (not a number)";
   }
-  if (trg_alt == 1)
+
+  if (can_trig_ext == 0)
   {
-      if(isNaN(can_id_trig_ext))
-      {
-          return "Invalid CAN ID (not a number)";
-      }
-      else if(can_id_trig_ext > 0x1FFFFFFF)
-      {
-          return "Invalid CAN ID (more than 29 bits)";
-      }
+    if(can_id_trig > 0x7FF)
+    {
+        return "Invalid standard CAN ID (more than 11 bits)";
+    }
+  }
+
+  if (can_trig_ext == 1)
+  {
+    if(can_id_trig > 0x1FFFFFFF)
+    {
+        return "Invalid Extended CAN ID (more than 11 bits)";
+    }
   }
   return "" //All good.
 }
@@ -348,38 +344,54 @@ function on_eval_gui_trigger()
 function on_build_trigger()
 {
   var trg = TriggerObject;
-  var can_id_trig_std = ScanaStudio.gui_get_value("can_id_trig_std");
-  var can_id_trig_ext = ScanaStudio.gui_get_value("can_id_trig_ext");
-  var trg_alt = ScanaStudio.gui_get_value("trg_alt");
+  var can_id_trig = ScanaStudio.gui_get_value("can_id_trig");
+  var can_trig_ext = ScanaStudio.gui_get_value("can_trig_ext");
+  var data_string = ScanaStudio.gui_get_value("can_trig_data");
+  var data_array = data_string.split(",");
+  var i;
+
+  for (i = 0; i < data_array.length; i++)
+  {
+    data_array[i] = Number(data_array[i].trim());
+  }
 
   trg.configure(ScanaStudio.gui_get_value("ch"),
                 ScanaStudio.gui_get_value("rate"),
                 ScanaStudio.get_capture_sample_rate());
 
 
-  if (trg_alt == 0) //STD, 11 bits ID
+  if (can_trig_ext == 0) //STD, 11 bits ID
   {
-    trg.build_trg_std(can_id_trig_std);
+    trg.build_trg_std(can_id_trig,data_array);
   }
   else
   {
-    trg.build_trg_ext(can_id_trig_ext);
+    trg.build_trg_ext(can_id_trig,data_array);
   }
 
-  //ScanaStudio.flexitrig_print_steps();
 }
 
-//Builder object that can be shared to other scripts
 TriggerObject = {
-	build_trg_std : function(id)
+	build_trg_std : function(id,data_array)
   {
     stuffing_reset();
     this.put_trig_wait_idle();
     this.put_bit(0); //SOF
     this.put_word(id,11);
+    if (data_array.length > 0)
+    {
+        this.put_bit(0); //RTR
+        this.put_bit(0); //IDE = 0
+        this.put_bit(0); //R0 //Always 0 for CAN frame (1 for CAN FD frames)
+        this.put_word(data_array.length,4);
+        for (i = 0; i < data_array.length; i++)
+        {
+          this.put_word(data_array[i],8);
+        }
+    }
     this.put_trig_end();
   },
-  build_trg_ext : function(id)
+  build_trg_ext : function(id,data_array)
   {
     stuffing_reset();
     this.put_trig_wait_idle();
@@ -388,6 +400,17 @@ TriggerObject = {
     this.put_bit(1); //SRR
     this.put_bit(1); //IDE = 1
     this.put_word((id) & 0x3FFFF,18);
+    if (data_array.length > 0)
+    {
+        this.put_bit(0); //RTR
+        this.put_bit(0); //R1
+        this.put_bit(0); //R0 //Always 0 for CAN frame (1 for CAN FD frames)
+        this.put_word(data_array.length,4);
+        for (i = 0; i < data_array.length; i++)
+        {
+          this.put_word(data_array[i],8);
+        }
+    }
     this.put_trig_end();
   },
   put_word : function(words,len)
