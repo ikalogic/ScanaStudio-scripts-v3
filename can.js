@@ -10,7 +10,7 @@ CAN bus protocol analyzer
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-v0.96: Fix bug in trigger on CAN Data bytes.
+v0.97: Fix bug in trigger on CAN Data bytes.
 v0.96: Added option to trigger on CAN Data bytes.
 v0.95: Added trigger capability for normal and extended ID.
 v0.9: Fix bug that caused error in decoding live streamed samples, fixed bug related to bit stuffing of CRC delimiter.
