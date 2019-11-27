@@ -3,13 +3,14 @@
 <DESCRIPTION>
 CAN bus protocol analyzer
 </DESCRIPTION>
-<VERSION> 0.98 </VERSION>
+<VERSION> 0.99 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Nicolas Bastit </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com, n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.99: Fix bug in trigger.
 v0.98: Fix bug in trigger on CAN data bytes 0x00.
 v0.97: Fix bug in trigger on CAN Data bytes.
 v0.96: Added option to trigger on CAN Data bytes.
@@ -361,29 +362,30 @@ function on_build_trigger()
   var trg_alt = ScanaStudio.gui_get_value("trg_alt");
   var data_string = ScanaStudio.gui_get_value("can_trig_data");
   var data_array = data_string.split(',');
+  var number_array = []
 
   trg.configure(ScanaStudio.gui_get_value("ch"),
                 ScanaStudio.gui_get_value("rate"),
                 ScanaStudio.get_capture_sample_rate());
 
 
+  var tmp;
   for (i = 0; i < data_array.length; i++)
   {
-    data_array[i] = Number(data_array[i].trim());
-  }
-  for (i = data_array.length -1; i >= 0; i--)
-  {
-    if(isNaN(data_array[i]))
-        data_array.splice(i,1);
+      tmp = Number(data_array[i].trim());
+      if(!isNaN(tmp) && (data_string.length != 0))
+      {
+        number_array.push(tmp);
+      }
   }
 
   if (trg_alt == 0) //STD, 11 bits ID
   {
-    trg.build_trg_std(can_id_trig_std, data_array);
+    trg.build_trg_std(can_id_trig_std, number_array);
   }
   else
   {
-    trg.build_trg_ext(can_id_trig_ext, data_array);
+    trg.build_trg_ext(can_id_trig_ext, number_array);
   }
 }
 
