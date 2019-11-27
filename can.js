@@ -3,13 +3,14 @@
 <DESCRIPTION>
 CAN bus protocol analyzer
 </DESCRIPTION>
-<VERSION> 0.97 </VERSION>
+<VERSION> 0.98 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Nicolas Bastit </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com, n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.98: Fix bug in trigger on CAN data bytes 0x00.
 v0.97: Fix bug in trigger on CAN Data bytes.
 v0.96: Added option to trigger on CAN Data bytes.
 v0.95: Added trigger capability for normal and extended ID.
@@ -372,7 +373,7 @@ function on_build_trigger()
   }
   for (i = data_array.length -1; i >= 0; i--)
   {
-    if(data_array[i] == "")
+    if(isNaN(data_array[i]))
         data_array.splice(i,1);
   }
 
