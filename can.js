@@ -3,13 +3,14 @@
 <DESCRIPTION>
 CAN bus protocol analyzer
 </DESCRIPTION>
-<VERSION> 0.99 </VERSION>
+<VERSION> 0.991 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Nicolas Bastit </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com, n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.991: Fix bug in trigger: doesn't trig on the first frame
 v0.99: Fix bug in trigger.
 v0.98: Fix bug in trigger on CAN data bytes 0x00.
 v0.97: Fix bug in trigger on CAN Data bytes.
@@ -393,8 +394,7 @@ TriggerObject = {
 	build_trg_std : function(id,data_array)
   {
     stuffing_reset();
-    this.put_trig_wait_idle();
-    this.put_bit(0); //SOF
+    this.put_trig_wait_start();
     this.put_word(id,11);
     if (data_array.length > 0)
     {
@@ -412,8 +412,7 @@ TriggerObject = {
   build_trg_ext : function(id,data_array)
   {
     stuffing_reset();
-    this.put_trig_wait_idle();
-    this.put_bit(0); //SOF
+    this.put_trig_wait_start();
     this.put_word((id >> 18),11);
     this.put_bit(1); //SRR
     this.put_bit(1); //IDE = 1
@@ -450,7 +449,7 @@ TriggerObject = {
     }
     this.put_trig_step(b);
   },
-  put_trig_wait_idle : function()
+  put_trig_wait_start : function()
   {
     var step_idle = "";
     var i;
@@ -459,7 +458,7 @@ TriggerObject = {
     {
         if (i == this.channel)
         {
-            step_idle = "1" + step_idle;
+            step_idle = "F" + step_idle;
         }
         else
         {
@@ -467,8 +466,8 @@ TriggerObject = {
         }
     }
     ScanaStudio.flexitrig_append(step_idle,-1,-1);
-    this.last_level = 1;
-    this.bits_count = 10;
+    this.last_level = 0;
+    this.bits_count = 1;
   },
   put_trig_step : function(b)
   {
