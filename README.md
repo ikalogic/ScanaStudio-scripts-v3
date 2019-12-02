@@ -6,8 +6,5 @@ Since ScanaStudio V3.1.1 the scripting system have been redesigned to support ma
 * Signal builder (for logic pattern generator devices)
 * Trigger sequence generation
 * Data exporting
-* Automation
-
-
-
+* Automation.
 
