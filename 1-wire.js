@@ -26,6 +26,13 @@ V0.0: Initial release.
 *************************************************************************************
 */
 
+var DEBUG_SCOPES =
+{
+	BIT_STREAM 	: 0x01,
+	DECODER		: 0x02,
+	DECODER_FSM	: 0x03,
+};
+
 var STATE =
 {
 	INIT        : 0x00,
@@ -331,8 +338,11 @@ function setup_1wire_parameters(spd)
 	g_oWDelays = STANDARD_DELAYS;
 }
 
+
 function on_decode_signals_init()
 {
+	ScanaStudio.console_info_msg("on_decode_signals_init() : called");
+
     //initialization code
     reload_dec_gui_values();
     g_sampling_rate = ScanaStudio.get_capture_sample_rate();
