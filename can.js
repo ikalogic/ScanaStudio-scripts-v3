@@ -586,7 +586,6 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
   }
   if (is_stuffed_bit && (last_processed_bit == b)) //Bit stuffing error!
   {
-
     start_sample = sample_point + dec_item_margin;
     end_sample = sample_point + samples_per_bit_std - dec_item_margin;
     ScanaStudio.dec_item_new( ch, start_sample,end_sample);
@@ -1056,6 +1055,8 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         var real_sbc = gray_code(stuffed_bit_counter%8) & 0x3;
         var sbc_text = ["OK","OK",""];
         var parity_text = ["Parity OK","P.OK","P"];
+        var sbc_pckt_clr_title = ScanaStudio.PacketColors.Check.Title;
+        var sbc_pckt_clr_content = ScanaStudio.PacketColors.Check.Content;
 
         start_sample = can_fd_sbc.start - sample_point_offset + dec_item_margin;
         end_sample = can_fd_sbc_parity.end - sample_point_offset + samples_per_bit - dec_item_margin;
@@ -1063,10 +1064,14 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         if (can_fd_sbc_parity.value != get_even_parity(can_fd_sbc))
         {
           ScanaStudio.dec_item_emphasize_error();
+          var sbc_pckt_clr_title = ScanaStudio.PacketColors.Error.Title;
+          var sbc_pckt_clr_content = ScanaStudio.PacketColors.Error.Content;
           parity_text = ["Parity Error","P.Err","!P"];
         }
         if (can_fd_sbc.value != real_sbc)
         {
+          var sbc_pckt_clr_title = ScanaStudio.PacketColors.Error.Title;
+          var sbc_pckt_clr_content = ScanaStudio.PacketColors.Error.Content;
           ScanaStudio.dec_item_emphasize_error();
           sbc_text = ["Error, should be: " + real_sbc.toString(10), "Err!", "!"];
         }
@@ -1076,6 +1081,9 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         ScanaStudio.dec_item_add_content(can_fd_sbc.value + " " + sbc_text[2] + " " + parity_text[2]);
         add_can_bits_sampling_points(can_bits,0,can_fd_sbc_len);
         ScanaStudio.dec_item_end();
+        ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "SBC: " + sbc_text[1]+", "+parity_text[1],
+                                           can_fd_sbc.value + " " + sbc_text[0],
+                                           sbc_pckt_clr_title, sbc_pckt_clr_content);
         can_bits = [];
         can_destuffed_bit_counter = 0;
         can_state_machine = CAN.SEEK_CRC;
