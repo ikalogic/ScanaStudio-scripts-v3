@@ -220,14 +220,14 @@ function OWObject (type, value, start, end, duration, isLast)
 
 function PktObject (title, titleColor, data, dataLen, dataObjArr, dataColor, start, end)
 {
+	this.start = start;
+	this.end = end;
 	this.title = title;
-	this.titleColor = titleColor;
 	this.data = data;
 	this.dataLen = dataLen;
 	this.dataObjArr = dataObjArr;
+	this.titleColor = titleColor;
 	this.dataColor = dataColor;
-	this.start = start;
-	this.end = end;
 };
 
 var g_oWDelays;
@@ -317,14 +317,14 @@ function t2smpl(time)
 function isASCII(str)
 {
     is_ascii_char = false;
-    
+
     if ((str >= 0x30) && (str <= 0x7E))
     {
         is_ascii_char = true;
     }
-    
+
     ScanaStudio.console_info_msg(str + " is " + is_ascii_char);
-    
+
     return is_ascii_char
 }
 
@@ -361,7 +361,7 @@ function on_decode_signals_init()
 	g_next_trs = null;
 
     g_state = STATE.INIT;
-    
+
 	PKT_COLOR_DATA          = ScanaStudio.get_channel_color(g_ch);
 	PKT_COLOR_DATA_TITLE    = "#808080";
 	PKT_COLOR_RESET_TITLE   = "#008000";
@@ -493,7 +493,7 @@ function on_decode_signals_decode_bit_stream()
                 slotEnd = trHighSt;
                 ScanaStudio.console_warning_msg("on_decode_signals_decode_bit_stream() : tHigh := " + tHigh);
 			}
-            
+
             g_owObjects.push(new OWObject(OWOBJECT_TYPE.BIT, bitValue, slotStart, slotEnd, bitErr, false));
 
 			next_tr = trHighEnd;
@@ -534,14 +534,14 @@ function display_byte(a)
     var N = a.length;
     var bit;
     var midSample;
-    
+
     ScanaStudio.console_info_msg("display_byte() : array length := " + N);
-    
+
 	for (var i = 0; i < N; i++)
 	{
         bit = a.pop();
         midSample = Math.round((bit.start + bit.end)/2);
-        
+
         if (bit.value == 1)
         {
             ScanaStudio.dec_item_add_sample_point(midSample, "1");
@@ -558,44 +558,44 @@ function display_byte(a)
             ScanaStudio.dec_item_add_sample_point(midSample, "X");
         }
     }
-    
+
     return;
 }
 
 
 function decode_sequence_RESET()
 {
-    
+
 }
 
 
 function decode_sequence_PRESENCE()
 {
-    
+
 }
 
 
 function decode_sequence_ROM_COMMAND()
 {
-    
+
 }
 
 
 function decode_sequence_SHOW_ROM()
 {
-    
+
 }
 
 
 function decode_sequence_SEARCH_ROM()
 {
-    
+
 }
 
 
 function decode_sequence_DATA()
 {
-    
+
 }
 
 
@@ -610,7 +610,7 @@ function on_decode_signals_decode_sequence()
     {
 		case STATE.INIT:
 			ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.INIT");
-			
+
 			/* Display all unknown (transitions and pulses with wrong timing) fields
 			*/
 			for (var i = 0; i < g_owObjects.length; i++)
@@ -649,7 +649,7 @@ function on_decode_signals_decode_sequence()
 					}
 				}
 
-				
+
 				ScanaStudio.dec_item_new(g_ch, owObject.start, owObject.end);
 				ScanaStudio.dec_item_add_content("MASTER RESET PULSE (" + resetStatus + (Math.round(owObject.duration * 100) / 100) + " us)");
 				ScanaStudio.dec_item_add_content("RESET PULSE");
@@ -659,7 +659,7 @@ function on_decode_signals_decode_sequence()
                 ScanaStudio.dec_item_end();
 
 				ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): OWOBJECT_TYPE.RESET");
-				
+
 				if (!firstRun)
 				{
 					pkt_add_packet(pktOk);
@@ -692,7 +692,7 @@ function on_decode_signals_decode_sequence()
 					ScanaStudio.dec_item_add_content("PRES");
 					ScanaStudio.dec_item_add_content("P");
                     ScanaStudio.dec_item_end();
-    
+
 					ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): OWOBJECT_TYPE.PRESENCE");
 
 					g_pktObjects.push(new PktObject("PRESENCE", PKT_COLOR_PRES_TITLE, ((Math.round(owObject.duration * 100) / 100) + " us"), 0, 0, PKT_COLOR_DATA, owObject.start, owObject.end));
@@ -754,7 +754,7 @@ function on_decode_signals_decode_sequence()
 			ScanaStudio.dec_item_new(g_ch, owByte.start, owByte.end);
             display_byte(g_byte_sample_points);
             ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): ROM CMD := 0x" + int_to_str_hex(owByte.value));
-			
+
             /*
 			if ((uiHexView != HEXVIEW_OPT.DATA) && (uiHexView != HEXVIEW_OPT.ADR))
 			{
@@ -770,7 +770,7 @@ function on_decode_signals_decode_sequence()
 				{
 					ScanaStudio.dec_item_add_content(cmd.str);
 					ScanaStudio.dec_item_add_content("0x" + int_to_str_hex(owByte.value));
-                    
+
 					ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): ROM CMD := " + cmd.str);
 
 					g_pktObjects.push(new PktObject("ROM CMD", PKT_COLOR_ROMCMD_TITLE, cmd.str, 0, 0, PKT_COLOR_DATA, owByte.start, owByte.end));
@@ -789,7 +789,7 @@ function on_decode_signals_decode_sequence()
 					}
 				}
 			}
-            
+
             ScanaStudio.dec_item_end();
 
 		break;
@@ -820,7 +820,7 @@ function on_decode_signals_decode_sequence()
 				var familyCode = romCode.shift();
 				/*
 				dec_item_new(g_ch, familyCode.start, familyCode.end);
-				
+
 				if ((uiHexView != HEXVIEW_OPT.DATA) && (uiHexView != HEXVIEW_OPT.ROM))
 				{
 					hex_add_byte(g_ch, -1, -1, familyCode.value);
@@ -1013,7 +1013,7 @@ function on_decode_signals_decode_sequence()
                     }
                     ScanaStudio.dec_item_add_content("0x" + dataStr);
                     ScanaStudio.dec_item_end();
-					
+
 					/*
 					if ((uiHexView != HEXVIEW_OPT.ROM) && (uiHexView != HEXVIEW_OPT.ADR))
 					{
@@ -1097,7 +1097,7 @@ function on_decode_signals(resume)
 		on_decode_signals_decode_sequence();
 		// g_owObjects.pop();
 	}
-	
+
     return;
 }
 
@@ -1112,20 +1112,19 @@ function on_decode_signals(resume)
 */
 function pkt_add_packet (ok)
 {
-/*
 	var obj;
 	var desc = "";
 	var objCnt = 0;
 	var pktDataPerLine = 7;
 
-	if (pktObjects.length < 1)
+	if (g_pktObjects.length < 1)
 	{
 		return;
 	}
 
-	for (var i = 0; i < pktObjects.length; i++)
+	for (var i = 0; i < g_pktObjects.length; i++)
 	{
-		obj = pktObjects[i];
+		obj = g_pktObjects[i];
 
 		if (obj.title.localeCompare("ROM CMD") == 0)
 		{
@@ -1146,25 +1145,25 @@ function pkt_add_packet (ok)
 
 	desc = desc.replace(/  +/g, ' ');
 
-	var pktStart = pktObjects[0].start;
-	var pktEnd = pktObjects[pktObjects.length - 1].end;
+	var pktStart = g_pktObjects[0].start;
+	var pktEnd = g_pktObjects[g_pktObjects.length - 1].end;
 
-	pkt_start("1-WIRE");
+	// pkt_start("1-WIRE");
 
 	if (ok)
 	{
-		pkt_add_item(pktStart, pktEnd, "1-WIRE FRAME", desc, PKT_COLOR_DATA_TITLE, PKT_COLOR_DATA, true, g_ch);
+		ScanaStudio.packet_view_add_packet(true, g_ch, pktStart, pktEnd, "1-WIRE FRAME", desc, PKT_COLOR_DATA_TITLE, PKT_COLOR_DATA);
 	}
 	else
 	{
-		pkt_add_item(pktStart, pktEnd, "1-WIRE FRAME", desc, PKT_COLOR_INVALID, PKT_COLOR_DATA, true, g_ch);
+		ScanaStudio.packet_view_add_packet(true, g_ch, pktStart, pktEnd, "1-WIRE FRAME", desc, PKT_COLOR_INVALID, PKT_COLOR_DATA);
 	}
 
-	pkt_start("NEW FRAME");
+	// pkt_start("NEW FRAME");
 
-	while (pktObjects.length > objCnt)
+	while (g_pktObjects.length > objCnt)
 	{
-		obj = pktObjects[objCnt];
+		obj = g_pktObjects[objCnt];
 		objCnt++;
 
 		if (obj.title.localeCompare("DATA") == 0)
@@ -1191,7 +1190,7 @@ function pkt_add_packet (ok)
 					}
 					else
 					{
-						pkt_add_item(lineStart, lineEnd, obj.title, dataLine, obj.titleColor, obj.dataColor, true, g_ch);
+						ScanaStudio.packet_view_add_packet(false, g_ch, lineStart, lineEnd, obj.title, dataLine, obj.titleColor, obj.dataColor);
 						lineStart = false;
 						dataLine = "";
 						lineCnt = 0;
@@ -1200,12 +1199,12 @@ function pkt_add_packet (ok)
 
 				if (lineCnt > 0)
 				{
-					pkt_add_item(lineStart, lineEnd, obj.title, dataLine, obj.titleColor, obj.dataColor, true, g_ch);
+					ScanaStudio.packet_view_add_packet(false, g_ch, lineStart, lineEnd, obj.title, dataLine, obj.titleColor, obj.dataColor);
 				}
 			}
 			else
 			{
-				pkt_add_item(obj.start, obj.end, obj.title, obj.data, obj.titleColor, obj.dataColor, true, g_ch);
+				ScanaStudio.packet_view_add_packet(false, g_ch, obj.start, obj.end, obj.title, obj.data, obj.titleColor, obj.dataColor);
 			}
 		}
 		else
@@ -1214,15 +1213,11 @@ function pkt_add_packet (ok)
 			{
 				if ((obj.title.localeCompare("PRESENCE")) != 0 || (obj.data.localeCompare("PRESENCE MISSING") == 0))
 				{
-					pkt_add_item(obj.start, obj.end, obj.title, obj.data, obj.titleColor, obj.dataColor, true, g_ch);
+					ScanaStudio.packet_view_add_packet(false, g_ch, obj.start, obj.end, obj.title, obj.data, obj.titleColor, obj.dataColor);
 				}
 			}
 		}
 	}
-
-	pkt_end();
-	pkt_end();
-*/
 
 	g_pktObjects.length = 0;
 	g_pktObjects = [];
@@ -1256,7 +1251,7 @@ function get_ow_byte (ch)
 	var byteErr = false;
 	var isLast = false;
 	var i = 0;
-    
+
     while (g_byte_sample_points.length > 0) { g_byte_sample_points.pop(); }
 
 	if (g_owObjects.length > 0)
@@ -1269,7 +1264,7 @@ function get_ow_byte (ch)
             }
 
 			owObject = g_owObjects.shift();
-            
+
 			if (owObject.type != OWOBJECT_TYPE.BIT)
 			{
 				g_owObjects.unshift(owObject);
@@ -1292,7 +1287,7 @@ function get_ow_byte (ch)
 			/* Show each bit value */
 			var midSample = ((owObject.start + owObject.end) / 2);
 
-            g_byte_sample_points.push(owObject); 
+            g_byte_sample_points.push(owObject);
             ScanaStudio.console_info_msg("get_ow_byte() : byte length := " + g_byte_sample_points.length);
 
 			if(owObject.duration == true)
