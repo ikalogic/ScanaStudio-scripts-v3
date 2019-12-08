@@ -323,7 +323,7 @@ function isASCII(str)
         is_ascii_char = true;
     }
 
-    ScanaStudio.console_info_msg(str + " is " + is_ascii_char);
+    ScanaStudio.console_info_msg("isASCII() : " + str + " is " + is_ascii_char);
 
     return is_ascii_char
 }
@@ -563,9 +563,32 @@ function display_byte(a)
 }
 
 
-function decode_sequence_RESET()
+function decode_sequence_RESET(owObject)
 {
+	var resetStatus = "";
 
+	if (g_speed == SPEED.REGULAR)
+	{
+		if (owObject.duration < g_oWDelays.RSTL_STD)
+		{
+			resetStatus += "WARN. TOO SHORT: ";
+		}
+	}
+
+
+	ScanaStudio.dec_item_new(g_ch, owObject.start, owObject.end);
+	ScanaStudio.dec_item_add_content("MASTER RESET PULSE (" + resetStatus + (Math.round(owObject.duration * 100) / 100) + " us)");
+	ScanaStudio.dec_item_add_content("RESET PULSE");
+	ScanaStudio.dec_item_add_content("RESET");
+	ScanaStudio.dec_item_add_content("R");
+    // ScanaStudio.dec_item_add_sample_point(Math.round((owObject.start + owObject.end)/2), "U");
+    ScanaStudio.dec_item_end();
+
+	ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): OWOBJECT_TYPE.RESET");
+
+	g_pktObjects.push(new PktObject("RESET", PKT_COLOR_RESET_TITLE, (resetStatus + (Math.round(owObject.duration * 100) / 100) + " us"), 0, 0, PKT_COLOR_DATA, owObject.start, owObject.end));
+
+	return true;
 }
 
 
@@ -639,36 +662,14 @@ function on_decode_signals_decode_sequence()
 
 			if (owObject.type == OWOBJECT_TYPE.RESET)
 			{
-				var resetStatus = "";
-
-				if (g_speed == SPEED.REGULAR)
-				{
-					if (+owObject.duration < g_oWDelays.RSTL_STD)
-					{
-						resetStatus += "WARN. TOO SHORT: ";
-					}
-				}
-
-
-				ScanaStudio.dec_item_new(g_ch, owObject.start, owObject.end);
-				ScanaStudio.dec_item_add_content("MASTER RESET PULSE (" + resetStatus + (Math.round(owObject.duration * 100) / 100) + " us)");
-				ScanaStudio.dec_item_add_content("RESET PULSE");
-				ScanaStudio.dec_item_add_content("RESET");
-				ScanaStudio.dec_item_add_content("R");
-                // ScanaStudio.dec_item_add_sample_point(Math.round((owObject.start + owObject.end)/2), "U");
-                ScanaStudio.dec_item_end();
-
-				ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): OWOBJECT_TYPE.RESET");
+				pktOk = decode_sequence_RESET(owObject);
 
 				if (!firstRun)
 				{
 					pkt_add_packet(pktOk);
 				}
 
-				pktOk = true;
 				firstRun = false;
-
-				g_pktObjects.push(new PktObject("RESET", PKT_COLOR_RESET_TITLE, (resetStatus + (Math.round(owObject.duration * 100) / 100) + " us"), 0, 0, PKT_COLOR_DATA, owObject.start, owObject.end));
 
 				g_state = STATE.PRESENCE;
 			}
