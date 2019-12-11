@@ -3,13 +3,14 @@
 <DESCRIPTION>
  SPI Flash memory transactions analyzer
 </DESCRIPTION>
-<VERSION> 0.2 </VERSION>
-<AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
+<VERSION> 0.3 </VERSION>
+<AUTHOR_NAME>  Ibrahim KAMAL, Chris HEMINGWAY </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/SPI-Flash-memory-instructions-analyzer </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.3: Add selectable flash types, NAND flash, and option to enumerate data bytes
 V0.2: Added dec_item_end() for each dec_item_new().
 V0.1: Initial release.
 </RELEASE_NOTES>
@@ -18,6 +19,7 @@ V0.1: Initial release.
 /*
   TODO:
   ~~~~
+  * Recognize feature registers
   * Recognize different MAN ID
   * status register bitmapping
 */
@@ -30,6 +32,11 @@ function on_draw_gui_decoder()
 	ScanaStudio.gui_add_ch_selector( "ch_miso", "MISO (Slave Out) Line", "MISO" );
 	ScanaStudio.gui_add_ch_selector( "ch_clk", "CLOCK Line", "SCLK" );
 	ScanaStudio.gui_add_ch_selector( "ch_cs", "Chip Select (Slave select)", "CS" );
+  // Type of flash, determines what commands db is used
+  ScanaStudio.gui_add_combo_box("flash_type","Flash Type:")
+  ScanaStudio.gui_add_item_to_combo_box("NOR",true);      // Index 0 = TYPE_NOR
+  ScanaStudio.gui_add_item_to_combo_box("NAND (Micron MT29FxG01)",false);
+
 
   if (ScanaStudio.get_device_channels_count() > 4)
   {
@@ -54,6 +61,7 @@ function on_draw_gui_decoder()
   gui_add_format_combo("flash_format_commands","Intruction format");
   gui_add_format_combo("flash_format_address","Address format");
   gui_add_format_combo("flash_format_data","Data format");
+  ScanaStudio.gui_add_check_box("flash_number_data","Number data bytes",false);
   ScanaStudio.gui_end_tab();
 
   //Add hidden elements for the SPI decoder
@@ -91,9 +99,11 @@ function read_gui_values()
   ch_io2 = ScanaStudio.gui_get_value("ch_io2");
   ch_io3 = ScanaStudio.gui_get_value("ch_io3");
   quad_io = ScanaStudio.gui_get_value("quad_io");
+  flash_type = ScanaStudio.gui_get_value("flash_type");
   flash_format_commands = ScanaStudio.gui_get_value("flash_format_commands");
   flash_format_data = ScanaStudio.gui_get_value("flash_format_data");
   flash_format_address = ScanaStudio.gui_get_value("flash_format_address");
+  flash_number_data = ScanaStudio.gui_get_value("flash_number_data");
   nbits = ScanaStudio.gui_get_value("nbits");
 }
 //Constants
@@ -102,6 +112,9 @@ var IO_MISO = 1;
 var IO_DUAL = 2;
 var IO_QUAD = 3;
 var NO_PAYLOAD = -1;
+
+var TYPE_NOR = 0;
+var TYPE_NAND = 1;
 
 //Global variables
 var state_machine;
@@ -114,6 +127,7 @@ var word_counter;
 var commands = [];
 var frame_counter;
 var frame,frames;
+var payload_counter;
 
 function on_decode_signals(resume)
 {
@@ -126,7 +140,12 @@ function on_decode_signals(resume)
       sampling_rate = ScanaStudio.get_capture_sample_rate();
       // read GUI values using
       read_gui_values();
-      build_commands_db();
+      // Build commands db based on type of flash
+      if (flash_type == TYPE_NOR) {
+          build_commands_db_nor();
+      } else {
+          build_commands_db_nand();
+      }
   }
 
 
@@ -228,6 +247,7 @@ function parse_spi_items(item)
                 if (cmd_descriptor.payload_channel != NO_PAYLOAD)
                 {
                   state_machine++; //Fetch payload data
+                  payload_counter = 0; // Reset data byte number
                 }
                 else
                 {
@@ -248,9 +268,16 @@ function parse_spi_items(item)
           {
             marker = item.end_sample_index;
             ScanaStudio.dec_item_new(item.channel_index,item.start_sample_index,item.end_sample_index);
-            ScanaStudio.dec_item_add_content(data_to_str(item.content,flash_format_data,8));
+            var formatted_data = data_to_str(item.content,flash_format_data,8);
+            // Add numered data if needed
+            if (flash_number_data) {
+              formatted_data = payload_counter.toString() + ":" + formatted_data;
+              ScanaStudio.dec_item_add_content(formatted_data);
+            }
+            ScanaStudio.dec_item_add_content(formatted_data);
             ScanaStudio.dec_item_end();
-            //ScanaStudio.console_info_msg("Payload:"+ data_to_str(item.content,flash_format_data,8));
+            payload_counter++;
+            // ScanaStudio.console_info_msg("Payload:"+ formatted_data);
           }
       break;
     default:
@@ -506,7 +533,7 @@ function fetch_command_description(h)
   return unknown_transaction;
 }
 
-function build_commands_db()
+function build_commands_db_nor()
 {
   //https://www.winbond.com/resource-files/w25m321av_combo_reva%20091317.pdf
   var transaction = [];
@@ -750,6 +777,157 @@ function build_commands_db()
   transaction.push(new header_t(0x77,"SBW","Set burst wrap",IO_QUAD));
   transaction.push(new parameter_t(3,IO_QUAD,"X","3 Dont't care bytes",flash_format_data));
   transaction.push(new parameter_t(1,IO_QUAD,"Wrap","Wrap bits",flash_format_data));
+  commands.push(transaction);
+
+}
+
+
+function build_commands_db_nand()
+{
+  // Micron MT29F2G01ABBGDxx, MT29F4G01ABBFDxx, MT29F8G01ADBFD12
+  // Commands in datasheet order, apart from dual/quad IO
+  // https://www.micron.com/products/nand-flash/serial-nand/part-catalog/mt29f4g01abbfdwb-it (requires login)
+  // Note: MT29F2G01ABBGDxx has no PROTECT command or x2 Read/Write commands
+  var transaction = [];
+
+  //-------------- RESET Operations
+
+  transaction = [];
+  transaction.push(new header_t(0xFF,"RST","Reset device",NO_PAYLOAD));
+  commands.push(transaction);
+
+  //-------------- WRITE Operations
+
+  transaction = [];
+  transaction.push(new header_t(0x06,"WE","Write Enable",NO_PAYLOAD));
+  commands.push(transaction);
+
+  transaction = [];
+  transaction.push(new header_t(0x04,"WD","Write Disable",NO_PAYLOAD));
+  commands.push(transaction);
+
+  //-------------- ID Operations
+
+  transaction = [];
+  transaction.push(new header_t(0x9F,"MAN ID","Manufacturer / Device ID",NO_PAYLOAD));
+  transaction.push(new parameter_t(1,IO_MISO,"Dummy","1 Dummy byte",flash_format_data));
+  transaction.push(new parameter_t(1,IO_MISO,"MAN","Manufacturer ID",flash_format_data));
+  transaction.push(new parameter_t(1,IO_MISO,"DEV","Device ID",flash_format_data));
+  commands.push(transaction);
+
+  //------------- READ Operations
+
+  transaction = [];
+  transaction.push(new header_t(0x13,"PR","Page Read",ch_miso,NO_PAYLOAD));
+  transaction.push(new parameter_t(3,IO_MOSI,"A","3 Address bytes",flash_format_address));
+  commands.push(transaction);
+
+  transaction = [];
+  transaction.push(new header_t(0x03,"RD","Read Cache x1",ch_miso,IO_MISO));
+  transaction.push(new parameter_t(0.375,IO_MOSI,"A","3 dummy bits",flash_format_address));
+  transaction.push(new parameter_t(1.625,IO_MOSI,"A","Column Address",flash_format_address));
+  transaction.push(new parameter_t(1,IO_MISO,"Dummy","1 Dummy byte",flash_format_data));
+  commands.push(transaction);
+
+
+  //-------------- Program Operations
+
+  transaction = [];
+  transaction.push(new header_t(0x02,"PL","Program Load x1",IO_MOSI));
+  transaction.push(new parameter_t(0.375,IO_MOSI,"A","3 dummy bits",flash_format_address));
+  transaction.push(new parameter_t(1.625,IO_MOSI,"A","Column Address",flash_format_address));
+  commands.push(transaction);
+
+  transaction = [];
+  transaction.push(new header_t(0x10,"PE","Program Execute",NO_PAYLOAD));
+  transaction.push(new parameter_t(3,IO_MOSI,"A","3 Address bytes",flash_format_address));
+  commands.push(transaction);
+
+  transaction = [];
+  transaction.push(new header_t(0x84,"PRD","Random Data Program x1",IO_MOSI));
+  transaction.push(new parameter_t(0.375,IO_MOSI,"A","3 dummy bits",flash_format_address));
+  transaction.push(new parameter_t(1.625,IO_MOSI,"A","Column Address",flash_format_address));
+  commands.push(transaction);
+
+  //-------------- Block Erase Operations
+
+  transaction = [];
+  transaction.push(new header_t(0xD8,"BE","Block Erase",NO_PAYLOAD));
+  transaction.push(new parameter_t(3,IO_MOSI,"A","3 Address bytes",flash_format_address));
+  commands.push(transaction);
+
+  //-------------- Features Operations
+
+  transaction = [];
+  transaction.push(new header_t(0x0F,"GF","Get Features",NO_PAYLOAD));
+  transaction.push(new parameter_t(1,IO_MOSI,"R","Register",flash_format_address));
+  transaction.push(new parameter_t(1,IO_MISO,"D","Data",flash_format_data));
+  commands.push(transaction);
+
+  transaction = [];
+  transaction.push(new header_t(0x1F,"SF","Set Features",NO_PAYLOAD));
+  transaction.push(new parameter_t(1,IO_MOSI,"R","Register",flash_format_address));
+  transaction.push(new parameter_t(1,IO_MOSI,"D","Data",flash_format_data));
+  commands.push(transaction);
+
+  //-------------- Protect Operation
+  transaction = [];
+  transaction.push(new header_t(0x2C,"PT","Protect",NO_PAYLOAD));
+  transaction.push(new parameter_t(3,IO_MOSI,"A","Page/Block Address",flash_format_data));
+  commands.push(transaction);
+
+
+  //------------------- DUAL/QUAD SPI Instructions
+
+  transaction = [];
+  transaction.push(new header_t(0x3B,"RCx2","Read Cache x2",IO_DUAL));
+  transaction.push(new parameter_t(0.375,IO_MOSI,"A","Dummy Bits",flash_format_address));
+  transaction.push(new parameter_t(1.625,IO_MOSI,"A","Column Address",flash_format_address));
+  transaction.push(new parameter_t(1,IO_MOSI,"Dummy","1 Dummy byte",flash_format_data));
+  commands.push(transaction);
+
+  transaction = [];
+  transaction.push(new header_t(0x6B,"RCx4","Read Cache x4",IO_QUAD));
+  transaction.push(new parameter_t(0.375,IO_MOSI,"A","3 dummy bits",flash_format_address));
+  transaction.push(new parameter_t(1.625,IO_MOSI,"A","Column Address",flash_format_address));
+  transaction.push(new parameter_t(4,IO_MOSI,"Dummy","4 Dummy bytes",flash_format_data));
+  commands.push(transaction);
+
+  transaction = [];
+  transaction.push(new header_t(0xBB,"RC2IO","Read Cache dual I/O",IO_DUAL));
+  transaction.push(new parameter_t(2,IO_DUAL,"A","Column Address",flash_format_address));
+  transaction.push(new parameter_t(1,IO_DUAL,"Dummy","1 Dummy byte",flash_format_data)); // 4 cycles, over 2 lanes, so 1 byte
+  commands.push(transaction);
+
+  transaction = [];
+  transaction.push(new header_t(0xEB,"RC4IO","Read Cache quad I/O",IO_QUAD));
+  transaction.push(new parameter_t(0.375,IO_QUAD,"A","3 dummy bits",flash_format_address));
+  transaction.push(new parameter_t(1.625,IO_QUAD,"A","Column Address",flash_format_address));
+  transaction.push(new parameter_t(2,IO_QUAD,"Dummy","2 Dummy bytes",flash_format_data));
+  commands.push(transaction);
+
+  transaction = [];
+  transaction.push(new header_t(0xA2,"PLx2","Program Load x2",IO_DUAL));
+  transaction.push(new parameter_t(0.375,IO_MOSI,"A","3 dummy bits",flash_format_address));
+  transaction.push(new parameter_t(1.625,IO_MOSI,"A","Column Address",flash_format_address));
+  commands.push(transaction);
+
+  transaction = [];
+  transaction.push(new header_t(0x44,"PLRx2","Program Load Random x2",IO_DUAL));
+  transaction.push(new parameter_t(0.375,IO_MOSI,"A","3 dummy bits",flash_format_address));
+  transaction.push(new parameter_t(1.625,IO_MOSI,"A","Column Address",flash_format_address));
+  commands.push(transaction);
+
+  transaction = [];
+  transaction.push(new header_t(0x32,"PLx4","Program Load x4",IO_QUAD));
+  transaction.push(new parameter_t(0.375,IO_MOSI,"A","3 dummy bits",flash_format_address));
+  transaction.push(new parameter_t(1.625,IO_MOSI,"A","Column Address",flash_format_address));
+  commands.push(transaction);
+
+  transaction = [];
+  transaction.push(new header_t(0x34,"PRDx4","Program Load Random x4",IO_QUAD));
+  transaction.push(new parameter_t(0.375,IO_MOSI,"A","3 dummy bits",flash_format_address));
+  transaction.push(new parameter_t(1.625,IO_MOSI,"A","Column Address",flash_format_address));
   commands.push(transaction);
 
 }
