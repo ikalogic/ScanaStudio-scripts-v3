@@ -3,7 +3,7 @@
 <DESCRIPTION>
 The Atmel Single Wire Interface (SWI) is a special purpose interface primarily used to communicate with Atmel Crypto-Authentication products. The protocol is designed to be compatible with standard microcontroller UART peripherals.
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.10 </VERSION>
 <AUTHOR_NAME> Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
