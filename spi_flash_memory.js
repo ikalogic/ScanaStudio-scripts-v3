@@ -35,7 +35,7 @@ function on_draw_gui_decoder()
   // Type of flash, determines what commands db is used
   ScanaStudio.gui_add_combo_box("flash_type","Flash Type:")
   ScanaStudio.gui_add_item_to_combo_box("NOR",true);      // Index 0 = TYPE_NOR
-  ScanaStudio.gui_add_item_to_combo_box("NAND (Micron MT29FxG01)",false);
+  ScanaStudio.gui_add_item_to_combo_box("NAND (Micron MT29F 60 series)",false);
 
 
   if (ScanaStudio.get_device_channels_count() > 4)
@@ -786,7 +786,8 @@ function build_commands_db_nand()
 {
   // Micron MT29F2G01ABBGDxx, MT29F4G01ABBFDxx, MT29F8G01ADBFD12
   // Commands in datasheet order, apart from dual/quad IO
-  // https://www.micron.com/products/nand-flash/serial-nand/part-catalog/mt29f4g01abbfdwb-it (requires login)
+  // Micron refer to series as "MT29F, SLC, 60 series" in low level drivers ,see
+  // https://www.micron.com/support/software-and-drivers (login to download)
   // Note: MT29F2G01ABBGDxx has no PROTECT command or x2 Read/Write commands
   var transaction = [];
 
