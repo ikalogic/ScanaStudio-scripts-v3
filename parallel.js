@@ -1,15 +1,17 @@
 /* Protocol meta info:
 <NAME> Parallel Bus </NAME>
 <DESCRIPTION>
-
+In data transmission, parallel communication is a method of conveying multiple binary digits (bits) simultaneously.
+It contrasts with serial communication, which conveys only a single bit at a time; this distinction is one way of characterizing a communications link.
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.11 </VERSION>
 <AUTHOR_NAME> Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.11:  Updated description.
 V0.1:  Initial release.
 </RELEASE_NOTES>
 */

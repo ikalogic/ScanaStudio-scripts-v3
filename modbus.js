@@ -1,15 +1,16 @@
 /* Protocol meta info:
 <NAME> MODBUS </NAME>
 <DESCRIPTION>
-
+Modbus enables communication among many devices connected to the same network, for example, a system that measures temperature and humidity and communicates the results to a computer. Modbus is often used to connect a supervisory computer with a remote terminal unit (RTU) in supervisory control and data acquisition (SCADA) systems. Many of the data types are named from industry usage of Ladder logic and its use in driving relays: a single-bit physical output is called a coil, and a single-bit physical input is called a discrete input or a contact.
 </DESCRIPTION>
-<VERSION> 0.3 </VERSION>
+<VERSION> 0.31 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.31: Updated description.
 V0.3: Updated packet view color palette
 V0.2: Added dec_item_end() for each dec_item_new().
 V0.1: Initial release.

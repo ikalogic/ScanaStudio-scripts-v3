@@ -10,7 +10,7 @@ The Atmel Single Wire Interface (SWI) is a special purpose interface primarily u
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.10:  Update description.
+V0.10:  Updated description.
 V0.1:  Initial release.
 </RELEASE_NOTES>
 */

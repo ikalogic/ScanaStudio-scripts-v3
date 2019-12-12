@@ -1,9 +1,9 @@
 /* Protocol meta info:
 <NAME> JTAG </NAME>
 <DESCRIPTION>
-
+JTAG (named after the Joint Test Action Group which codified it) is an industry standard for verifying designs and testing printed circuit boards after manufacture.
 </DESCRIPTION>
-<VERSION> 0.2 </VERSION>
+<VERSION> 0.31 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
@@ -11,6 +11,7 @@
 of the GNU General Public License GPLv3 </LICENSE>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <RELEASE_NOTES>
+V0.31: Updated description.
 V0.3: Change url and added packet view.
 V0.2: Added dec_item_end() for each dec_item_new().
 V0.1: Initial release.

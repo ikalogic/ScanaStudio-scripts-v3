@@ -1,14 +1,17 @@
 /* Protocol meta info:
 <NAME> DMX-512 </NAME>
 <DESCRIPTION>
+DMX512 (Digital Multiplex) is a standard for digital communication networks that are commonly used to control stage lighting and effects.
+Signals are based on UART.
 </DESCRIPTION>
-<VERSION> 0.6 </VERSION>
+<VERSION> 0.61 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.61: Updated description.
 V0.6: Updated packet view color palette
 V0.5: Added hex view
 V0.2: Added dec_item_end() for each dec_item_new().
