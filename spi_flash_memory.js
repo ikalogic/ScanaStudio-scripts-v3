@@ -845,7 +845,7 @@ function build_commands_db_nand()
   commands.push(transaction);
 
   transaction = [];
-  transaction.push(new header_t(0x84,"PRD","Random Data Program x1",IO_MOSI));
+  transaction.push(new header_t(0x84,"PLR","Program Load Random",IO_MOSI));
   transaction.push(new parameter_t(0.375,IO_MOSI,"A","3 dummy bits",flash_format_address));
   transaction.push(new parameter_t(1.625,IO_MOSI,"A","Column Address",flash_format_address));
   commands.push(transaction);
