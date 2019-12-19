@@ -30,7 +30,7 @@ var DEBUG_SCOPES =
 {
 	BIT_STREAM 	: 0x01,
 	DECODER		: 0x02,
-	DECODER_FSM	: 0x03,
+	DECODER_FSM	: 0x04,
 };
 
 var STATE =
@@ -253,6 +253,7 @@ var g_sampling_rate;
 var g_state;
 var g_next_trs;
 var g_byte_sample_points = [];
+var g_debug_scope;
 
 //Decoder GUI
 function on_draw_gui_decoder()
@@ -376,7 +377,7 @@ function on_decode_signals_init()
 
 function on_decode_signals_decode_bit_stream()
 {
-	ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : called");
+	if (g_debug_scope & DEBUG_SCOPES.BIT_STREAM) ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : called := " + ScanaStudio.get_available_samples(g_ch));
 
 	g_owObjects = [];
 
@@ -385,7 +386,7 @@ function on_decode_signals_decode_bit_stream()
 
 	while (ScanaStudio.trs_is_not_last(g_ch) == true)
 	{
-		ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : loop", next_tr.sample_index);
+		if (g_debug_scope & DEBUG_SCOPES.BIT_STREAM) ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : loop", next_tr.sample_index);
 		if(ScanaStudio.abort_is_requested() == true)
 		{
 			return false;
@@ -395,20 +396,20 @@ function on_decode_signals_decode_bit_stream()
 
 		next_tr = get_next_falling_edge(g_ch, next_tr);
 
-		ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : get_next_falling_edge()", next_tr.sample_index);
+		if (g_debug_scope & DEBUG_SCOPES.BIT_STREAM) ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : get_next_falling_edge()", next_tr.sample_index);
 
 		var trLowSt = next_tr;
 		next_tr = get_next_rising_edge(g_ch, next_tr);
 		var tLow = get_timediff_us(trLowSt, next_tr);
 
-		ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : get_timediff_us() = " + tLow);
+		if (g_debug_scope & DEBUG_SCOPES.BIT_STREAM)  ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : get_timediff_us() = " + tLow);
 
 		/****************************
 				    RESET
 		 ****************************/
    		if (tLow >= g_oWDelays.RSTL_MIN)
 		{
-			ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : reset detected", next_tr.sample_index);
+			if (g_debug_scope & DEBUG_SCOPES.BIT_STREAM) ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : reset detected", next_tr.sample_index);
 
 			g_owObjects.push(new OWObject(OWOBJECT_TYPE.RESET, true, trLowSt.sample_index, next_tr.sample_index, tLow, false));
 
@@ -431,7 +432,7 @@ function on_decode_signals_decode_bit_stream()
 				var trPDL = get_next_rising_edge(g_ch, trPDH);
 				var tPDL = get_timediff_us(trPDH, trPDL);
 
-				ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : presence pulse detected", trPDL.sample_index);
+				if (g_debug_scope & DEBUG_SCOPES.BIT_STREAM) ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : presence pulse detected", trPDL.sample_index);
 				g_owObjects.push(new OWObject(OWOBJECT_TYPE.PRESENCE, true, trPDH.sample_index, trPDL.sample_index, tPDL, false));
 				next_tr = trPDL;
 			}
@@ -465,19 +466,19 @@ function on_decode_signals_decode_bit_stream()
 			// Master Write 1 Slot
 			if ((tLow <= g_oWDelays.LOW1_MAX) && (tLow >= g_oWDelays.LOW1_MIN))
 			{
-				ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : master write 1", trHighEnd.sample_index);
+				if (g_debug_scope & DEBUG_SCOPES.BIT_STREAM) ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : master write 1, " + trHighEnd.sample_index, trHighEnd.sample_index);
 				bitValue = 1;
 			}
 			// Master Write 0 Slot
 			else if ((tLow <= g_oWDelays.LOW0_MAX) && (tLow >= g_oWDelays.LOW0_MIN))
 			{
-				ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : master write 0", trHighEnd.sample_index);
+				if (g_debug_scope & DEBUG_SCOPES.BIT_STREAM) ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : master write 0, " + trHighEnd.sample_index, trHighEnd.sample_index);
 				bitValue = 0;
 			}
 			//  Master Read 0 Slot
 			else if ((tLow <= (g_oWDelays.LOWR_MAX + g_oWDelays.REL_MAX)) && (tLow >= g_oWDelays.LOWR_MIN))
 			{
-				ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : master read 0", trHighEnd.sample_index);
+				if (g_debug_scope & DEBUG_SCOPES.BIT_STREAM) ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : master read 0, " + trHighEnd.sample_index, trHighEnd.sample_index);
 				bitValue = 0;
 			}
 			// Error. Unknown bit value
@@ -919,22 +920,24 @@ function on_decode_signals_decode_sequence()
 
 				if (crcOk)
 				{
+					ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.SHOW_ROM : rom code correct");
 					g_pktObjects.push(new PktObject("CRC", PKT_COLOR_ROMCODE_TITLE, pktCrcStr, 0, 0, PKT_COLOR_DATA, deviceCrc.start, deviceCrc.end));
 				}
 				else
 				{
+					ScanaStudio.console_warn_msg("on_decode_signals_decode_sequence(): STATE.SHOW_ROM : rom crc failure");
 					g_pktObjects.push(new PktObject("CRC", PKT_COLOR_ROMCODE_TITLE, pktCrcStr, 0, 0, PKT_COLOR_INVALID, deviceCrc.start, deviceCrc.end));
 				}
 			}
 			else if (romCode.length < 8)
 			{
+				ScanaStudio.console_warn_msg("on_decode_signals_decode_sequence(): STATE.SHOW_ROM : rom code incomplete");
 				var errStr = "INCOMPLETE";
-
 				/*
 				dec_item_new(g_ch, romCode[0].start, romCode[romCode.length - 1].end);
 				dec_item_add_content(errStr);
 				*/
-
+				
 				g_pktObjects.push(new PktObject("ROM CODE", PKT_COLOR_ROMCODE_TITLE, errStr, 0, 0, PKT_COLOR_DATA, romCode[0].start, romCode[romCode.length - 1].end));
 			}
 
@@ -983,8 +986,13 @@ function on_decode_signals_decode_sequence()
 
 			if (owObject.type == OWOBJECT_TYPE.RESET)
 			{
+				ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.DATA : reset detected");
 				g_state = STATE.RESET;
 				break;
+			}
+			else
+			{
+				ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.DATA : data detected");
 			}
 
 			var owByte;
@@ -1076,6 +1084,8 @@ function on_decode_signals_decode_sequence()
 
 function on_decode_signals(resume)
 {
+	g_debug_scope = DEBUG_SCOPES.DECODER | DEBUG_SCOPES.DECODER_FSM | DEBUG_SCOPES.BIT_STREAM;
+
     if (!resume) //If resume == false, it's the first call to this function.
     {
     	on_decode_signals_init();
@@ -1275,7 +1285,7 @@ function get_ow_byte (ch)
 			}
             else
             {
-                ScanaStudio.console_info_msg("get_ow_byte() : got new bit := " + owObject.value.toString());
+                if (g_debug_scope & DEBUG_SCOPES.BIT) ScanaStudio.console_info_msg("get_ow_byte() : got new bit := " + owObject.value.toString());
             }
 
 			byteValue >>= 1;
@@ -1289,7 +1299,7 @@ function get_ow_byte (ch)
 			var midSample = ((owObject.start + owObject.end) / 2);
 
             g_byte_sample_points.push(owObject);
-            ScanaStudio.console_info_msg("get_ow_byte() : byte length := " + g_byte_sample_points.length);
+            if (g_debug_scope & DEBUG_SCOPES.BIT) ScanaStudio.console_info_msg("get_ow_byte() : byte length := " + g_byte_sample_points.length);
 
 			if(owObject.duration == true)
 			{
@@ -1413,7 +1423,11 @@ function get_next_falling_edge (ch, trStart)
 
 	// ScanaStudio.console_info_msg("get_next_falling_edge() : end", tr.sample_index);
 
-	if (ScanaStudio.trs_is_not_last(ch) == false) tr = false;
+	if (ScanaStudio.trs_is_not_last(ch) == false) 
+	{
+		ScanaStudio.console_info_msg("get_next_falling_edge() : last transition detected");
+		tr = false;
+	}
 
 	return tr;
 }
@@ -1435,7 +1449,11 @@ function get_next_rising_edge (ch, trStart)
 
 	// ScanaStudio.console_info_msg("get_next_rising_edge() : end", tr.sample_index);
 
-	if (ScanaStudio.trs_is_not_last(ch) == false) tr = false;
+	if (ScanaStudio.trs_is_not_last(ch) == false) 
+	{
+		ScanaStudio.console_info_msg("get_next_rising_edge() : last transition detected");
+		tr = false;
+	}
 
 	return tr;
 }
