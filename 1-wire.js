@@ -3,15 +3,16 @@
 <DESCRIPTION>
 1-Wire protocol analyzer. Decodes Reset, presence and byte fields.
 </DESCRIPTION>
-<VERSION> 0.8 </VERSION>
-<AUTHOR_NAME> BASTIT Nicolas </AUTHOR_NAME>
+<VERSION> 0.9 </VERSION>
+<AUTHOR_NAME> BASTIT Nicolas, Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
-<COPYRIGHT> Copyright BASTIT Nicolas </COPYRIGHT>
+<COPYRIGHT> Copyright Ikalogic SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-v0.8: fixed bug related to incrementaiton
-V0.7: new skin
+v0.9: Fix bug related to bit order (introduced in v0.7)
+v0.8: fixed bug related to incrementation
+V0.7: Total rewrite.
 V0.6: Added trigger capability
 V0.5: Added packet and hex views
 V0.2: Added dec_item_end() for each dec_item_new().
@@ -356,14 +357,14 @@ function on_decode_signals(resume)
                     var pulse_sample_len = last_rising_edge - last_falling_edge;
                     if( (pulse_sample_len <= t2smpl(t_A_max) ) && (pulse_sample_len >= t2smpl(t_A_min)-1) )//detection 1
                     {
+                        byte |= (1 << bit_counter);
                         bit_counter++;
-                        byte = (byte<<1) | 0x1;
                         sample_points.push(last_falling_edge + t2smpl(t_A_type) + t2smpl(t_E_type));
                     }
                     else if( (pulse_sample_len <= t2smpl(t_C_max) ) && (pulse_sample_len >= t2smpl(t_C_min)-1) )//detection 0
                     {
+                        byte |= (0 << bit_counter);
                         bit_counter++;
-                        byte = (byte<<1);
                         sample_points.push(last_falling_edge + t2smpl(t_A_type) + t2smpl(t_E_type));
                     }
                     else
@@ -448,6 +449,7 @@ function on_build_demo_signals()
         for (w = 0; w < random_size; w++)
         {
             random_data = Math.round(Math.random() * 256);
+            //ScanaStudio.console_info_msg("rnd = " + random_data.toString(16));
             builder.put_byte_rng(random_data);
         }
         builder.put_silence(10e-3);
