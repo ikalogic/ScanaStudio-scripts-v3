@@ -53,7 +53,8 @@ var ROM_CMD =
 	SKIP_ROM      : {code: 0xCC, str: "SKIP ROM "},
 	OVD_SKIP_ROM  : {code: 0x3C, str: "OVERDRIVE SKIP ROM "},
 	SEARCH_ROM    : {code: 0xF0, str: "SEARCH ROM "},
-	ALARM_SEARCH  : {code: 0xEC, str: "ALARM SEARCH "}
+	ALARM_SEARCH  : {code: 0xEC, str: "ALARM SEARCH "},
+	UNKNOWN		  : {code: 0x00, str: "UNKNOWN"},
 };
 
 var MEM_CMD =
@@ -599,15 +600,185 @@ function decode_sequence_PRESENCE()
 }
 
 
-function decode_sequence_ROM_COMMAND()
+function decode_sequence_ROM_COMMAND(owByte)
 {
+	ScanaStudio.console_info_msg("decode_sequence_ROM_COMMAND(): STATE.ROM_COMMAND");
 
+	ScanaStudio.console_info_msg("decode_sequence_ROM_COMMAND(): ROM CMD := 0x" + int_to_str_hex(owByte.value));
+
+	/*
+	if ((uiHexView != HEXVIEW_OPT.DATA) && (uiHexView != HEXVIEW_OPT.ADR))
+	{
+		hex_add_byte(g_ch, -1, -1, owByte.value);
+	}
+	*/
+
+	var cmd = ROM_CMD.UNKNOWN;
+	for (var k in ROM_CMD)
+	{
+		var cmd_code = ROM_CMD[k].code;
+
+		if (owByte.value == cmd_code)
+		{
+			cmd.code = cmd_code;
+			cmd.str = ROM_CMD[k].str;
+
+			ScanaStudio.dec_item_new(g_ch, owByte.start, owByte.end);
+			display_byte(g_byte_sample_points);
+		
+			ScanaStudio.dec_item_add_content(cmd.str);
+			ScanaStudio.dec_item_add_content("0x" + int_to_str_hex(owByte.value));
+
+			ScanaStudio.dec_item_end();
+
+			ScanaStudio.console_info_msg("decode_sequence_ROM_COMMAND(): ROM CMD := " + cmd.str);
+
+			g_pktObjects.push(new PktObject("ROM CMD", PKT_COLOR_ROMCMD_TITLE, cmd.str, 0, 0, PKT_COLOR_DATA, owByte.start, owByte.end));
+		}
+	}
+
+	return cmd;
 }
 
 
-function decode_sequence_SHOW_ROM()
+function decode_sequence_SHOW_ROM(romCode)
 {
+	/* 64-bit ROM code:
+		[LSB] 8-bit Family Code | 48-bit Serial Number | 8-bit CRC | [MSB]
+	*/
+	var pktFamilyCode = "", pktSerialStr = "", pktCrcStr = "";
 
+	if (romCode.length == 8)
+	{
+		// Calc CRC
+		var calcCrc = get_crc8(romCode);
+
+		// Show Family Code
+		var familyCode = romCode.shift();
+		
+		
+		/*
+		if ((uiHexView != HEXVIEW_OPT.DATA) && (uiHexView != HEXVIEW_OPT.ROM))
+		{
+			hex_add_byte(g_ch, -1, -1, familyCode.value);
+		}
+		*/
+		
+		for (var k in DEVICE_FAMILY)
+		{
+			var device = DEVICE_FAMILY[k];
+			
+			if (familyCode.value == device.code)
+			{
+				pktFamilyCode = device.str;
+				
+				/*
+				dec_item_add_content(device.str + " (");
+				dec_item_add_post_text(")");
+				*/
+			}
+		}
+		
+		
+		ScanaStudio.dec_item_new(g_ch, familyCode.start, familyCode.end);
+		var pktFamilyCodeStr;
+		
+		if (pktFamilyCode != "")
+		{
+			pktFamilyCodeStr = pktFamilyCode + " (0x" + int_to_str_hex(familyCode.value) + ")";
+			ScanaStudio.dec_item_add_content(pktFamilyCodeStr);
+		}
+		else
+		{
+			pktFamilyCodeStr = int_to_str_hex(familyCode.value);
+		}
+		
+		ScanaStudio.dec_item_add_content("0x" + familyCode.value.toString(16));
+		ScanaStudio.dec_item_end();
+
+		// Show Serial Number
+		for (var i = 0; i < romCode.length - 1; i++)
+		{
+			var data = romCode[i];
+			
+			ScanaStudio.dec_item_new(g_ch, data.start, data.end);
+			display_byte(g_byte_sample_points);
+			ScanaStudio.dec_item_add_content("0x" + data.value.toString(16));
+			ScanaStudio.dec_item_end();
+			
+			pktSerialStr += int_to_str_hex(data.value) + " ";
+			
+			/*
+			if ((uiHexView != HEXVIEW_OPT.DATA) && (uiHexView != HEXVIEW_OPT.ROM))
+			{
+				hex_add_byte(g_ch, -1, -1, data.value);
+			}
+			*/
+		}
+
+		// Verify and show CRC
+		var crcOk = true;
+
+		deviceCrc = romCode[romCode.length - 1];
+
+		/*
+		dec_item_new(g_ch, deviceCrc.start, deviceCrc.end);
+		dec_item_add_content("CRC: ");
+		dec_item_add_data(deviceCrc.value);
+		*/
+		
+		pktCrcStr = int_to_str_hex(deviceCrc.value);
+		
+		/*
+		if ((uiHexView != HEXVIEW_OPT.DATA) && (uiHexView != HEXVIEW_OPT.ROM))
+		{
+			hex_add_byte(g_ch, -1, -1, deviceCrc.value);
+		}
+		*/
+		
+		ScanaStudio.dec_item_new(g_ch, deviceCrc.start, deviceCrc.end);
+		if (deviceCrc.value == calcCrc)
+		{
+			pktCrcStr += " (OK)";
+			ScanaStudio.dec_item_emphasize_success();
+		}
+		else
+		{
+			pktCrcStr += " (WRONG)";
+			ScanaStudio.dec_item_emphasize_error();
+			crcOk = false;
+			pktOk = false;
+		}
+		ScanaStudio.dec_item_add_content("CRC: 0x" + deviceCrc.value.toString(16));
+		ScanaStudio.dec_item_end();
+
+		g_pktObjects.push(new PktObject("FAMILY", PKT_COLOR_ROMCODE_TITLE, pktFamilyCodeStr, 0, 0, PKT_COLOR_DATA, familyCode.start, familyCode.end));
+		g_pktObjects.push(new PktObject("SERIAL", PKT_COLOR_ROMCODE_TITLE, pktSerialStr, 0, 0, PKT_COLOR_DATA, romCode[0].start, romCode[romCode.length - 2].end));
+
+		if (crcOk)
+		{
+			ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.SHOW_ROM : rom code is correct");
+			g_pktObjects.push(new PktObject("CRC", PKT_COLOR_ROMCODE_TITLE, pktCrcStr, 0, 0, PKT_COLOR_DATA, deviceCrc.start, deviceCrc.end));
+		}
+		else
+		{
+			ScanaStudio.console_warning_msg("on_decode_signals_decode_sequence(): STATE.SHOW_ROM : rom crc failure");
+			g_pktObjects.push(new PktObject("CRC", PKT_COLOR_ROMCODE_TITLE, pktCrcStr, 0, 0, PKT_COLOR_INVALID, deviceCrc.start, deviceCrc.end));
+		}
+	}
+	else if (romCode.length < 8)
+	{
+		ScanaStudio.console_warning_msg("on_decode_signals_decode_sequence(): STATE.SHOW_ROM : rom code incomplete");
+		var errStr = "INCOMPLETE";
+		/*
+		dec_item_new(g_ch, romCode[0].start, romCode[romCode.length - 1].end);
+		dec_item_add_content(errStr);
+		*/
+		
+		g_pktObjects.push(new PktObject("ROM CODE", PKT_COLOR_ROMCODE_TITLE, errStr, 0, 0, PKT_COLOR_DATA, romCode[0].start, romCode[romCode.length - 1].end));
+	}
+
+	return true;
 }
 
 
@@ -678,6 +849,7 @@ function on_decode_signals_decode_sequence()
 		break;
 
 		case STATE.PRESENCE:
+		{
 			ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.PRESENCE");
 
 			owObject = g_owObjects.shift();
@@ -737,14 +909,11 @@ function on_decode_signals_decode_sequence()
 			{
 				g_state = STATE.RESET;
 			}
-
+		}
 		break;
 
 		case STATE.ROM_COMMAND:
-			ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.ROM_COMMAND");
-
-			var romCmd = false;
-			var romCmdStr;
+		{
 			var owByte = get_ow_byte(g_ch); // g_byte_sample_points is updated
 
 			if (owByte.isLast == true)
@@ -752,59 +921,35 @@ function on_decode_signals_decode_sequence()
 				g_state = STATE.END;
 				break;
 			}
+		
+			var cmd = decode_sequence_ROM_COMMAND(owByte);
 
-			ScanaStudio.dec_item_new(g_ch, owByte.start, owByte.end);
-            display_byte(g_byte_sample_points);
-            ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): ROM CMD := 0x" + int_to_str_hex(owByte.value));
+			ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.ROM_COMMAND : cmd := " +  cmd.str);
 
-            /*
-			if ((uiHexView != HEXVIEW_OPT.DATA) && (uiHexView != HEXVIEW_OPT.ADR))
+			switch (cmd.code)
 			{
-				hex_add_byte(g_ch, -1, -1, owByte.value);
+				case ROM_CMD.READ_ROM.code:
+				case ROM_CMD.MATCH_ROM.code: g_state = STATE.SHOW_ROM;
+				break;
+
+				case ROM_CMD.SEARCH_ROM.code: g_state = STATE.SEARCH_ROM;
+				break;
+
+				default: g_state = STATE.DATA;
+				break;
 			}
-			*/
-
-			for (var k in ROM_CMD)
-			{
-				var cmd = ROM_CMD[k];
-
-				if (owByte.value == cmd.code)
-				{
-					ScanaStudio.dec_item_add_content(cmd.str);
-					ScanaStudio.dec_item_add_content("0x" + int_to_str_hex(owByte.value));
-
-					ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): ROM CMD := " + cmd.str);
-
-					g_pktObjects.push(new PktObject("ROM CMD", PKT_COLOR_ROMCMD_TITLE, cmd.str, 0, 0, PKT_COLOR_DATA, owByte.start, owByte.end));
-
-					switch (cmd)
-					{
-						case ROM_CMD.READ_ROM:
-						case ROM_CMD.MATCH_ROM: g_state = STATE.SHOW_ROM;
-						break;
-
-						case ROM_CMD.SEARCH_ROM: g_state = STATE.SEARCH_ROM;
-						break;
-
-						default: g_state = STATE.DATA;
-						break;
-					}
-				}
-			}
-
-            ScanaStudio.dec_item_end();
-
+		}
 		break;
 
 		case STATE.SHOW_ROM:
+		{
 			ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.SHOW_ROM");
+			var romCode = [];
 
 			/* 64-bit ROM code:
 			   [LSB] 8-bit Family Code | 48-bit Serial Number | 8-bit CRC | [MSB]
 			*/
 			var owByte;
-			var romCode = [];
-			var pktFamilyCode = "", pktSerialStr = "", pktCrcStr = "";
 
 			do
 			{
@@ -813,136 +958,10 @@ function on_decode_signals_decode_sequence()
 			}
 			while ((owByte.isLast != true) && (romCode.length < 8))
 
-			if (romCode.length == 8)
-			{
-				// Calc CRC
-				var calcCrc = get_crc8(romCode);
-
-				// Show Family Code
-				var familyCode = romCode.shift();
-				/*
-				dec_item_new(g_ch, familyCode.start, familyCode.end);
-
-				if ((uiHexView != HEXVIEW_OPT.DATA) && (uiHexView != HEXVIEW_OPT.ROM))
-				{
-					hex_add_byte(g_ch, -1, -1, familyCode.value);
-				}
-				*/
-
-				for (var k in DEVICE_FAMILY)
-				{
-					var device = DEVICE_FAMILY[k];
-
-					if (familyCode.value == device.code)
-					{
-						pktFamilyCode = device.str;
-
-						/*
-						dec_item_add_content(device.str + " (");
-						dec_item_add_post_text(")");
-						*/
-					}
-				}
-
-				/*
-				dec_item_add_data(familyCode.value);
-				*/
-
-				var pktFamilyCodeStr;
-
-				if (pktFamilyCode != "")
-				{
-					pktFamilyCodeStr = pktFamilyCode + " (" + int_to_str_hex(familyCode.value) + ")";
-				}
-				else
-				{
-					pktFamilyCodeStr = int_to_str_hex(familyCode.value);
-				}
-
-				// Show Serial Number
-				for (var i = 0; i < romCode.length - 1; i++)
-				{
-					var data = romCode[i];
-					/*
-					dec_item_new(g_ch, data.start, data.end);
-					dec_item_add_data(data.value);
-					*/
-
-					pktSerialStr += int_to_str_hex(data.value) + " ";
-
-					/*
-					if ((uiHexView != HEXVIEW_OPT.DATA) && (uiHexView != HEXVIEW_OPT.ROM))
-					{
-						hex_add_byte(g_ch, -1, -1, data.value);
-					}
-					*/
-				}
-
-				// Verify and show CRC
-				var crcOk = true;
-
-				deviceCrc = romCode[romCode.length - 1];
-
-				/*
-				dec_item_new(g_ch, deviceCrc.start, deviceCrc.end);
-				dec_item_add_content("CRC: ");
-				dec_item_add_data(deviceCrc.value);
-				*/
-
-				pktCrcStr = int_to_str_hex(deviceCrc.value);
-
-				/*
-				if ((uiHexView != HEXVIEW_OPT.DATA) && (uiHexView != HEXVIEW_OPT.ROM))
-				{
-					hex_add_byte(g_ch, -1, -1, deviceCrc.value);
-				}
-				*/
-
-				if (deviceCrc.value == calcCrc)
-				{
-					pktCrcStr += " (OK)";
-					/*
-					dec_item_add_post_text(" OK");
-					*/
-				}
-				else
-				{
-					pktCrcStr += " (WRONG)";
-					/*
-					dec_item_add_post_text(" WRONG");
-					*/
-					crcOk = false;
-					pktOk = false;
-				}
-
-				g_pktObjects.push(new PktObject("FAMILY", PKT_COLOR_ROMCODE_TITLE, pktFamilyCodeStr, 0, 0, PKT_COLOR_DATA, familyCode.start, familyCode.end));
-				g_pktObjects.push(new PktObject("SERIAL", PKT_COLOR_ROMCODE_TITLE, pktSerialStr, 0, 0, PKT_COLOR_DATA, romCode[0].start, romCode[romCode.length - 2].end));
-
-				if (crcOk)
-				{
-					ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.SHOW_ROM : rom code correct");
-					g_pktObjects.push(new PktObject("CRC", PKT_COLOR_ROMCODE_TITLE, pktCrcStr, 0, 0, PKT_COLOR_DATA, deviceCrc.start, deviceCrc.end));
-				}
-				else
-				{
-					ScanaStudio.console_warn_msg("on_decode_signals_decode_sequence(): STATE.SHOW_ROM : rom crc failure");
-					g_pktObjects.push(new PktObject("CRC", PKT_COLOR_ROMCODE_TITLE, pktCrcStr, 0, 0, PKT_COLOR_INVALID, deviceCrc.start, deviceCrc.end));
-				}
-			}
-			else if (romCode.length < 8)
-			{
-				ScanaStudio.console_warn_msg("on_decode_signals_decode_sequence(): STATE.SHOW_ROM : rom code incomplete");
-				var errStr = "INCOMPLETE";
-				/*
-				dec_item_new(g_ch, romCode[0].start, romCode[romCode.length - 1].end);
-				dec_item_add_content(errStr);
-				*/
-				
-				g_pktObjects.push(new PktObject("ROM CODE", PKT_COLOR_ROMCODE_TITLE, errStr, 0, 0, PKT_COLOR_DATA, romCode[0].start, romCode[romCode.length - 1].end));
-			}
+			decode_sequence_SHOW_ROM(romCode);
 
 			g_state = STATE.DATA;
-
+		}
 		break;
 
 		case STATE.SEARCH_ROM:
@@ -1084,7 +1103,7 @@ function on_decode_signals_decode_sequence()
 
 function on_decode_signals(resume)
 {
-	g_debug_scope = DEBUG_SCOPES.DECODER | DEBUG_SCOPES.DECODER_FSM | DEBUG_SCOPES.BIT_STREAM;
+	g_debug_scope = DEBUG_SCOPES.DECODER | DEBUG_SCOPES.DECODER_FSM;
 
     if (!resume) //If resume == false, it's the first call to this function.
     {
