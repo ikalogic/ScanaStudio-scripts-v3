@@ -1,21 +1,21 @@
 /* Protocol meta info:
 <NAME> Atmel SWI </NAME>
 <DESCRIPTION>
-
+The Atmel Single Wire Interface (SWI) is a special purpose interface primarily used to communicate with Atmel Crypto-Authentication products. The protocol is designed to be compatible with standard microcontroller UART peripherals.
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.10 </VERSION>
 <AUTHOR_NAME> Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.10:  Updated description.
 V0.1:  Initial release.
 </RELEASE_NOTES>
 */
 
 
-//Type "template..." in Atom.io editor (with ScanaStudio plugin) to generate code examples.
 //Decoder GUI
 function on_draw_gui_decoder()
 {

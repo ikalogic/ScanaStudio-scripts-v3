@@ -1,15 +1,19 @@
 /* Protocol meta info:
 <NAME> DHTxx </NAME>
 <DESCRIPTION>
-
+The digital temperature and humidity sensor DHT11 and DHT22 is a composite sensor that contains a calibrated digital signal output of temperature and humidity.
+The technology of a dedicated digital modules collection and the temperature and humidity sensing technology are applied to ensure that the product has high reliability and excellent long-term stability.
+The sensor includes a resistive sense of wet component and an NTC temperature measurement device, and is connected with a high-performance 8-bit microcontroller.
+DHT22 has a larger range of temperature.
 </DESCRIPTION>
-<VERSION> 0.2 </VERSION>
+<VERSION> 0.21 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.21: Updated description.
 V0.2: Added dec_item_end() for each dec_item_new().
 V0.0:  Initial release.
 </RELEASE_NOTES>
