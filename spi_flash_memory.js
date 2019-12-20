@@ -316,7 +316,11 @@ function on_build_demo_signals()
   var silence_period = (samples_to_build / (125*ScanaStudio.builder_get_sample_rate()));
   var spi_builder = ScanaStudio.load_builder_object("spi.js");
   read_gui_values();
-  build_commands_db();
+  if (flash_type == TYPE_NOR) {
+      build_commands_db_nor();
+  } else {
+      build_commands_db_nand();
+  }
 
   spi_builder.config(
     ScanaStudio.gui_get_value("ch_mosi"),
