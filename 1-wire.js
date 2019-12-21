@@ -3,13 +3,14 @@
 <DESCRIPTION>
 1-Wire protocol analyzer. Decodes Reset, presence and byte fields.
 </DESCRIPTION>
-<VERSION> 0.8 </VERSION>
+<VERSION> 0.9 </VERSION>
 <AUTHOR_NAME> BASTIT Nicolas </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright BASTIT Nicolas </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.9: Backport of decoder
 v0.8: fixed bug related to incrementaiton
 V0.7: new skin
 V0.6: Added trigger capability
@@ -337,7 +338,14 @@ function isASCII(str)
 // https://www.maximintegrated.com/en/tools/other/appnotes/126/AN126-timing-calculation.zip
 function setup_1wire_parameters(spd)
 {
-	g_oWDelays = STANDARD_DELAYS;
+	if (spd == SPEED.REGULAR)
+	{
+		g_oWDelays = STANDARD_DELAYS;
+	}
+	else if (spd == SPEED.OVERDRIVE)
+	{
+		g_owObjects = OVERDRIVE_DELAYS;
+	}
 }
 
 
@@ -594,9 +602,40 @@ function decode_sequence_RESET(owObject)
 }
 
 
-function decode_sequence_PRESENCE()
+function decode_sequence_PRESENCE(owObject)
 {
+	if (owObject.value == true)
+	{
 
+		ScanaStudio.dec_item_new(g_ch, owObject.start, owObject.end);
+		ScanaStudio.dec_item_emphasize_success();
+		ScanaStudio.dec_item_add_content("SLAVE PRESENCE (" + (Math.round(owObject.duration * 100) / 100) + " us)");
+		ScanaStudio.dec_item_add_content("PRESENCE");
+		ScanaStudio.dec_item_add_content("PRES");
+		ScanaStudio.dec_item_add_content("P");
+		ScanaStudio.dec_item_end();
+
+		ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): OWOBJECT_TYPE.PRESENCE");
+
+		g_pktObjects.push(new PktObject("PRESENCE", PKT_COLOR_PRES_TITLE, ((Math.round(owObject.duration * 100) / 100) + " us"), 0, 0, PKT_COLOR_DATA, owObject.start, owObject.end));
+	}
+	else
+	{
+		ScanaStudio.dec_item_new(g_ch, owObject.start, owObject.end);
+		ScanaStudio.dec_item_emphasize_warning();
+		ScanaStudio.dec_item_add_content("SLAVE PRESENCE MISSING");
+		ScanaStudio.dec_item_add_content("PRESENCE MISSING");
+		ScanaStudio.dec_item_add_content("MISSING");
+		ScanaStudio.dec_item_add_content("M");
+		ScanaStudio.dec_item_end();
+
+		ScanaStudio.console_warning_msg("on_decode_signals_decode_sequence(): OWOBJECT_TYPE.PRESENCE missing");
+
+		g_pktObjects.push(new PktObject("PRESENCE", PKT_COLOR_INVALID, "PRESENCE MISSING", 0, 0, PKT_COLOR_DATA, owObject.start, owObject.end));
+		pktOk = false;
+	}
+
+	return;
 }
 
 
@@ -828,6 +867,7 @@ function on_decode_signals_decode_sequence()
 		break;
 
 		case STATE.RESET:
+		{
 			ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.RESET");
 
 			owObject = g_owObjects.shift();
@@ -845,7 +885,7 @@ function on_decode_signals_decode_sequence()
 
 				g_state = STATE.PRESENCE;
 			}
-
+		}
 		break;
 
 		case STATE.PRESENCE:
@@ -856,36 +896,7 @@ function on_decode_signals_decode_sequence()
 
 			if (owObject.type == OWOBJECT_TYPE.PRESENCE)
 			{
-				if (owObject.value == true)
-				{
-
-					ScanaStudio.dec_item_new(g_ch, owObject.start, owObject.end);
-                    ScanaStudio.dec_item_emphasize_success();
-					ScanaStudio.dec_item_add_content("SLAVE PRESENCE (" + (Math.round(owObject.duration * 100) / 100) + " us)");
-					ScanaStudio.dec_item_add_content("PRESENCE");
-					ScanaStudio.dec_item_add_content("PRES");
-					ScanaStudio.dec_item_add_content("P");
-                    ScanaStudio.dec_item_end();
-
-					ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): OWOBJECT_TYPE.PRESENCE");
-
-					g_pktObjects.push(new PktObject("PRESENCE", PKT_COLOR_PRES_TITLE, ((Math.round(owObject.duration * 100) / 100) + " us"), 0, 0, PKT_COLOR_DATA, owObject.start, owObject.end));
-				}
-				else
-				{
-					ScanaStudio.dec_item_new(g_ch, owObject.start, owObject.end);
-                    ScanaStudio.dec_item_emphasize_warning();
-                    ScanaStudio.dec_item_add_content("SLAVE PRESENCE MISSING");
-					ScanaStudio.dec_item_add_content("PRESENCE MISSING");
-					ScanaStudio.dec_item_add_content("MISSING");
-					ScanaStudio.dec_item_add_content("M");
-                    ScanaStudio.dec_item_end();
-
-					ScanaStudio.console_warning_msg("on_decode_signals_decode_sequence(): OWOBJECT_TYPE.PRESENCE missing");
-
-					g_pktObjects.push(new PktObject("PRESENCE", PKT_COLOR_INVALID, "PRESENCE MISSING", 0, 0, PKT_COLOR_DATA, owObject.start, owObject.end));
-					pktOk = false;
-				}
+				decode_sequence_PRESENCE(owObject);
 
                 if (g_owObjects.length > 0) {
                     owObject = g_owObjects.shift();
@@ -914,6 +925,8 @@ function on_decode_signals_decode_sequence()
 
 		case STATE.ROM_COMMAND:
 		{
+			ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.ROM_COMMAND : cmd := " +  cmd.str);
+
 			var owByte = get_ow_byte(g_ch); // g_byte_sample_points is updated
 
 			if (owByte.isLast == true)
@@ -924,8 +937,6 @@ function on_decode_signals_decode_sequence()
 		
 			var cmd = decode_sequence_ROM_COMMAND(owByte);
 
-			ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.ROM_COMMAND : cmd := " +  cmd.str);
-
 			switch (cmd.code)
 			{
 				case ROM_CMD.READ_ROM.code:
@@ -933,6 +944,11 @@ function on_decode_signals_decode_sequence()
 				break;
 
 				case ROM_CMD.SEARCH_ROM.code: g_state = STATE.SEARCH_ROM;
+				break;
+
+				case ROM_CMD.OVD_MATCH_ROM:
+				case ROM_CMD.OVD_SKIP_ROM:
+					setup_1wire_parameters(SPEED.OVERDRIVE);
 				break;
 
 				default: g_state = STATE.DATA;
@@ -965,6 +981,7 @@ function on_decode_signals_decode_sequence()
 		break;
 
 		case STATE.SEARCH_ROM:
+		{
 			ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.SEARCH_ROM");
 
 			var owByte;
@@ -984,18 +1001,18 @@ function on_decode_signals_decode_sequence()
 
 			} while (owByte.isLast != true);
 
-			/*
-			dec_item_new(g_ch, firstByte.start, lastByte.end);
-			dec_item_add_content("SEARCH ROM SEQUENCE");
-			*/
+			ScanaStudio.dec_item_new(g_ch, firstByte.start, lastByte.end);
+			ScanaStudio.dec_item_add_content("SEARCH ROM SEQUENCE");
+			ScanaStudio.dec_item_end();
 
 			g_pktObjects.push(new PktObject("SRCH SEQ", PKT_COLOR_OTHER_TITLE, ((owByteCnt * 8) + " bits"), 0, 0, PKT_COLOR_DATA, firstByte.start, lastByte.end));
 
 			g_state = STATE.RESET;
-
+		}
 		break;
 
 		case STATE.DATA:
+		{
 			ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.DATA");
 
 			/* Get and show all data */
@@ -1086,14 +1103,15 @@ function on_decode_signals_decode_sequence()
 			}
 
 			g_state = STATE.RESET;
-
+		}
 		break;
 
 		case STATE.END:
+		{
 			ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.END");
 
 			g_state = STATE.RESET;
-
+		}
 		break;
 	}
 
@@ -1103,7 +1121,7 @@ function on_decode_signals_decode_sequence()
 
 function on_decode_signals(resume)
 {
-	g_debug_scope = DEBUG_SCOPES.DECODER | DEBUG_SCOPES.DECODER_FSM;
+	g_debug_scope = DEBUG_SCOPES.DECODER | DEBUG_SCOPES.DECODER_FSM | DEBUG_SCOPES.BIT_STREAM;
 
     if (!resume) //If resume == false, it's the first call to this function.
     {
