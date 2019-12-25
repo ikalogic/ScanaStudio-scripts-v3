@@ -545,7 +545,7 @@ function display_byte(a)
     var bit;
     var midSample;
 
-    ScanaStudio.console_info_msg("display_byte() : array length := " + N);
+    if (g_debug_scope & DEBUG_SCOPES.DECODER) ScanaStudio.console_info_msg("display_byte() : array length := " + N);
 
 	for (var i = 0; i < N; i++)
 	{
@@ -555,12 +555,12 @@ function display_byte(a)
         if (bit.value == 1)
         {
             ScanaStudio.dec_item_add_sample_point(midSample, "1");
-            ScanaStudio.console_info_msg("display_byte() : sample point := " + midSample);
+            if (g_debug_scope & DEBUG_SCOPES.DECODER) ScanaStudio.console_info_msg("display_byte() : sample point := " + midSample);
         }
         else if (bit.value == 0)
         {
             ScanaStudio.dec_item_add_sample_point(midSample, "0");
-            ScanaStudio.console_info_msg("display_byte() : sample point := " + midSample);
+            if (g_debug_scope & DEBUG_SCOPES.DECODER) ScanaStudio.console_info_msg("display_byte() : sample point := " + midSample);
         }
 
         if(bit.duration == true)
@@ -594,7 +594,7 @@ function decode_sequence_RESET(owObject)
     // ScanaStudio.dec_item_add_sample_point(Math.round((owObject.start + owObject.end)/2), "U");
     ScanaStudio.dec_item_end();
 
-	ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): OWOBJECT_TYPE.RESET");
+	if (g_debug_scope & DEBUG_SCOPES.DECODER) ScanaStudio.console_info_msg("decode_sequence_RESET(): OWOBJECT_TYPE.RESET");
 
 	g_pktObjects.push(new PktObject("RESET", PKT_COLOR_RESET_TITLE, (resetStatus + (Math.round(owObject.duration * 100) / 100) + " us"), 0, 0, PKT_COLOR_DATA, owObject.start, owObject.end));
 
@@ -615,7 +615,7 @@ function decode_sequence_PRESENCE(owObject)
 		ScanaStudio.dec_item_add_content("P");
 		ScanaStudio.dec_item_end();
 
-		ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): OWOBJECT_TYPE.PRESENCE");
+		if (g_debug_scope & DEBUG_SCOPES.DECODER) ScanaStudio.console_info_msg("decode_sequence_RESET(): OWOBJECT_TYPE.PRESENCE");
 
 		g_pktObjects.push(new PktObject("PRESENCE", PKT_COLOR_PRES_TITLE, ((Math.round(owObject.duration * 100) / 100) + " us"), 0, 0, PKT_COLOR_DATA, owObject.start, owObject.end));
 	}
@@ -629,7 +629,7 @@ function decode_sequence_PRESENCE(owObject)
 		ScanaStudio.dec_item_add_content("M");
 		ScanaStudio.dec_item_end();
 
-		ScanaStudio.console_warning_msg("on_decode_signals_decode_sequence(): OWOBJECT_TYPE.PRESENCE missing");
+		ScanaStudio.console_warning_msg("decode_sequence_RESET(): OWOBJECT_TYPE.PRESENCE missing");
 
 		g_pktObjects.push(new PktObject("PRESENCE", PKT_COLOR_INVALID, "PRESENCE MISSING", 0, 0, PKT_COLOR_DATA, owObject.start, owObject.end));
 		pktOk = false;
@@ -641,9 +641,9 @@ function decode_sequence_PRESENCE(owObject)
 
 function decode_sequence_ROM_COMMAND(owByte)
 {
-	ScanaStudio.console_info_msg("decode_sequence_ROM_COMMAND(): STATE.ROM_COMMAND");
+	if (g_debug_scope & DEBUG_SCOPES.DECODER) ScanaStudio.console_info_msg("decode_sequence_ROM_COMMAND(): STATE.ROM_COMMAND");
 
-	ScanaStudio.console_info_msg("decode_sequence_ROM_COMMAND(): ROM CMD := 0x" + int_to_str_hex(owByte.value));
+	if (g_debug_scope & DEBUG_SCOPES.DECODER) ScanaStudio.console_info_msg("decode_sequence_ROM_COMMAND(): ROM CMD := 0x" + int_to_str_hex(owByte.value));
 
 	/*
 	if ((uiHexView != HEXVIEW_OPT.DATA) && (uiHexView != HEXVIEW_OPT.ADR))
@@ -657,10 +657,14 @@ function decode_sequence_ROM_COMMAND(owByte)
 	{
 		var cmd_code = ROM_CMD[k].code;
 
+		if (g_debug_scope & DEBUG_SCOPES.DECODER) ScanaStudio.console_info_msg("decode_sequence_ROM_COMMAND(): ROM CMD[" + k + "] := " + cmd.str);
+
 		if (owByte.value == cmd_code)
 		{
 			cmd.code = cmd_code;
 			cmd.str = ROM_CMD[k].str;
+
+			if (g_debug_scope & DEBUG_SCOPES.DECODER) ScanaStudio.console_info_msg("decode_sequence_ROM_COMMAND(): ROM CMD := " + cmd.str);
 
 			ScanaStudio.dec_item_new(g_ch, owByte.start, owByte.end);
 			display_byte(g_byte_sample_points);
@@ -670,9 +674,9 @@ function decode_sequence_ROM_COMMAND(owByte)
 
 			ScanaStudio.dec_item_end();
 
-			ScanaStudio.console_info_msg("decode_sequence_ROM_COMMAND(): ROM CMD := " + cmd.str);
-
 			g_pktObjects.push(new PktObject("ROM CMD", PKT_COLOR_ROMCMD_TITLE, cmd.str, 0, 0, PKT_COLOR_DATA, owByte.start, owByte.end));
+
+			break;
 		}
 	}
 
@@ -760,12 +764,6 @@ function decode_sequence_SHOW_ROM(romCode)
 
 		deviceCrc = romCode[romCode.length - 1];
 
-		/*
-		dec_item_new(g_ch, deviceCrc.start, deviceCrc.end);
-		dec_item_add_content("CRC: ");
-		dec_item_add_data(deviceCrc.value);
-		*/
-		
 		pktCrcStr = int_to_str_hex(deviceCrc.value);
 		
 		/*
@@ -789,6 +787,7 @@ function decode_sequence_SHOW_ROM(romCode)
 			pktOk = false;
 		}
 		ScanaStudio.dec_item_add_content("CRC: 0x" + deviceCrc.value.toString(16));
+		ScanaStudio.dec_item_add_content("0x" + deviceCrc.value.toString(16));
 		ScanaStudio.dec_item_end();
 
 		g_pktObjects.push(new PktObject("FAMILY", PKT_COLOR_ROMCODE_TITLE, pktFamilyCodeStr, 0, 0, PKT_COLOR_DATA, familyCode.start, familyCode.end));
@@ -796,23 +795,23 @@ function decode_sequence_SHOW_ROM(romCode)
 
 		if (crcOk)
 		{
-			ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.SHOW_ROM : rom code is correct");
+			if (g_debug_scope & DEBUG_SCOPES.DECODER) ScanaStudio.console_info_msg("decode_sequence_SHOW_ROM(): rom code is correct");
 			g_pktObjects.push(new PktObject("CRC", PKT_COLOR_ROMCODE_TITLE, pktCrcStr, 0, 0, PKT_COLOR_DATA, deviceCrc.start, deviceCrc.end));
 		}
 		else
 		{
-			ScanaStudio.console_warning_msg("on_decode_signals_decode_sequence(): STATE.SHOW_ROM : rom crc failure");
+			ScanaStudio.console_warning_msg("decode_sequence_SHOW_ROM(): rom crc failure");
 			g_pktObjects.push(new PktObject("CRC", PKT_COLOR_ROMCODE_TITLE, pktCrcStr, 0, 0, PKT_COLOR_INVALID, deviceCrc.start, deviceCrc.end));
 		}
 	}
 	else if (romCode.length < 8)
 	{
-		ScanaStudio.console_warning_msg("on_decode_signals_decode_sequence(): STATE.SHOW_ROM : rom code incomplete");
+		ScanaStudio.console_warning_msg("decode_sequence_SHOW_ROM() : rom code incomplete");
 		var errStr = "INCOMPLETE";
-		/*
-		dec_item_new(g_ch, romCode[0].start, romCode[romCode.length - 1].end);
-		dec_item_add_content(errStr);
-		*/
+		
+		ScanaStudio.dec_item_new(g_ch, romCode[0].start, romCode[romCode.length - 1].end);
+		ScanaStudio.dec_item_add_content(errStr);
+		ScanaStudio.dec_item_end();
 		
 		g_pktObjects.push(new PktObject("ROM CODE", PKT_COLOR_ROMCODE_TITLE, errStr, 0, 0, PKT_COLOR_DATA, romCode[0].start, romCode[romCode.length - 1].end));
 	}
@@ -823,13 +822,122 @@ function decode_sequence_SHOW_ROM(romCode)
 
 function decode_sequence_SEARCH_ROM()
 {
+	var owByte;
+	var owByteCnt = 0;
+	var firstByte = get_ow_byte(g_ch);  // FIXME: g_byte_sample_points is updated!
+	var lastByte;
 
+	do
+	{
+		owByte = get_ow_byte(g_ch);     // FIXME: g_byte_sample_points is updated!
+		owByteCnt++;
+
+		if (owByte.isLast != true)
+		{
+			lastByte = owByte;
+		}
+
+	} while (owByte.isLast != true);
+
+	ScanaStudio.dec_item_new(g_ch, firstByte.start, lastByte.end);
+	ScanaStudio.dec_item_add_content("SEARCH ROM SEQUENCE");
+	ScanaStudio.dec_item_end();
+
+	g_pktObjects.push(new PktObject("SRCH SEQ", PKT_COLOR_OTHER_TITLE, ((owByteCnt * 8) + " bits"), 0, 0, PKT_COLOR_DATA, firstByte.start, lastByte.end));
+
+	return;
 }
 
 
 function decode_sequence_DATA()
 {
+	/* Get and show all data */
 
+	owObject = g_owObjects.shift();
+	g_owObjects.unshift(owObject);
+
+	if (owObject.type == OWOBJECT_TYPE.RESET)
+	{
+		if (g_debug_scope & DEBUG_SCOPES.DECODER) ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.DATA : reset detected");
+		return;
+	}
+	else
+	{
+		if (g_debug_scope & DEBUG_SCOPES.DECODER) ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.DATA : data detected");
+	}
+
+	var owByte;
+	var pktObj = new PktObject();
+
+	pktObj.title = "DATA";
+	pktObj.data = "";
+	pktObj.titleColor = PKT_COLOR_DATA_TITLE;
+	pktObj.dataColor = PKT_COLOR_DATA;
+	pktObj.dataObjArr = [];
+	pktObj.start = false;
+	pktObj.dataLen = 0;
+
+	do
+	{
+		owByte = get_ow_byte(g_ch); // FIXME: g_byte_sample_points is updated!
+
+		if (owByte.isLast != true)
+		{
+			var dataStr = int_to_str_hex(owByte.value);
+			ScanaStudio.dec_item_new(g_ch, owByte.start, owByte.end);
+			display_byte(g_byte_sample_points);
+
+			if (isASCII(owByte.value) == true)
+			{
+				ScanaStudio.dec_item_add_content(String.fromCharCode(owByte.value));
+			}
+			ScanaStudio.dec_item_add_content("0x" + dataStr);
+			ScanaStudio.dec_item_end();
+
+			/*
+			if ((uiHexView != HEXVIEW_OPT.ROM) && (uiHexView != HEXVIEW_OPT.ADR))
+			{
+				hex_add_byte(g_ch, -1, -1, owByte.value);
+			}
+			*/
+
+			pktObj.data +=  dataStr + " ";
+			owByte.value = dataStr;
+			pktObj.dataObjArr.push(owByte);
+			pktObj.dataLen++;
+
+			if (!pktObj.start)
+			{
+				pktObj.start = owByte.start;
+			}
+
+			pktObj.end = owByte.end;
+		}
+
+		if (owByte.duration == true)
+		{
+			ScanaStudio.dec_item_new(g_ch, owByte.start, owByte.end);
+			display_byte(g_byte_sample_points);
+			ScanaStudio.dec_item_add_content("INVALID BYTE");
+			ScanaStudio.dec_item_end();
+
+			pktObj.data += "XXXX ";
+			owByte.value = "XXXX";
+			pktObj.dataObjArr.push(owByte);
+			pktObj.dataLen++;
+
+			pktObj.dataColor = PKT_COLOR_INVALID;
+			pktOk = false;
+		}
+
+	} while (owByte.isLast != true);
+
+	if (pktObj.dataLen > 0)
+	{
+		g_pktObjects.push(pktObj);
+	}
+
+	return;
 }
 
 
@@ -843,7 +951,7 @@ function on_decode_signals_decode_sequence()
     switch (g_state)
     {
 		case STATE.INIT:
-			ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.INIT");
+			if (g_debug_scope & DEBUG_SCOPES.DECODER_FSM) ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.INIT");
 
 			/* Display all unknown (transitions and pulses with wrong timing) fields
 			*/
@@ -858,7 +966,7 @@ function on_decode_signals_decode_sequence()
 					dec_item_add_content("UN");
 					dec_item_add_post_text(" (" + owObjects[i].duration + " us)");
 					*/
-					ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): OWOBJECT_TYPE.UNKNOWN");
+					if (g_debug_scope & DEBUG_SCOPES.DECODER) ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): OWOBJECT_TYPE.UNKNOWN");
 				}
 			}
 
@@ -868,7 +976,7 @@ function on_decode_signals_decode_sequence()
 
 		case STATE.RESET:
 		{
-			ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.RESET");
+			if (g_debug_scope & DEBUG_SCOPES.DECODER_FSM) ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.RESET");
 
 			owObject = g_owObjects.shift();
 
@@ -890,7 +998,7 @@ function on_decode_signals_decode_sequence()
 
 		case STATE.PRESENCE:
 		{
-			ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.PRESENCE");
+			if (g_debug_scope & DEBUG_SCOPES.DECODER_FSM) ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.PRESENCE");
 
 			owObject = g_owObjects.shift();
 
@@ -925,7 +1033,7 @@ function on_decode_signals_decode_sequence()
 
 		case STATE.ROM_COMMAND:
 		{
-			ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.ROM_COMMAND : cmd := " +  cmd.str);
+			if (g_debug_scope & DEBUG_SCOPES.DECODER_FSM) ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.ROM_COMMAND");
 
 			var owByte = get_ow_byte(g_ch); // g_byte_sample_points is updated
 
@@ -959,7 +1067,7 @@ function on_decode_signals_decode_sequence()
 
 		case STATE.SHOW_ROM:
 		{
-			ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.SHOW_ROM");
+			if (g_debug_scope & DEBUG_SCOPES.DECODER_FSM) ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.SHOW_ROM");
 			var romCode = [];
 
 			/* 64-bit ROM code:
@@ -982,30 +1090,9 @@ function on_decode_signals_decode_sequence()
 
 		case STATE.SEARCH_ROM:
 		{
-			ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.SEARCH_ROM");
+			if (g_debug_scope & DEBUG_SCOPES.DECODER_FSM) ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.SEARCH_ROM");
 
-			var owByte;
-			var owByteCnt = 0;
-			var firstByte = get_ow_byte(g_ch);  // FIXME: g_byte_sample_points is updated!
-			var lastByte;
-
-			do
-			{
-				owByte = get_ow_byte(g_ch);     // FIXME: g_byte_sample_points is updated!
-				owByteCnt++;
-
-				if (owByte.isLast != true)
-				{
-					lastByte = owByte;
-				}
-
-			} while (owByte.isLast != true);
-
-			ScanaStudio.dec_item_new(g_ch, firstByte.start, lastByte.end);
-			ScanaStudio.dec_item_add_content("SEARCH ROM SEQUENCE");
-			ScanaStudio.dec_item_end();
-
-			g_pktObjects.push(new PktObject("SRCH SEQ", PKT_COLOR_OTHER_TITLE, ((owByteCnt * 8) + " bits"), 0, 0, PKT_COLOR_DATA, firstByte.start, lastByte.end));
+			decode_sequence_SEARCH_ROM();
 
 			g_state = STATE.RESET;
 		}
@@ -1013,94 +1100,9 @@ function on_decode_signals_decode_sequence()
 
 		case STATE.DATA:
 		{
-			ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.DATA");
+			if (g_debug_scope & DEBUG_SCOPES.DECODER_FSM) ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.DATA");
 
-			/* Get and show all data */
-
-			owObject = g_owObjects.shift();
-			g_owObjects.unshift(owObject);
-
-			if (owObject.type == OWOBJECT_TYPE.RESET)
-			{
-				ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.DATA : reset detected");
-				g_state = STATE.RESET;
-				break;
-			}
-			else
-			{
-				ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.DATA : data detected");
-			}
-
-			var owByte;
-			var pktObj = new PktObject();
-
-			pktObj.title = "DATA";
-			pktObj.data = "";
-			pktObj.titleColor = PKT_COLOR_DATA_TITLE;
-			pktObj.dataColor = PKT_COLOR_DATA;
-			pktObj.dataObjArr = [];
-			pktObj.start = false;
-			pktObj.dataLen = 0;
-
-			do
-			{
-				owByte = get_ow_byte(g_ch); // FIXME: g_byte_sample_points is updated!
-
-				if (owByte.isLast != true)
-				{
-					var dataStr = int_to_str_hex(owByte.value);
-                    ScanaStudio.dec_item_new(g_ch, owByte.start, owByte.end);
-                    display_byte(g_byte_sample_points);
-					// ScanaStudio.dec_item_add_content(String.fromCharCode(owByte.value) +" (0x" + dataStr + ")");
-                    if (isASCII(owByte.value) == true)
-                    {
-                        ScanaStudio.dec_item_add_content(String.fromCharCode(owByte.value));
-                    }
-                    ScanaStudio.dec_item_add_content("0x" + dataStr);
-                    ScanaStudio.dec_item_end();
-
-					/*
-					if ((uiHexView != HEXVIEW_OPT.ROM) && (uiHexView != HEXVIEW_OPT.ADR))
-					{
-						hex_add_byte(g_ch, -1, -1, owByte.value);
-					}
-					*/
-
-					pktObj.data +=  dataStr + " ";
-					owByte.value = dataStr;
-					pktObj.dataObjArr.push(owByte);
-					pktObj.dataLen++;
-
-					if (!pktObj.start)
-					{
-						pktObj.start = owByte.start;
-					}
-
-					pktObj.end = owByte.end;
-				}
-
-				if (owByte.duration == true)
-				{
-					ScanaStudio.dec_item_new(g_ch, owByte.start, owByte.end);
-                    display_byte(g_byte_sample_points);
-					ScanaStudio.dec_item_add_content("INVALID BYTE");
-                    ScanaStudio.dec_item_end();
-
-					pktObj.data += "XXXX ";
-					owByte.value = "XXXX";
-					pktObj.dataObjArr.push(owByte);
-					pktObj.dataLen++;
-
-					pktObj.dataColor = PKT_COLOR_INVALID;
-					pktOk = false;
-				}
-
-			} while (owByte.isLast != true);
-
-			if (pktObj.dataLen > 0)
-			{
-				g_pktObjects.push(pktObj);
-			}
+			decode_sequence_DATA();
 
 			g_state = STATE.RESET;
 		}
@@ -1108,7 +1110,7 @@ function on_decode_signals_decode_sequence()
 
 		case STATE.END:
 		{
-			ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.END");
+			if (g_debug_scope & DEBUG_SCOPES.DECODER_FSM) ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.END");
 
 			g_state = STATE.RESET;
 		}
@@ -1172,19 +1174,38 @@ function pkt_add_packet (ok)
 
 	for (var i = 0; i < g_pktObjects.length; i++)
 	{
+		desc = "";
+
 		obj = g_pktObjects[i];
 
+		if (obj.title.localeCompare("RESET") == 0)
+		{
+			desc += "RESET"
+		}
+		
+		if (obj.title.localeCompare("PRESENCE") == 0)
+		{
+			desc += "PRESENCE"
+		}
+		
 		if (obj.title.localeCompare("ROM CMD") == 0)
 		{
-			desc += obj.data.replace("ROM", "");
+			if (true)
+			{
+				desc += obj.data;
+			}
+			else
+			{
+				desc += obj.data.replace("ROM", "");
+			}
 		}
-
+		
 		if (obj.title.localeCompare("FAMILY") == 0)
 		{
 			var substr = obj.data.substring(obj.data.lastIndexOf("(") + 1, obj.data.lastIndexOf(")"));
 			desc += substr + " ";
 		}
-
+		
 		if (obj.title.localeCompare("DATA") == 0)
 		{
 			desc += " DATA[" + obj.dataObjArr.length + "]";
@@ -1192,6 +1213,11 @@ function pkt_add_packet (ok)
 	}
 
 	desc = desc.replace(/  +/g, ' ');
+
+	if (desc.localeCompare("") == 0)
+	{
+		desc = "FRAME";
+	}
 
 	var pktStart = g_pktObjects[0].start;
 	var pktEnd = g_pktObjects[g_pktObjects.length - 1].end;
