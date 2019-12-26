@@ -499,14 +499,6 @@ function on_decode_signals_decode_bit_stream(next_tr)
 				bitErr = true;
 			}
 
-			var tHighMax = (g_owDelays.SLOT_MAX + g_owDelays.RDV + g_owDelays.REL_MAX);
-			if (tHigh > tHighMax)
-			{
-				bitErr = true;
-                slotEnd = trHighSt.sample_index + get_num_samples_for_us(tHighMax);
-                ScanaStudio.console_warning_msg("on_decode_signals_decode_bit_stream() : tHigh := " + tHigh + " > " + tHighMax, slotEnd);
-			}
-
 			g_owObjects.push(new OWObject(OWOBJECT_TYPE.BIT, bitValue, slotStart, slotEnd, bitErr, false, (bitErr == false)));
 			if (g_debug_scope & DEBUG_SCOPES.BIT_STREAM) ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : pushed new bit object: " + g_owObjects.length);
 
