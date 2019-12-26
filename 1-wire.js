@@ -10,9 +10,10 @@
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-v0.9: Backport of 1-wire decoder.
-v0.8: fixed bug related to incrementaiton
-V0.7: new skin
+v0.10: Backport of 1-wire decoder.
+v0.9: Fix bug related to bit order (introduced in v0.7)
+v0.8: fixed bug related to incrementation
+V0.7: Total rewrite.
 V0.6: Added trigger capability
 V0.5: Added packet and hex views
 V0.2: Added dec_item_end() for each dec_item_new().
