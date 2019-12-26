@@ -210,7 +210,7 @@ var HEXVIEW_OPT =
 
 /* Object definitions
 */
-function OWObject (type, value, start, end, duration, isLast)
+function OWObject (type, value, start, end, duration, isLast, isOk)
 {
 	this.type = type;
 	this.value = value;
@@ -218,6 +218,7 @@ function OWObject (type, value, start, end, duration, isLast)
 	this.end = end;
 	this.duration = duration;
 	this.isLast = isLast;
+	this.isOk = isOk;
 };
 
 function PktObject (title, titleColor, data, dataLen, dataObjArr, dataColor, start, end) 
@@ -419,7 +420,7 @@ function on_decode_signals_decode_bit_stream(next_tr)
 		{
 			if (g_debug_scope & DEBUG_SCOPES.BIT_STREAM) ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : reset detected", next_tr.sample_index);
 
-			g_owObjects.push(new OWObject(OWOBJECT_TYPE.RESET, true, trLowSt.sample_index, next_tr.sample_index, tLow, false));
+			g_owObjects.push(new OWObject(OWOBJECT_TYPE.RESET, true, trLowSt.sample_index, next_tr.sample_index, tLow, false, true));
 
 			var trPDH = get_next_falling_edge(g_ch, next_tr);
 			var tPDH = get_timediff_us(next_tr, trPDH);
@@ -441,13 +442,13 @@ function on_decode_signals_decode_bit_stream(next_tr)
 				var tPDL = get_timediff_us(trPDH, trPDL);
 
 				if (g_debug_scope & DEBUG_SCOPES.BIT_STREAM) ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : presence pulse detected", trPDL.sample_index);
-				g_owObjects.push(new OWObject(OWOBJECT_TYPE.PRESENCE, true, trPDH.sample_index, trPDL.sample_index, tPDL, false));
+				g_owObjects.push(new OWObject(OWOBJECT_TYPE.PRESENCE, true, trPDH.sample_index, trPDL.sample_index, tPDL, false, true));
 				next_tr = trPDL;
 			}
 			else
 			{
 				ScanaStudio.console_warning_msg("on_decode_signals_decode_bit_stream() : presence pulse missing", trPDL.sample_index);
-				g_owObjects.push(new OWObject(OWOBJECT_TYPE.PRESENCE, false, next_tr.sample_index, next_tr.sample_index + get_num_samples_for_us(g_owDelays.PDH_MAX), false));
+				g_owObjects.push(new OWObject(OWOBJECT_TYPE.PRESENCE, false, next_tr.sample_index, next_tr.sample_index + get_num_samples_for_us(g_owDelays.PDH_MAX), false, false));
 				next_tr = trPDH;
 			}
 		}
@@ -497,13 +498,15 @@ function on_decode_signals_decode_bit_stream(next_tr)
 				bitErr = true;
 			}
 
-			if (tHigh > (g_owDelays.SLOT_MAX + g_owDelays.RDV + g_owDelays.REL_MAX))
+			var tHighMax = (g_owDelays.SLOT_MAX + g_owDelays.RDV + g_owDelays.REL_MAX);
+			if (tHigh > tHighMax)
 			{
-                slotEnd = trHighSt.sample_index + get_num_samples_for_us(g_owDelays.SLOT_MAX + g_owDelays.RDV + g_owDelays.REL_MAX);
-                ScanaStudio.console_warning_msg("on_decode_signals_decode_bit_stream() : tHigh := " + tHigh);
+				bitErr = true;
+                slotEnd = trHighSt.sample_index + get_num_samples_for_us(tHighMax);
+                ScanaStudio.console_warning_msg("on_decode_signals_decode_bit_stream() : tHigh := " + tHigh + " > " + tHighMax, slotEnd);
 			}
 
-			g_owObjects.push(new OWObject(OWOBJECT_TYPE.BIT, bitValue, slotStart, slotEnd, bitErr, false));
+			g_owObjects.push(new OWObject(OWOBJECT_TYPE.BIT, bitValue, slotStart, slotEnd, bitErr, false, (bitErr == false)));
 			if (g_debug_scope & DEBUG_SCOPES.BIT_STREAM) ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : pushed new bit object: " + g_owObjects.length);
 
 			next_tr = trHighEnd;
@@ -569,7 +572,12 @@ function display_byte(a)
         if(bit.duration == true)
         {
             ScanaStudio.dec_item_add_sample_point(midSample, "X");
-        }
+		}
+		
+		if (bit.isOk == false) 
+		{
+			ScanaStudio.dec_item_emphasize_warning();
+		}
     }
 
     return;
