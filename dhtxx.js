@@ -6,13 +6,14 @@ The technology of a dedicated digital modules collection and the temperature and
 The sensor includes a resistive sense of wet component and an NTC temperature measurement device, and is connected with a high-performance 8-bit microcontroller.
 DHT22 has a larger range of temperature.
 </DESCRIPTION>
-<VERSION> 0.21 </VERSION>
+<VERSION> 0.22 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.22: Added wrong timing display.
 V0.21: Updated description.
 V0.2: Added dec_item_end() for each dec_item_new().
 V0.0:  Initial release.
@@ -103,6 +104,7 @@ var last_trs;
 var step_cnt;
 var start_of_step;
 var byte_value;
+var byte_start;
 var frame = [];
 
 function reload_dec_gui_values()
@@ -300,6 +302,7 @@ function on_decode_signals(resume)
                         {
                             start_of_step = last_trs.sample_index;
                         }
+                        // byte_start = last_trs.sample_index;
                         step_cnt++;
                     }
                     else if( (trs.value==0)
@@ -310,6 +313,10 @@ function on_decode_signals(resume)
                         //bit value is 0
                         byte_value = byte_value<<1;
                         step_cnt++;
+
+                        // ScanaStudio.dec_item_new(channel, byte_start, trs.sample_index);
+                        // ScanaStudio.dec_item_add_content("0");
+                        // ScanaStudio.dec_item_end();
                     }
                     else if( (trs.value==0)
                         && ((trs.sample_index - last_trs.sample_index)/sampling_rate >= CONST_bit_high_1_min)
@@ -319,6 +326,10 @@ function on_decode_signals(resume)
                         //bit value is 1
                         byte_value = (byte_value<<1) | 0x01;
                         step_cnt++;
+
+                        // ScanaStudio.dec_item_new(channel, byte_start, trs.sample_index);
+                        // ScanaStudio.dec_item_add_content("1");
+                        // ScanaStudio.dec_item_end();
                     }
                     else
                     {
@@ -332,8 +343,15 @@ function on_decode_signals(resume)
                             "error while reading data",
                             COLOR_T_ERROR,
                             COLOR_C_ERROR);
+                        ScanaStudio.dec_item_new(channel, last_trs.sample_index, trs.sample_index);
+                        ScanaStudio.dec_item_add_content("Timing ERROR");
+                        ScanaStudio.dec_item_add_content("ERROR");
+                        ScanaStudio.dec_item_add_content("!");
+                        ScanaStudio.dec_item_emphasize_error();
+                        ScanaStudio.dec_item_end();
                         break;
                     }
+
 
 
                     if(step_cnt == 16)
