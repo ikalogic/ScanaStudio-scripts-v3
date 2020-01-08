@@ -6,13 +6,14 @@ The technology of a dedicated digital modules collection and the temperature and
 The sensor includes a resistive sense of wet component and an NTC temperature measurement device, and is connected with a high-performance 8-bit microcontroller.
 DHT22 has a larger range of temperature.
 </DESCRIPTION>
-<VERSION> 0.23 </VERSION>
+<VERSION> 0.24 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.24: fixed enforce timing constraint option.
 V0.23: Added enforce timing constraint option.
 V0.22: Added wrong timing display.
 V0.21: Updated description.
@@ -125,7 +126,7 @@ function reload_dec_gui_values()
     }
 
     temperature_unit = Number(ScanaStudio.gui_get_value("tempUnit"));
-    strict_timing = (ScanaStudio.gui_get_value("strict_timing") == "true");
+    strict_timing = ScanaStudio.gui_get_value("strict_timing");
     ScanaStudio.set_script_instance_name(DHTxx.device_name + " on CH" + (ScanaStudio.gui_get_value("ch")+1).toString());
 }
 
