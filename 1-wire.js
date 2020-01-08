@@ -263,13 +263,13 @@ var g_debug_scope;
 function on_draw_gui_decoder()
 {
     //Define decoder configuration GUI
-    ScanaStudio.gui_add_ch_selector("ch","Channel to decode","1-Wire");
+    ScanaStudio.gui_add_ch_selector("g_ch","Channel to decode","1-Wire");
 
-    ScanaStudio.gui_add_combo_box("speed","1-Wire Speed")
+    ScanaStudio.gui_add_combo_box("g_speed","1-Wire Speed")
         ScanaStudio.gui_add_item_to_combo_box("Regular speed",true);
         ScanaStudio.gui_add_item_to_combo_box("Overdrive speed",false);
 
-    ScanaStudio.gui_add_combo_box("format","Display format")
+    ScanaStudio.gui_add_combo_box("g_format","Display format")
         ScanaStudio.gui_add_item_to_combo_box("Decimal",false);
         ScanaStudio.gui_add_item_to_combo_box("HEX",true);
         ScanaStudio.gui_add_item_to_combo_box("Binary",false);
@@ -279,16 +279,16 @@ function on_draw_gui_decoder()
 //Evaluate decoder GUI
 function on_eval_gui_decoder()
 {
-    ScanaStudio.set_script_instance_name("1-Wire on CH " + (ScanaStudio.gui_get_value("ch") + 1).toString());
+    ScanaStudio.set_script_instance_name("1-Wire on CH " + (ScanaStudio.gui_get_value("g_ch") + 1).toString());
     return ""; //All good.
 }
 
 
 function reload_dec_gui_values()
 {
-    g_ch =  Number(ScanaStudio.gui_get_value("ch"));
-    g_speed =  Number(ScanaStudio.gui_get_value("speed"));
-    g_format =  Number(ScanaStudio.gui_get_value("format"));
+    g_ch =  Number(ScanaStudio.gui_get_value("g_ch"));
+    g_speed =  Number(ScanaStudio.gui_get_value("g_speed"));
+    g_format =  Number(ScanaStudio.gui_get_value("g_format"));
     g_suffix = "";
 
     switch (g_format)
