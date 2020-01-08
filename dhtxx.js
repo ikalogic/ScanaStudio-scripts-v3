@@ -6,13 +6,14 @@ The technology of a dedicated digital modules collection and the temperature and
 The sensor includes a resistive sense of wet component and an NTC temperature measurement device, and is connected with a high-performance 8-bit microcontroller.
 DHT22 has a larger range of temperature.
 </DESCRIPTION>
-<VERSION> 0.22 </VERSION>
+<VERSION> 0.23 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.23: Added enforce timing constraint option.
 V0.22: Added wrong timing display.
 V0.21: Updated description.
 V0.2: Added dec_item_end() for each dec_item_new().
@@ -33,6 +34,8 @@ function on_draw_gui_decoder()
         ScanaStudio.gui_add_item_to_combo_box("Celsius", true);
         ScanaStudio.gui_add_item_to_combo_box("Fahrenheit");
         ScanaStudio.gui_add_item_to_combo_box("Kelvin");
+
+    ScanaStudio.gui_add_check_box("strict_timing","Enforce strict dth11/22 timming constraint", false);
 }
 
 //times constants according to https://akizukidenshi.com/download/ds/aosong/AM2302.pdf
@@ -47,6 +50,7 @@ const   CONST_start_from_master_min         = 800e-6,
         CONST_start_from_device_h_max       = 85e-6,
         CONST_bit_low_min                   = 48e-6,
         CONST_bit_low_max                   = 55e-6,
+        CONST_delay_between_bytes_max       = 20e-6,  //not specified into datasheet, but this delay is reel
         CONST_bit_high_0_min                = 22e-6,
         CONST_bit_high_0_max                = 30e-6,
         CONST_bit_high_1_min                = 68e-6,
@@ -96,6 +100,7 @@ const   COLOR_T_RH      = "#33FFFF",
 var DHTxx = DHT11;
 var temperature_unit;
 var channel;
+var strict_timing;
 
 var state_machine;
 var sampling_rate;
@@ -120,6 +125,7 @@ function reload_dec_gui_values()
     }
 
     temperature_unit = Number(ScanaStudio.gui_get_value("tempUnit"));
+    strict_timing = (ScanaStudio.gui_get_value("strict_timing") == "true");
     ScanaStudio.set_script_instance_name(DHTxx.device_name + " on CH" + (ScanaStudio.gui_get_value("ch")+1).toString());
 }
 
@@ -295,7 +301,7 @@ function on_decode_signals(resume)
                 {
                     if( (trs.value==1)
                         && ((trs.sample_index - last_trs.sample_index)/sampling_rate >= CONST_bit_low_min)
-                        && ((trs.sample_index - last_trs.sample_index)/sampling_rate <= CONST_bit_low_max)
+                        && ( ((trs.sample_index - last_trs.sample_index)/sampling_rate <= CONST_bit_low_max)||((!strict_timing)&&((trs.sample_index - last_trs.sample_index)/sampling_rate <= CONST_bit_low_max + CONST_delay_between_bytes_max)) )
                         && (step_cnt%2==0) )
                     {
                         if( ((state_machine==ENUM_STATE_RH_DATA_INT) || (state_machine==ENUM_STATE_T_DATA_INT) || (state_machine==ENUM_STATE_CHECKSUM)) && (step_cnt==0) )
