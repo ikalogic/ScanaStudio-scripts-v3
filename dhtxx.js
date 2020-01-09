@@ -6,13 +6,17 @@ The technology of a dedicated digital modules collection and the temperature and
 The sensor includes a resistive sense of wet component and an NTC temperature measurement device, and is connected with a high-performance 8-bit microcontroller.
 DHT22 has a larger range of temperature.
 </DESCRIPTION>
-<VERSION> 0.21 </VERSION>
+<VERSION> 0.25 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.25: added sample points and hex view data.
+V0.24: fixed enforce timing constraint option.
+V0.23: Added enforce timing constraint option.
+V0.22: Added wrong timing display.
 V0.21: Updated description.
 V0.2: Added dec_item_end() for each dec_item_new().
 V0.0:  Initial release.
@@ -32,6 +36,8 @@ function on_draw_gui_decoder()
         ScanaStudio.gui_add_item_to_combo_box("Celsius", true);
         ScanaStudio.gui_add_item_to_combo_box("Fahrenheit");
         ScanaStudio.gui_add_item_to_combo_box("Kelvin");
+
+    ScanaStudio.gui_add_check_box("strict_timing","Enforce strict dth11/22 timming constraint", false);
 }
 
 //times constants according to https://akizukidenshi.com/download/ds/aosong/AM2302.pdf
@@ -46,6 +52,7 @@ const   CONST_start_from_master_min         = 800e-6,
         CONST_start_from_device_h_max       = 85e-6,
         CONST_bit_low_min                   = 48e-6,
         CONST_bit_low_max                   = 55e-6,
+        CONST_delay_between_bytes_max       = 20e-6,  //not specified into datasheet, but this delay is reel
         CONST_bit_high_0_min                = 22e-6,
         CONST_bit_high_0_max                = 30e-6,
         CONST_bit_high_1_min                = 68e-6,
@@ -95,6 +102,7 @@ const   COLOR_T_RH      = "#33FFFF",
 var DHTxx = DHT11;
 var temperature_unit;
 var channel;
+var strict_timing;
 
 var state_machine;
 var sampling_rate;
@@ -103,7 +111,10 @@ var last_trs;
 var step_cnt;
 var start_of_step;
 var byte_value;
+var byte_start;
 var frame = [];
+var bits_sample_t = [];
+var bits_value_t = [];
 
 function reload_dec_gui_values()
 {
@@ -118,6 +129,7 @@ function reload_dec_gui_values()
     }
 
     temperature_unit = Number(ScanaStudio.gui_get_value("tempUnit"));
+    strict_timing = ScanaStudio.gui_get_value("strict_timing");
     ScanaStudio.set_script_instance_name(DHTxx.device_name + " on CH" + (ScanaStudio.gui_get_value("ch")+1).toString());
 }
 
@@ -143,6 +155,8 @@ function on_decode_signals(resume)
         start_of_step = 0;
         byte_value = 0;
         frame = [];
+        bits_sample_t = [];
+        bits_value_t = [];
     }
 
     while (ScanaStudio.abort_is_requested() == false)
@@ -265,6 +279,8 @@ function on_decode_signals(resume)
                     start_of_step = 0;
                     byte_value = 0;
                     frame = [];
+                    bits_sample_t = [];
+                    bits_value_t = [];
                     state_machine = ENUM_STATE_RH_DATA_INT;
                 }
                 else
@@ -293,13 +309,14 @@ function on_decode_signals(resume)
                 {
                     if( (trs.value==1)
                         && ((trs.sample_index - last_trs.sample_index)/sampling_rate >= CONST_bit_low_min)
-                        && ((trs.sample_index - last_trs.sample_index)/sampling_rate <= CONST_bit_low_max)
+                        && ( ((trs.sample_index - last_trs.sample_index)/sampling_rate <= CONST_bit_low_max)||((!strict_timing)&&((trs.sample_index - last_trs.sample_index)/sampling_rate <= CONST_bit_low_max + CONST_delay_between_bytes_max)) )
                         && (step_cnt%2==0) )
                     {
                         if( ((state_machine==ENUM_STATE_RH_DATA_INT) || (state_machine==ENUM_STATE_T_DATA_INT) || (state_machine==ENUM_STATE_CHECKSUM)) && (step_cnt==0) )
                         {
                             start_of_step = last_trs.sample_index;
                         }
+                        // byte_start = last_trs.sample_index;
                         step_cnt++;
                     }
                     else if( (trs.value==0)
@@ -308,8 +325,14 @@ function on_decode_signals(resume)
                         && (step_cnt%2==1) )
                     {
                         //bit value is 0
+                        bits_sample_t.push((trs.sample_index + last_trs.sample_index)/2);
+                        bits_value_t.push(0);
                         byte_value = byte_value<<1;
                         step_cnt++;
+
+                        // ScanaStudio.dec_item_new(channel, byte_start, trs.sample_index);
+                        // ScanaStudio.dec_item_add_content("0");
+                        // ScanaStudio.dec_item_end();
                     }
                     else if( (trs.value==0)
                         && ((trs.sample_index - last_trs.sample_index)/sampling_rate >= CONST_bit_high_1_min)
@@ -317,8 +340,14 @@ function on_decode_signals(resume)
                         && (step_cnt%2==1) )
                     {
                         //bit value is 1
+                        bits_sample_t.push((trs.sample_index + last_trs.sample_index)/2);
+                        bits_value_t.push(1);
                         byte_value = (byte_value<<1) | 0x01;
                         step_cnt++;
+
+                        // ScanaStudio.dec_item_new(channel, byte_start, trs.sample_index);
+                        // ScanaStudio.dec_item_add_content("1");
+                        // ScanaStudio.dec_item_end();
                     }
                     else
                     {
@@ -332,12 +361,21 @@ function on_decode_signals(resume)
                             "error while reading data",
                             COLOR_T_ERROR,
                             COLOR_C_ERROR);
+                        ScanaStudio.dec_item_new(channel, last_trs.sample_index, trs.sample_index);
+                        ScanaStudio.dec_item_add_content("Timing ERROR");
+                        ScanaStudio.dec_item_add_content("ERROR");
+                        ScanaStudio.dec_item_add_content("!");
+                        ScanaStudio.dec_item_emphasize_error();
+                        ScanaStudio.dec_item_end();
                         break;
                     }
 
 
+
                     if(step_cnt == 16)
                     {
+                        ScanaStudio.hex_view_add_byte(channel, bits_sample_t[bits_sample_t.length - 8], bits_sample_t[bits_sample_t.length - 1], byte_value);
+
                         if( (state_machine >= ENUM_STATE_RH_DATA_INT) && (state_machine < ENUM_STATE_CHECKSUM) )
                         {
                             frame.push(byte_value);
@@ -345,6 +383,7 @@ function on_decode_signals(resume)
                             if( state_machine==ENUM_STATE_RH_DATA_DEC )
                             {
                                 var val;
+                                var i=0;
                                 if(DHTxx.device_name == DHT11.device_name)
                                 {
                                     val = frame[frame.length-2] + frame[frame.length-1]/100;
@@ -358,6 +397,13 @@ function on_decode_signals(resume)
                                 ScanaStudio.dec_item_add_content("Relative Humidity : " + val + "%");
                                 ScanaStudio.dec_item_add_content("RH : " + val + "%");
                                 ScanaStudio.dec_item_add_content(val + "%");
+
+                                for(i=0; i<bits_sample_t.length; i++)
+                                {
+                                    ScanaStudio.dec_item_add_sample_point(bits_sample_t[i], bits_value_t[i]);
+                                }
+                                bits_sample_t = [];
+                                bits_value_t = [];
 
                                 if( (val < DHTxx.rh_range_min) || (val > DHTxx.rh_range_max) )
                                 {
@@ -428,6 +474,13 @@ function on_decode_signals(resume)
                                 ScanaStudio.dec_item_add_content("T : " + val + unity);
                                 ScanaStudio.dec_item_add_content(val + unity);
 
+                                for(i=0; i<bits_sample_t.length; i++)
+                                {
+                                    ScanaStudio.dec_item_add_sample_point(bits_sample_t[i], bits_value_t[i]);
+                                }
+                                bits_sample_t = [];
+                                bits_value_t = [];
+
                                 if ((val < DHTxx.temp_range_min_C) || (val > DHTxx.temp_range_max_C))
                                 {
                                     ScanaStudio.dec_item_emphasize_warning();
@@ -473,6 +526,13 @@ function on_decode_signals(resume)
                             chk_sum = chk_sum & 0xFF;
 
                             ScanaStudio.dec_item_new(channel, start_of_step, trs.sample_index);
+
+                            for(i=0; i<bits_sample_t.length; i++)
+                            {
+                                ScanaStudio.dec_item_add_sample_point(bits_sample_t[i], bits_value_t[i]);
+                            }
+                            bits_sample_t = [];
+                            bits_value_t = [];
 
                             if (chk_sum == byte_value)
                             {
