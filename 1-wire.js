@@ -3,14 +3,14 @@
 <DESCRIPTION>
 1-Wire protocol analyzer. Decodes Reset, presence and byte fields.
 </DESCRIPTION>
-<VERSION> 0.11 </VERSION>
+<VERSION> 0.10 </VERSION>
 <AUTHOR_NAME> Vladislav Kosinov, Alexander Goomenyuk </AUTHOR_NAME>
 <AUTHOR_URL> v.kosinov@ikalogic.com, emerg.reanimator@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-v0.11: UI parameters are respected now.
+v0.11: UI parameters are respected. Fixed FSM loop in case of reset after data.
 v0.10: Backport of 1-wire decoder.
 v0.9: Fix bug related to bit order (introduced in v0.7)
 v0.8: fixed bug related to incrementation
@@ -478,6 +478,11 @@ function on_decode_signals_decode_bit_stream(next_tr)
 			if ((tLow <= g_owDelays.LOW1_MAX) && (tLow >= g_owDelays.LOW1_MIN))
 			{
 				if (g_debug_scope & DEBUG_SCOPES.BIT_STREAM) ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : master write/read 1, " + trHighEnd.sample_index, trHighEnd.sample_index);
+                // Limit duration of last bit to maximum allowed
+                if (get_timediff_us(trLowSt, trHighEnd) > g_owDelays.SLOT_MAX)
+                {
+                    slotEnd = slotStart + get_num_samples_for_us(g_owDelays.SLOT_MAX);
+                }
 				bitValue = 1;
 			}
 			// Master Write 0 Slot
@@ -490,6 +495,12 @@ function on_decode_signals_decode_bit_stream(next_tr)
 			else if ((tLow <= (g_owDelays.LOWR_MAX + g_owDelays.REL_MAX)) && (tLow >= g_owDelays.LOWR_MIN))
 			{
 				if (g_debug_scope & DEBUG_SCOPES.BIT_STREAM) ScanaStudio.console_info_msg("on_decode_signals_decode_bit_stream() : master read 0, " + trHighEnd.sample_index, trHighEnd.sample_index);
+
+                // Limit duration of last bit to maximum allowed
+                if (get_timediff_us(trLowSt, trHighEnd) > g_owDelays.SLOT_MAX)
+                {
+                    slotEnd = slotStart + get_num_samples_for_us(g_owDelays.SLOT_MAX);
+                }
 				bitValue = 0;
 			}
 			// Error. Unknown bit value
@@ -854,23 +865,9 @@ function decode_sequence_SEARCH_ROM()
 }
 
 
-function decode_sequence_DATA()
+function decode_sequence_DATA(owObject)
 {
 	/* Get and show all data */
-
-	owObject = g_owObjects.shift();
-	g_owObjects.unshift(owObject);
-
-	if (owObject.type == OWOBJECT_TYPE.RESET)
-	{
-		if (g_debug_scope & DEBUG_SCOPES.DECODER) ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.DATA : reset detected");
-		return;
-	}
-	else
-	{
-		if (g_debug_scope & DEBUG_SCOPES.DECODER) ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.DATA : data detected");
-	}
-
 	var owByte;
 	var pktObj = new PktObject();
 
@@ -1133,10 +1130,23 @@ function on_decode_signals_decode_sequence()
 		{
 			if (g_debug_scope & DEBUG_SCOPES.DECODER_FSM) ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.DATA");
 
-			decode_sequence_DATA();
+            owObject = g_owObjects.shift();
+            g_owObjects.unshift(owObject);
 
-			g_num_of_objects_needed = 8;
-			g_state = STATE.DATA;
+            if (owObject.type == OWOBJECT_TYPE.RESET)
+            {
+                if (g_debug_scope & DEBUG_SCOPES.DECODER) ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.DATA : reset detected");
+                g_num_of_objects_needed = 1;
+                g_state = STATE.RESET;
+            }
+            else
+            {
+                if (g_debug_scope & DEBUG_SCOPES.DECODER) ScanaStudio.console_info_msg("on_decode_signals_decode_sequence(): STATE.DATA : data detected");
+                decode_sequence_DATA(owObject);
+                g_num_of_objects_needed = 8;
+                g_state = STATE.DATA;
+            }
+
 		}
 		break;
 
@@ -1179,7 +1189,9 @@ function on_decode_signals(resume)
 			{
 				if (g_debug_scope & DEBUG_SCOPES.DECODER) ScanaStudio.console_info_msg("on_decode_signals() : g_owObjects.length := " + g_owObjects.length);
 				on_decode_signals_decode_sequence();
-				// g_owObjects.pop();
+				if ((ScanaStudio.abort_is_requested() == false)) {
+                    break;
+                }
 			} // frame loop
 		}
 		else
