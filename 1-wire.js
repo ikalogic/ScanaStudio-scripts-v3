@@ -891,9 +891,9 @@ function decode_sequence_DATA(owObject)
 
 			if (isASCII(owByte.value) == true)
 			{
-				ScanaStudio.dec_item_add_content(String.fromCharCode(owByte.value));
+				ScanaStudio.dec_item_add_content("0x" + dataStr + " (" + String.fromCharCode(owByte.value) + ")");
 			}
-			ScanaStudio.dec_item_add_content("0x" + dataStr);
+            ScanaStudio.dec_item_add_content("0x" + dataStr);
 			ScanaStudio.dec_item_end();
 
 			/*
