@@ -3,13 +3,14 @@
 <DESCRIPTION>
 1-Wire protocol analyzer. Decodes Reset, presence and byte fields.
 </DESCRIPTION>
-<VERSION> 0.10 </VERSION>
+<VERSION> 0.12 </VERSION>
 <AUTHOR_NAME> Vladislav Kosinov, Alexander Goomenyuk </AUTHOR_NAME>
 <AUTHOR_URL> v.kosinov@ikalogic.com, emerg.reanimator@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.12: Fixed incomplete parsing while capturing.
 v0.11: UI parameters are respected. Fixed FSM loop in case of reset after data.
 v0.10: Backport of 1-wire decoder.
 v0.9: Fix bug related to bit order (introduced in v0.7)
@@ -1174,12 +1175,21 @@ function on_decode_signals(resume)
     if (!resume) //If resume == false, it's the first call to this function.
     {
     	on_decode_signals_init();
-    }
-	
-	var next_tr = ScanaStudio.trs_get_next(g_ch);
+	}
+
+	var next_tr = null;
     while ( (ScanaStudio.abort_is_requested() == false) )
     {
-    	next_tr = on_decode_signals_decode_bit_stream(next_tr);
+		if (!ScanaStudio.trs_is_not_last(g_ch))
+		{
+			break;
+		}
+
+		if (null == next_tr) {
+			next_tr = ScanaStudio.trs_get_next(g_ch);
+		}
+
+		next_tr = on_decode_signals_decode_bit_stream(next_tr);
 
 		if (g_debug_scope & DEBUG_SCOPES.DECODER) ScanaStudio.console_info_msg("on_decode_signals : next_tr", next_tr.sample_index);
 
