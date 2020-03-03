@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Adressable RGB LED chipsets
 </DESCRIPTION>
-<VERSION> 0.3 </VERSION>
+<VERSION> 0.4 </VERSION>
 <AUTHOR_NAME>  Vladislav Kosinov </AUTHOR_NAME>
 <AUTHOR_URL> v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright 2019 Ikalogic SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.4: Fix users gui settings refresh. Add RGB display format choice
 V0.3: Updated packet view color palette
 V0.2: Added dec_item_end() for each dec_item_new().
 V0.1: Initial release.
@@ -28,19 +29,26 @@ var CHIPSETS_TABLE =
     SK6805   : {chip_id: 7, rst_time: (24 * 1e-6),  bit_time: (1.25 * 1e-6), bit_var: (600 * 1e-9), t0h: (300 * 1e-9), t0l: (900 * 1e-9),  t1h: (900 * 1e-9),  t1l: (300 * 1e-9), t_var: (150 * 1e-9), clr_order: "RGB", str: "SK6805"},
     SK6812   : {chip_id: 8, rst_time: (80 * 1e-6),  bit_time: (1.25 * 1e-6), bit_var: (600 * 1e-9), t0h: (300 * 1e-9), t0l: (900 * 1e-9),  t1h: (600 * 1e-9),  t1l: (600 * 1e-9), t_var: (150 * 1e-9), clr_order: "GRB", str: "SK6812"},
     CUSTOM   : {chip_id: 9, rst_time: (80 * 1e-6),  bit_time: (1.25 * 1e-6), bit_var: (600 * 1e-9), t0h: (300 * 1e-9), t0l: (900 * 1e-9),  t1h: (600 * 1e-9),  t1l: (600 * 1e-9), t_var: (150 * 1e-9), clr_order: "GRB", str: "CUSTOM"}
-}
+};
+
+var CLR_ORDER_TABLE =
+{
+    RGB : {clr_id: 0, clr_str: "RGB"},
+    GRB : {clr_id: 1, clr_str: "GRB"}
+};
 
 function BitObject (st_sample, end_sample, value)
 {
     this.st_sample = st_sample;
 	this.end_sample = end_sample;
     this.value = value;
-};
+}
 
 //Global variables
 var ch = 0;
 var sample_rate = 0;
 var state_machine = 0;
+var disp_format;
 var chip = null;
 var trs = null, trs_last = null;
 var bit_time = 0;
@@ -49,20 +57,41 @@ var bitstream_arr = [];
 var bit_object = null;
 var bit_cnt = 0, word_cnt = 0;
 
+// Extend the String object with the zero padding method
+String.prototype.pad = function(size)
+{
+    var s = String(this);
+    while (s.length < (size || 2)) {s = "0" + s;}
+    return s;
+};
+
 function get_current_chip()
 {
     var user_chip_id = Number(ScanaStudio.gui_get_value("chip_id"));
-    var chip = null;
+    var c = null;
 
     for (var i in CHIPSETS_TABLE)
     {
         if (CHIPSETS_TABLE[i].chip_id == user_chip_id)
         {
-            chip = CHIPSETS_TABLE[i];
+            c = CHIPSETS_TABLE[i];
         }
     }
 
-    return chip;
+    return c;
+}
+
+function update_current_chip (updated_chip)
+{
+    var user_chip_id = Number(ScanaStudio.gui_get_value("chip_id"));
+
+    for (var i in CHIPSETS_TABLE)
+    {
+        if (CHIPSETS_TABLE[i].chip_id == user_chip_id)
+        {
+            CHIPSETS_TABLE[i] = updated_chip;
+        }
+    }
 }
 
 //Decoder GUI
@@ -70,7 +99,12 @@ function on_draw_gui_decoder()
 {
     //Define decoder configuration GUI
     ScanaStudio.gui_add_ch_selector("ch", "Select channel to decode", "RGB");
-    ScanaStudio.gui_add_new_selectable_containers_group("chip_id", "Chipset")
+
+    ScanaStudio.gui_add_combo_box("disp_format", "RGB display format");
+        ScanaStudio.gui_add_item_to_combo_box("Decimal", false);
+        ScanaStudio.gui_add_item_to_combo_box("Hex", true);
+
+    ScanaStudio.gui_add_new_selectable_containers_group("chip_id", "Chipset");
 
     for (var i in CHIPSETS_TABLE)
     {
@@ -129,65 +163,86 @@ function on_draw_gui_decoder()
 //Evaluate decoder GUI
 function on_eval_gui_decoder()
 {
-    var user_chip_id = Number(ScanaStudio.gui_get_value("chip_id"));
-    chip = get_current_chip();
+    disp_format = Number(ScanaStudio.gui_get_value("disp_format"));
 
-    chip.rst_time = Number(ScanaStudio.gui_get_value(chip.str + "_rst_time"));
-
-    if (chip.bit_time > 0)
+    if (disp_format)    // Hex
     {
-        chip.bit_time = Number(ScanaStudio.gui_get_value(chip.str + "_bit_time"));
+        disp_format = 16;
+    }
+    else
+    {
+        disp_format = 10;
     }
 
-    if (chip.bit_var > 0)
+    var c = get_current_chip();
+
+    c.rst_time = Number(ScanaStudio.gui_get_value(c.str + "_rst_time"));
+
+    if (c.bit_time > 0)
     {
-        chip.bit_var = Number(ScanaStudio.gui_get_value(chip.str + "_bit_var"));
+        c.bit_time = Number(ScanaStudio.gui_get_value(c.str + "_bit_time"));
     }
 
-    chip.t0h = Number(ScanaStudio.gui_get_value(chip.str + "_t0h"));
-    chip.t0l = Number(ScanaStudio.gui_get_value(chip.str + "_t0l"));
-    chip.t1h = Number(ScanaStudio.gui_get_value(chip.str + "_t1h"));
-    chip.t1l = Number(ScanaStudio.gui_get_value(chip.str + "_t1l"));
-
-    if (chip.t_var > 0)
+    if (c.bit_var > 0)
     {
-        chip.t_var = Number(ScanaStudio.gui_get_value(chip.str + "_t_var"));
+        c.bit_var = Number(ScanaStudio.gui_get_value(c.str + "_bit_var"));
     }
 
-    if (chip.bit_time > 0)
-    {
-        var bit_time_max = chip.bit_time;
-        var bit_time_min = chip.bit_time;
+    c.t0h = Number(ScanaStudio.gui_get_value(c.str + "_t0h"));
+    c.t0l = Number(ScanaStudio.gui_get_value(c.str + "_t0l"));
+    c.t1h = Number(ScanaStudio.gui_get_value(c.str + "_t1h"));
+    c.t1l = Number(ScanaStudio.gui_get_value(c.str + "_t1l"));
 
-        if (chip.bit_var > 0)
+    if (c.t_var > 0)
+    {
+        c.t_var = Number(ScanaStudio.gui_get_value(c.str + "_t_var"));
+    }
+
+    if (c.bit_time > 0)
+    {
+        var bit_time_max = c.bit_time;
+        var bit_time_min = c.bit_time;
+
+        if (c.bit_var > 0)
         {
-            bit_time_max += chip.bit_var;
-            bit_time_min -= chip.bit_var;
+            bit_time_max += c.bit_var;
+            bit_time_min -= c.bit_var;
         }
 
-        if ((chip.t0h + chip.t0l) > bit_time_max)
+        if ((c.t0h + c.t0l) > bit_time_max)
         {
             return "'T0H' + 'T0L' cannot be superior than 'Bit time' + 'Bit time variation'";
         }
 
-        if ((chip.t0h + chip.t0l) < bit_time_min)
+        if ((c.t0h + c.t0l) < bit_time_min)
         {
             return "'T0H' + 'T0L' cannot be inferior than 'Bit time' - 'Bit time variation'";
         }
 
-        if ((chip.t1h + chip.t1l) > bit_time_max)
+        if ((c.t1h + c.t1l) > bit_time_max)
         {
             return "'T1H' + 'T1L' cannot be superior than 'Bit time' + 'Bit time variation'";
         }
 
-        if ((chip.t1h + chip.t1l) < bit_time_min)
+        if ((c.t1h + c.t1l) < bit_time_min)
         {
             return "'T1H' + 'T1L' cannot be inferior than 'Bit time' - 'Bit time variation'";
         }
     }
 
-    chip.clr_order = Number(ScanaStudio.gui_get_value(chip.str + "_clr_order"));
+    var clr_id = Number(ScanaStudio.gui_get_value(c.str + "_clr_order"));
 
+    for (var i in CLR_ORDER_TABLE)
+    {
+        var clr = CLR_ORDER_TABLE[i];
+
+        if (clr.clr_id == clr_id)
+        {
+            c.clr_order = clr.clr_str;
+        }
+    }
+
+    update_current_chip(c);
     return "";
 }
 
@@ -195,12 +250,14 @@ function on_decode_signals (resume)
 {
     var bit_time_max, bit_time_min;
 
+    on_eval_gui_decoder();
+    chip = get_current_chip();
+
     if (!resume)
     {
         state_machine = 0;
         sample_rate = ScanaStudio.get_capture_sample_rate();
         ch = Number(ScanaStudio.gui_get_value("ch"));
-        chip = get_current_chip();
         bit_object = new BitObject(0, 0, 0);
 
         ScanaStudio.trs_reset(ch);
@@ -382,41 +439,70 @@ function on_decode_signals (resume)
 
 function decode_word (bit_object)
 {
-    var rgb = "";
     var bit_value = 0;
     var word_value = 0;
-    var title = "", content = "";
+    var r = 0, g = 0, b = 0;
+    var title = "", rgb = "";
     var title_clr = ScanaStudio.get_channel_color(ch);
-    var content_clr = "";
 
     bitstream_arr.push(bit_object);
 
     if (bitstream_arr.length > 23)
     {
-        for (i = 0; i < bitstream_arr.length; i++)
+        var item_st = bitstream_arr[0].st_sample;
+        var item_end = bitstream_arr[23].end_sample;
+
+        for (i = 0; i < 8; i++)
         {
-            bit_value = bitstream_arr[i].value;
-            word_value |= (bit_value << i);
+            bit_value = bitstream_arr.pop().value;
+            b |= (bit_value << i);
         }
 
-        rgb = word_value.toString(16).toUpperCase();
+        for (i = 0; i < 8; i++)
+        {
+            bit_value = bitstream_arr.pop().value;
+            g |= (bit_value << i);
+        }
+
+        for (i = 0; i < 8; i++)
+        {
+            bit_value = bitstream_arr.pop().value;
+            r |= (bit_value << i);
+        }
 
         if (chip.clr_order == "GRB")
         {
-            rgb = (rgb.substr(2, 2) + rgb.substr(0, 2) + rgb.substr(4, 2));
+            var temp = r;
+            r = g;
+            g = temp;
+        }
+
+        var rgb_hex = "#" + r.toString(16).toUpperCase().pad() +
+                            g.toString(16).toUpperCase().pad() +
+                            b.toString(16).toUpperCase().pad();
+
+        var rgb_dec = r.toString(10) + " " +
+                      g.toString(10) + " " +
+                      b.toString(10);
+
+        if (disp_format == 16)
+        {
+            rgb = rgb_hex;
+        }
+        else
+        {
+            rgb = rgb_dec;
         }
 
         word_cnt++;
         title = "LED " + word_cnt;
-        content = "#" + rgb;
-        content_clr = "#" + rgb;
 
-        ScanaStudio.dec_item_new(ch, bitstream_arr[0].st_sample, bitstream_arr[23].end_sample);
-        ScanaStudio.dec_item_add_content(title + ": " + content);
-        ScanaStudio.dec_item_add_content(content);
+        ScanaStudio.dec_item_new(ch, item_st, item_end);
+        ScanaStudio.dec_item_add_content(title + ": " + rgb);
+        ScanaStudio.dec_item_add_content(rgb);
         ScanaStudio.dec_item_end();
 
-        ScanaStudio.packet_view_add_packet(false, ch, bitstream_arr[0].st_sample, bitstream_arr[23].end_sample, title, content, title_clr, content_clr);
+        ScanaStudio.packet_view_add_packet(false, ch, item_st, item_end, title, rgb, title_clr, rgb_hex);
         bitstream_arr = [];
     }
 }
@@ -428,18 +514,9 @@ function on_build_demo_signals()
     var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
     var sample_rate = ScanaStudio.builder_get_sample_rate();
     var ch = ScanaStudio.gui_get_value("ch");
-    var user_chip_id = Number(ScanaStudio.gui_get_value("chip_id"));
     var silence_period_samples = (samples_to_build / 10);
     var word = 0;
-    var chip = null;
-
-    for (var i in CHIPSETS_TABLE)
-    {
-        if (CHIPSETS_TABLE[i].chip_id == user_chip_id)
-        {
-            chip = CHIPSETS_TABLE[i];
-        }
-    }
+    var chip = get_current_chip();
 
     builder.config(ch, sample_rate, chip);
     builder.put_reset();
