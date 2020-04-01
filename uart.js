@@ -4,13 +4,14 @@
 <DESCRIPTION>
 Serial UART (Universal asynchronous receiver/transmitter) Protocol Decoder.
 </DESCRIPTION>
-<VERSION> 1.51 </VERSION>
+<VERSION> 1.53 </VERSION>
 <AUTHOR_NAME>	Vladislav Kosinov, Ibrahim Kamal, Nicolas Bastit </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/UART-ScanaStudio-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright 2019 Ikalogic SAS </COPYRIGHT>
 <LICENSE>	This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V1.52: Fixed bug in Hex View when using more than 8 bits, and added 0/1 sampling points (Thanks to @hristomirchev)
 V1.52: Fixed a bug that caused stop bits to go undetected.
 V1.51: Fixed bug that could cause decoder to freeze
 V1.50: Added dec_item_end() for each dec_item_new().
@@ -47,7 +48,6 @@ V1.00: Initial release
 Work in progress / TODO
 ========================
 still Todo:
-* Further test trigger sequences
 * Write documentation
 */
 
@@ -98,6 +98,12 @@ function on_draw_gui_decoder()
     ScanaStudio.gui_add_item_to_combo_box( "Inverted logic: All signals inverted" );
     ScanaStudio.gui_add_item_to_combo_box( "Inverted logic: Only data inverted" );
     ScanaStudio.gui_end_tab();
+
+    ScanaStudio.gui_add_new_tab("HEX view options",false);
+    ScanaStudio.gui_add_combo_box( "hexview_endianness", "HEX View endianness");
+    ScanaStudio.gui_add_item_to_combo_box( "Big Endian (MSB at lowest address)", true);
+    ScanaStudio.gui_add_item_to_combo_box( "Little Endian (MSB at highest address)" );
+    ScanaStudio.gui_end_tab();
 }
 
 //Evaluate decoder GUI
@@ -133,12 +139,14 @@ function reload_dec_gui_values()
     format_dec = Number(ScanaStudio.gui_get_value("format_dec"));
     format_ascii = Number(ScanaStudio.gui_get_value("format_ascii"));
     format_bin = Number(ScanaStudio.gui_get_value("format_bin"));
+    hexview_endianness = Number(ScanaStudio.gui_get_value("hexview_endianness"));
 }
 
 //Global variables
 //GUI values
 var channel,baud,nbits,parity,stop,order,invert;
 var format_hex,format_bin,format_ascii,format_dec;
+var hexview_endianness;
 //Working variables
 var sampling_rate;
 var state_machine;
@@ -358,6 +366,8 @@ function on_decode_signals(resume)
 function add_uart_dec_item(ch, start_edge, value)
 {
     var content,b;
+    var n_hex_bytes = Math.ceil(nbits / 8);
+    var hex_val;
     var prev_content = "";
     ScanaStudio.dec_item_new(ch,start_edge + margin,start_edge + (nbits * samples_per_bit) - margin);
 
@@ -412,13 +422,21 @@ function add_uart_dec_item(ch, start_edge, value)
         //Add sample points
         for (b = 0; b < nbits; b++) //Start at 1 to skip start bit
         {
-            ScanaStudio.dec_item_add_sample_point(start_edge + ((b+0.5) * samples_per_bit),"P");
+            ScanaStudio.dec_item_add_sample_point(start_edge + ((b + 0.5) * samples_per_bit), ((value >> b) & 0x1) ? 1 : 0);
         }
 
-        if (value > 255) value = 255;
-        if (value < 0) value = 255;
-
-        ScanaStudio.hex_view_add_byte(ch,start_edge,start_edge + (nbits * samples_per_bit) ,value);
+        for (b = 0; b < n_hex_bytes; b++)
+        {
+          if (hexview_endianness == 0)
+          {
+            hex_val = (value >> ((n_hex_bytes -1 - b)*8) & 0xFF);
+          }
+          else
+          {
+            hex_val = (value >> b*8) & 0xFF;
+          }
+          ScanaStudio.hex_view_add_byte(ch,start_edge,start_edge + (nbits * samples_per_bit) ,hex_val);
+        }
     }
 
     ScanaStudio.dec_item_end();
