@@ -8,13 +8,14 @@ version that focuses on finding devices on a bus.
 The signal builder feature can be used to generate a series of I2C address calls
 to scan the whole range of possible addresses.
 </DESCRIPTION>
-<VERSION> 0.3 </VERSION>
+<VERSION> 0.4 </VERSION>
 <AUTHOR_NAME> Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com, v.canoz@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.4:  Bug fixed : No silence periode on the first launch.
 V0.3:  Added Signal decoder capability, PacketView and emphasis on valid (ACK) addresses.
 V0.2:  Added description.
 V0.1:  Initial release.
@@ -32,7 +33,7 @@ function on_draw_gui_decoder()
 //Evaluate decoder GUI
 function on_eval_gui_decoder()
 {
-  return "" //All good.
+  return ""; //All good.
 }
 
 //Global variables
@@ -143,11 +144,11 @@ function on_build_signals()
   //Use the function below to get the number of samples to be built
   var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
   var builder = ScanaStudio.load_builder_object("i2c.js");
-  var silence_period = 10*ScanaStudio.builder_get_sample_rate()/i2c_freq; //10 clock silence period
+  i2c_freq = ScanaStudio.gui_get_value("i2c_freq");
   ch_sda = ScanaStudio.gui_get_value("ch_sda");
   ch_scl = ScanaStudio.gui_get_value("ch_scl");
-  i2c_freq = ScanaStudio.gui_get_value("i2c_freq");
   skip_addresses = ScanaStudio.gui_get_value("skip_addresses");
+  var silence_period = 10*ScanaStudio.builder_get_sample_rate()/i2c_freq; //10 clock silence period
   builder.config(ch_scl,ch_sda,i2c_freq);
 
   for (var i = 0; i < 127; i++)
