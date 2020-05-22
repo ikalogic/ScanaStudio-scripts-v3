@@ -3,13 +3,14 @@
 <DESCRIPTION>
 I2C Temperature Sensors and Humidity Sensors decoder. Supported sensors : SHT20, SHT21, SHT25, STS21, HTU21A, HTU20D, HTU21D, HTU_3800, Si7006_A10, Si7020_A10, Si7021_A10, Si7013_A10
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.2:  Fixed bug : CMD not decoded after a Soft Reset
 V0.1:  Ported from older decoders library (https://github.com/ikalogic/ScanaStudio-Decoders/blob/master/I2C_temp_hum_sens.js)
 </RELEASE_NOTES>
 */
@@ -331,6 +332,11 @@ function process_i2c_item(item)
             ScanaStudio.dec_item_add_content(format_content(byte,data_format,8));
             ScanaStudio.packet_view_add_packet(false,item.channel_index,item.start_sample_index,item.end_sample_index,"Command",i2c_cmd_db[c].name,ScanaStudio.PacketColors.Head.Title,ScanaStudio.PacketColors.Head.Content);
             last_i2c_cmd = i2c_cmd_db[c];
+			if(byte == 0xfe)//SOFT RESET
+			{
+		        frame_state = I2C_FRAME.ADDRESS;
+		        next_frame_state = I2C_FRAME.CMD;
+			}
             break;
           }
         }
