@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Highly configurable SPI bus decoder
 </DESCRIPTION>
-<VERSION> 1.80 </VERSION>
+<VERSION> 1.81 </VERSION>
 <AUTHOR_NAME>  Vladislav Kosinov, Ibrahim Kamal </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/SPI-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v1.81: Fix a problem that caused error in decoding with CPHA = 1 (introduced by V1.80)
 v1.80: Script now uses the much faster "sync_decode" function (2 to 3 times faster decoding).
 v1.79: Fixed a bug that force unused channels to clear their name.
 v1.78: Fixed a bug that caused a false warning about a "missing CS leading edge".
@@ -223,7 +224,7 @@ var data_mosi,data_miso;
 var data_dual, data_quad; //decoded data word
 var miso_bit,mosi_bit; //bit value
 var io2_bit, io3_bit;
-var clk_active_edge, clk_skip;
+var clk_active_edge;
 var word_start_sample,word_end_sample;
 var word_start_sample_dual,word_end_sample_dual; //multi_io version
 var word_start_sample_quad,word_end_sample_quad;
@@ -281,8 +282,6 @@ function on_decode_signals(resume)
     	if ((cpol == 0) && (cpha == 1)) clk_active_edge = 0;
     	if ((cpol == 1) && (cpha == 0)) clk_active_edge = 0;
     	if ((cpol == 1) && (cpha == 1)) clk_active_edge = 1;
-
-      clk_skip = cpha;
 
       //Reset transition iterators
       ScanaStudio.trs_reset(ch_cs);
@@ -384,7 +383,7 @@ function on_decode_signals(resume)
                   !bit_order, //1 = MSB first
                   nbits,
                   false,
-                  clk_skip,
+                  0,
                   cs_end_sample
                 );
 
@@ -428,7 +427,7 @@ function on_decode_signals(resume)
                       !bit_order, //1 = MSB first
                       nbits,
                       true,
-                      clk_skip,
+                      0,
                       cs_end_sample
                   );
 
@@ -468,7 +467,7 @@ function on_decode_signals(resume)
                       !bit_order, //1 = MSB first
                       nbits,
                       true,
-                      clk_skip,
+                      0,
                       cs_end_sample
                   );
 
