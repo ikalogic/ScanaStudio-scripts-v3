@@ -5,7 +5,7 @@ DMX512 (Digital Multiplex) is a standard for digital communication networks that
 Signals are based on UART.
 DMX512-A include RDM improvement that allow bidirectional communication between slaves devices and the master.
 </DESCRIPTION>
-<VERSION> 0.7 </VERSION>
+<VERSION> 0.70 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
