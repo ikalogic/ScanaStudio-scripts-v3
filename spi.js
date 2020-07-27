@@ -3,13 +3,15 @@
 <DESCRIPTION>
 Highly configurable SPI bus decoder
 </DESCRIPTION>
-<VERSION> 1.79 </VERSION>
+<VERSION> 1.81 </VERSION>
 <AUTHOR_NAME>  Vladislav Kosinov, Ibrahim Kamal </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/SPI-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v1.81: Fix a problem that caused error in decoding with CPHA = 1 (introduced by V1.80)
+v1.80: Script now uses the much faster "sync_decode" function (2 to 3 times faster decoding).
 v1.79: Fixed a bug that force unused channels to clear their name.
 v1.78: Fixed a bug that caused a false warning about a "missing CS leading edge".
 V1.77: Added dec_item_end() for each dec_item_new().
@@ -71,6 +73,11 @@ V1.00: Initial release
 //Decoder GUI
 function on_draw_gui_decoder()
 {
+  if (!check_api_version())
+  {
+      ScanaStudio.gui_add_info_label("Warning! You need to update ScanaStudio to continue using this script.");
+  }
+
   ScanaStudio.gui_add_ch_selector( "ch_mosi", "MOSI (Master Out) Line", "MOSI" );
 	ScanaStudio.gui_add_ch_selector( "ch_miso", "MISO (Slave Out) Line", "MISO" );
 	ScanaStudio.gui_add_ch_selector( "ch_clk", "CLOCK Line", "SCLK" );
@@ -132,6 +139,10 @@ function on_draw_gui_decoder()
     if (ScanaStudio.get_device_channels_count() > 4)
     {
       ScanaStudio.gui_add_check_box("quad_io","Decode Quad IO SPI",false);
+    }
+    else
+    {
+      ScanaStudio.gui_add_hidden_field("quad_io",0);
     }
     if (ScanaStudio.get_device_channels_count() > 4)
     {
@@ -221,6 +232,10 @@ var bit_counter,bit_counter_dual,bit_counter_quad;
 var clock_sample_points = [];
 var frame_counter;
 var drw;
+var data_channels = [];
+var quad_channels = [];
+var word_start_sample;
+var spi_simple, spi_dual, spi_quad;
 // Gui variables
 var ch_mosi,ch_miso,ch_clk,ch_cs,bit_order;
 var format_hex,format_ascii,format_dec,format_bin;
@@ -229,9 +244,14 @@ var cpol,cpha,nbits,cspol,opt,ch_io2,ch_io3;
 function on_decode_signals(resume)
 {
   var margin;
-
+  if (!check_api_version())
+  {
+      ScanaStudio.console_error_msg("You need to update ScanaStudio to continue using this script.");
+      return;
+  }
   if (!resume) //If resume == false, it's the first call to this function.
   {
+
       //initialization code
       state_machine = 0;
       frame_counter = 0;
@@ -258,7 +278,7 @@ function on_decode_signals(resume)
       quad_io = ScanaStudio.gui_get_value("quad_io");
 
       //set clock active edge
-    	if ((cpol == 0) && (cpha == 0)) clk_active_edge = 1;
+      if ((cpol == 0) && (cpha == 0)) clk_active_edge = 1;
     	if ((cpol == 0) && (cpha == 1)) clk_active_edge = 0;
     	if ((cpol == 1) && (cpha == 0)) clk_active_edge = 0;
     	if ((cpol == 1) && (cpha == 1)) clk_active_edge = 1;
@@ -284,7 +304,24 @@ function on_decode_signals(resume)
         drw = "U";
       }
 
-      //ScanaStudio.console_info_msg("SPI decoder started");
+      //Here we select the data channels to be fed to the the sync_word getter.
+      data_channels = [];
+      if (opt != 1)
+      {
+        data_channels.push(ch_mosi);
+      }
+      if (opt != 2)
+      {
+        data_channels.push(ch_miso);
+      }
+
+      if (quad_io)
+      {
+          quad_channels.push(ch_mosi);
+          quad_channels.push(ch_miso);
+          quad_channels.push(ch_io2);
+          quad_channels.push(ch_io3);
+      }
   }
 
   while (ScanaStudio.abort_is_requested() == false)
@@ -336,248 +373,132 @@ function on_decode_signals(resume)
               }
           }
 
+          word_start_sample = cs_start_sample;
+          while(ScanaStudio.abort_is_requested() == false) //Get all the words in that frame
+          {
+              spi_simple = ScanaStudio.sync_decode(ch_clk,
+                  data_channels,
+                  word_start_sample,
+                  clk_active_edge,
+                  !bit_order, //1 = MSB first
+                  nbits,
+                  false,
+                  0,
+                  cs_end_sample
+                );
+
+            if (spi_simple.valid_bits == 0)
+            {
+              break;
+            }
+
+
+            margin = 0.5 * (spi_simple.end_sample - spi_simple.start_sample) / spi_simple.valid_bits;
+
+            if (spi_simple.valid_bits == nbits)
+            {
+              for (var ch = 0; ch < ((opt == 0) ? 2:1); ch++)
+              {
+                var r = ScanaStudio.dec_item_new(data_channels[ch],spi_simple.start_sample-margin,spi_simple.end_sample+margin);
+                if (r == 1)
+                {
+                    add_spi_content_to_dec_item("", spi_simple.unsigned_words[ch]);
+                    for (b = 0; b < spi_simple.sampling_points.length; b++)
+                    {
+                        ScanaStudio.dec_item_add_sample_point(spi_simple.sampling_points[b]+word_start_sample,drw);
+                    }
+                    ScanaStudio.dec_item_end();
+                }
+              }
+            }
+            word_start_sample = spi_simple.end_sample+1;
+          }
+
+          if (dual_io)
+          {
+              word_start_sample = cs_start_sample;
+              while(ScanaStudio.abort_is_requested() == false) //Get all the words in that frame
+              {
+
+                  spi_dual = ScanaStudio.sync_decode(ch_clk,
+                      data_channels,
+                      word_start_sample,
+                      clk_active_edge,
+                      !bit_order, //1 = MSB first
+                      nbits,
+                      true,
+                      0,
+                      cs_end_sample
+                  );
+
+                  if (spi_dual.valid_bits == 0)
+                  {
+                    break;
+                  }
+
+                  margin = 0.5 * (spi_dual.end_sample - spi_dual.start_sample) / 4;
+                  if (spi_dual.valid_bits == nbits)
+                  {
+                      var r = ScanaStudio.dec_item_new(ch_clk,spi_dual.start_sample-margin,spi_dual.end_sample+margin);
+                      if (r == 1)
+                      {
+                          add_spi_content_to_dec_item("DUAL IO: ", spi_dual.unsigned_words[0]);
+                          for (b = 0; b < spi_dual.sampling_points.length; b++)
+                          {
+                              //ScanaStudio.console_info_msg("sampling bits:" + b,spi_dual.sampling_points[b]+word_start_sample);
+                              ScanaStudio.dec_item_add_sample_point(spi_dual.sampling_points[b]+word_start_sample,drw);
+                          }
+                          ScanaStudio.dec_item_end();
+                      }
+                  }
+                  word_start_sample = spi_dual.end_sample+1;
+              }
+          }
+
+          if (quad_io)
+          {
+              word_start_sample = cs_start_sample;
+              while(ScanaStudio.abort_is_requested() == false) //Get all the words in that frame
+              {
+
+                  spi_quad = ScanaStudio.sync_decode(ch_clk,quad_channels,
+                      word_start_sample,
+                      clk_active_edge,
+                      !bit_order, //1 = MSB first
+                      nbits,
+                      true,
+                      0,
+                      cs_end_sample
+                  );
+
+                  if (spi_quad.valid_bits == 0)
+                  {
+                    break;
+                  }
+
+                  margin = 0.5 * (spi_quad.end_sample - spi_quad.start_sample) /2;
+                  if (spi_quad.valid_bits == nbits)
+                  {
+                      var r = ScanaStudio.dec_item_new(ch_cs,spi_quad.start_sample-margin,spi_quad.end_sample+margin);
+                      if (r == 1)
+                      {
+                          add_spi_content_to_dec_item("QUAD IO: ", spi_quad.unsigned_words[0]);
+                          for (b = 0; b < spi_quad.sampling_points.length; b++)
+                          {
+                              //ScanaStudio.console_info_msg("sampling bits:" + b,spi_quad.sampling_points[b]+word_start_sample);
+                              ScanaStudio.dec_item_add_sample_point(spi_quad.sampling_points[b]+word_start_sample,drw);
+                          }
+                          ScanaStudio.dec_item_end();
+                      }
+                  }
+                  word_start_sample = spi_quad.end_sample+1;
+              }
+          }
 
           //Advance iterators for other channels (other than CS)
-          if (opt != 1)
-          {
-            trs_mosi = ScanaStudio.trs_get_before(ch_mosi,cs_start_sample)
-            mosi_bit = trs_mosi.value;
-          }
-          if (opt != 2)
-          {
-            trs_miso = ScanaStudio.trs_get_before(ch_miso,cs_start_sample);
-            miso_bit = trs_miso.value;
-          }
-          if (quad_io)
-          {
-            trs_io2 = ScanaStudio.trs_get_before(ch_io2,cs_start_sample);
-            io2_bit = trs_io2.value;
-            trs_io3 = ScanaStudio.trs_get_before(ch_io3,cs_start_sample);
-            io3_bit = trs_io3.value;
-          }
-          trs_clk = ScanaStudio.trs_get_before(ch_clk,cs_start_sample);
-
-          //Reset data
-          data_dual = data_quad = data_miso = data_mosi = 0;
-          bit_counter_dual = bit_counter_quad = bit_counter = 0;
-          frame_counter++;
-          clock_sample_points = []; //clear array
-          //goto next state
-          state_machine++;
-        }
-      case 2: //wait for clk active edge
-
-        trs_clk = ScanaStudio.trs_get_next(ch_clk);
-        //ScanaStudio.console_info_msg("Trs_clk=" + ScanaStudio.engineering_notation(trs_clk.sample_index/sampling_rate,3) + "/" + trs_clk.value);
-        if (trs_clk.sample_index < cs_start_sample)
-        {
-          break;
-        }
-        if (trs_clk.value == clk_active_edge)
-        {
-          clock_sample_points.push(trs_clk.sample_index);
-          state_machine++;
-        }
-        if (trs_clk.sample_index > cs_end_sample)
-        {
-          //ScanaStudio.console_info_msg("trs_clk.sample_index > cs_end_sample");
           state_machine = 0;
+          frame_counter++;
         }
-        break;
-      case 3: //update mosi_bit value
-        //ScanaStudio.console_info_msg("state=" + state_machine);
-        if (opt == 1) //Ignore MOSI ?
-        {
-          state_machine++;
-          break;
-        }
-
-        //ScanaStudio.console_info_msg("trs_mosi.sample_index=" + trs_mosi.sample_index + "/" + trs_clk.sample_index);
-
-        //Ensure mosi_bit represent the right value at active clock edge
-        if (trs_mosi.sample_index <= trs_clk.sample_index) //If needed, advance MOSI transition iterator
-        {
-          //ScanaStudio.console_info_msg("mosi_bit="+trs_mosi.value);
-          mosi_bit = trs_mosi.value;
-          trs_mosi = ScanaStudio.trs_get_next(ch_mosi);
-        }
-        else {
-          state_machine++;
-        }
-        break;
-      case 4: //update miso_bit value
-        //ScanaStudio.console_info_msg("state=" + state_machine);
-        if (opt == 2) //Ignore MISO ?
-        {
-          state_machine++;
-          break;
-        }
-
-        //Ensure miso_bit represent the right value at active clock edge
-        //ScanaStudio.console_info_msg("trs_miso.sample_index=" + trs_miso.sample_index + "/" + trs_clk.sample_index);
-
-        if (trs_miso.sample_index <= trs_clk.sample_index)
-        {
-          //ScanaStudio.console_info_msg("miso_bit="+trs_miso.value);
-          miso_bit = trs_miso.value;
-          trs_miso = ScanaStudio.trs_get_next(ch_miso);
-        }
-        else {
-          state_machine++;
-        }
-        break;
-      case 5:  //capture IO2 for Quad SPI mode
-        if (!quad_io)
-        {
-          state_machine += 2; //Skip
-          break;
-        }
-
-        //Ensure mosi_bit represent the right value at active clock edge
-        if (trs_io2.sample_index <= trs_clk.sample_index) //If needed, advance transition iterator
-        {
-          io2_bit = trs_io2.value;
-          trs_io2 = ScanaStudio.trs_get_next(ch_io2);
-        }
-        else {
-          state_machine++;
-        }
-        break;
-      case 6: //capture IO3 for Quad SPI mode
-        //Ensure mosi_bit represent the right value at active clock edge
-        if (trs_io3.sample_index <= trs_clk.sample_index) //If needed, advance transition iterator
-        {
-          //ScanaStudio.console_info_msg("mosi_bit="+trs_mosi.value);
-          io3_bit = trs_io3.value;
-          trs_io3 = ScanaStudio.trs_get_next(ch_io3);
-        }
-        else {
-          state_machine++;
-        }
-      case 7: //build data words
-        //ScanaStudio.console_info_msg("state=" + state_machine);
-        //ScanaStudio.console_info_msg("bit_counter="+bit_counter+" mosi=" + mosi_bit + " miso=" + miso_bit);
-        //ScanaStudio.console_info_msg("io2_bit / io2_bit = " + io2_bit + "/" + io3_bit);
-        if (bit_order == 0)
-        {
-          data_mosi = (data_mosi*2) + mosi_bit;
-          data_miso = (data_miso*2) + miso_bit;
-          if (dual_io)
-          {
-              data_dual = (data_dual*4) + (miso_bit*2) + mosi_bit;
-          }
-          if (quad_io)
-          {
-              data_quad = (data_quad*16) + (io3_bit*8) + (io2_bit*4) + (miso_bit*2) + mosi_bit;
-          }
-        }
-        else
-        {
-          data_mosi += Math.pow(2, bit_counter) * mosi_bit;
-          data_miso += Math.pow(2, bit_counter) * miso_bit;
-          if (dual_io)
-          {
-              data_dual += (Math.pow(2, bit_counter_dual) * mosi_bit) + (Math.pow(2, bit_counter_dual+1) * miso_bit) ;
-          }
-          if (quad_io)
-          {
-            data_quad += (Math.pow(2, bit_counter_quad) * mosi_bit)
-                           + (Math.pow(2, bit_counter_quad+1) * miso_bit)
-                           + (Math.pow(2, bit_counter_quad+2) * io2_bit)
-                           + (Math.pow(2, bit_counter_quad+3) * io3_bit) ;
-          }
-        }
-
-        if (bit_counter == 0)
-        {
-          word_start_sample = trs_clk.sample_index;
-        }
-
-        if (bit_counter_dual == 0)
-        {
-          word_start_sample_dual = trs_clk.sample_index;
-        }
-
-        if (bit_counter_quad == 0)
-        {
-          word_start_sample_quad = trs_clk.sample_index;
-        }
-
-        if (++bit_counter >= nbits)
-        {
-          word_end_sample = trs_clk.sample_index;
-          margin = 0.5 * (word_end_sample - word_start_sample) / nbits;
-          //ScanaStudio.console_info_msg("Build word DONE, word_start_sample="+word_start_sample+", word_end_sample="+word_end_sample);
-          //add decoder item
-          if (opt != 1)
-          {
-              //ScanaStudio.console_info_msg("data_mosi="+data_mosi);
-              ScanaStudio.dec_item_new(ch_mosi,word_start_sample-margin,word_end_sample+margin);
-              add_spi_content_to_dec_item("", data_mosi);
-              //Add sample points
-              for (b = 0; b < clock_sample_points.length; b++)
-              {
-                ScanaStudio.dec_item_add_sample_point(clock_sample_points[b],drw);
-              }
-              ScanaStudio.dec_item_end();
-          }
-
-          if (opt != 2)
-          {
-              //ScanaStudio.console_info_msg("data_miso="+data_miso + "ch_miso=" + ch_miso);
-              ScanaStudio.dec_item_new(ch_miso,word_start_sample-margin,word_end_sample+margin);
-              add_spi_content_to_dec_item("", data_miso);
-              //Add sample points
-              for (b = 0; b < clock_sample_points.length; b++)
-              {
-                ScanaStudio.dec_item_add_sample_point(clock_sample_points[b],drw)
-              }
-              ScanaStudio.dec_item_end();
-          }
-
-
-
-          bit_counter = 0;
-          clock_sample_points = []; //clear array
-          data_miso = data_mosi = 0;
-        }
-
-        if (dual_io)
-        {
-            bit_counter_dual += 2;
-            if (bit_counter_dual >= nbits)
-            {
-              word_end_sample_dual = trs_clk.sample_index;
-              margin = 0.5 * (word_end_sample_dual - word_start_sample_dual) / (nbits/(2));
-              //add decoder item
-              ScanaStudio.dec_item_new(ch_clk,word_start_sample_dual-margin,word_end_sample_dual+margin);
-              add_spi_content_to_dec_item("DUAL IO: ",data_dual);
-              ScanaStudio.dec_item_end();
-              bit_counter_dual = 0;
-              data_dual = 0;
-            }
-        }
-
-        if (quad_io)
-        {
-            bit_counter_quad += 4;
-            if (bit_counter_quad >= nbits)
-            {
-              word_end_sample_quad = trs_clk.sample_index;
-              margin = 0.5 * (word_end_sample_quad - word_start_sample_quad) / (nbits/(4));
-              //add decoder item
-              ScanaStudio.dec_item_new(ch_cs,word_start_sample_quad-margin,word_end_sample_quad+margin);
-              add_spi_content_to_dec_item("QUAD IO: ",data_quad);
-              ScanaStudio.dec_item_end();
-              bit_counter_quad = 0;
-              data_quad = 0;
-            }
-        }
-
-
-        state_machine = 2;
-
-        break;
       default:
         state_machine = 0;
     }
@@ -1220,3 +1141,32 @@ ScanaStudio.BuilderObject = {
     this.quad_io = quad_io;
   }
 };
+
+
+function version_str_to_int(version)
+{
+    v = version.split(".");
+    if (v.length < 3)
+    {
+        ScanaStudio.console_error_msg("Invalid version: " + version );
+        return 0;
+    }
+    else
+    {
+        return (v[0]*10000) + (v[1]*100) + v[2];
+    }
+}
+
+function check_api_version()
+{
+    var required_str = "3.1.0";
+    if (version_str_to_int(required_str) > version_str_to_int(
+    ScanaStudio.get_api_version()))
+    {
+        return false; //API too old, update needed
+    }
+    else
+    {
+        return true;
+    }
+}

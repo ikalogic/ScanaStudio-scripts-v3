@@ -3,13 +3,14 @@
 <DESCRIPTION>
 PWM (Pulse Width Modulation) module. Can be used to decode and generate PWM signals.
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.3 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.3: Added phase shift option for fixed duty cycle generator.
 V0.2: Added dec_item_end() for each dec_item_new().
 V0.1: Initial release.
 </RELEASE_NOTES>
@@ -149,6 +150,7 @@ function on_draw_gui_signal_builder()
                                       +"Maximum: " + ScanaStudio.engineering_notation(max_car_f,3) + "Hz"
                                       );
       ScanaStudio.gui_add_engineering_form_input_box("simple_pwm_val","Duty cycle",0,100,50,"%");
+      ScanaStudio.gui_add_engineering_form_input_box("car_phase","Phase shift",0,360,0,"Deg");
     ScanaStudio.gui_end_container();
     ScanaStudio.gui_add_new_container("Modulated frequency",false);
       ScanaStudio.gui_add_combo_box("mod_type","Modulation type");
@@ -195,7 +197,8 @@ function on_build_signals()
       0, //modulation_phase
       ScanaStudio.gui_get_value("simple_freq_val"), //carrier_f
       ScanaStudio.gui_get_value("simple_pwm_val")/100,//duty_min
-      ScanaStudio.gui_get_value("simple_pwm_val")/100//duty_max
+      ScanaStudio.gui_get_value("simple_pwm_val")/100,//duty_max
+      ScanaStudio.gui_get_value("car_phase")
     );
   }
   else if (mod_type == 0) //Sine
@@ -353,7 +356,7 @@ ScanaStudio.BuilderObject = {
     this.duty_increment_per_cycle = this.samples_per_cycle / (this.samples_per_mod_period);
     this.samples_acc_per_mod_period = (modulation_phase/(2*Math.PI))*(this.samples_per_mod_period);
   },
-  configure_sawtooth : function(channel,modulation_freq,modulation_phase,carrier_f,duty_min,duty_max)
+  configure_sawtooth : function(channel,modulation_freq,modulation_phase,carrier_f,duty_min,duty_max,carrier_phase)
   {
     this.modulation = "sawtooth";
     this.channel = channel;
@@ -368,5 +371,22 @@ ScanaStudio.BuilderObject = {
     this.samples_per_cycle = (this.sample_rate) / this.carrier_frequency;
     this.duty_increment_per_cycle = this.samples_per_cycle / (this.samples_per_mod_period);
     this.samples_acc_per_mod_period = (modulation_phase/(2*Math.PI))*(this.samples_per_mod_period);
+
+    //Do the carrier phase shift
+    if ((carrier_phase == 0) || (carrier_phase === undefined))
+    {
+    }
+    else if (carrier_phase <= 180)
+    {
+        ScanaStudio.builder_add_samples(channel,0,this.samples_per_cycle*carrier_phase/360);
+        //ScanaStudio.builder_add_samples(channel,1,this.samples_per_cycle*0.25);
+    }
+    else
+    {
+        ScanaStudio.builder_add_samples(channel,1,
+            (this.samples_per_cycle*carrier_phase/360) - (this.samples_per_cycle*0.5)
+        );
+        ScanaStudio.builder_add_samples(channel,0,this.samples_per_cycle*0.5);
+    }
   }
 };
