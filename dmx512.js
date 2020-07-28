@@ -12,7 +12,7 @@ DMX512-A include RDM improvement that allow bidirectional communication between 
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.7: Added RDM capability (DMX512-A normative reference).
+V0.70: Added RDM capability (DMX512-A normative reference).
 V0.61: Updated description.
 V0.6: Updated packet view color palette
 V0.5: Added hex view
