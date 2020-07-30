@@ -5,13 +5,14 @@ DMX512 (Digital Multiplex) is a standard for digital communication networks that
 Signals are based on UART.
 DMX512-A include RDM improvement that allow bidirectional communication between slaves devices and the master.
 </DESCRIPTION>
-<VERSION> 0.70 </VERSION>
+<VERSION> 0.71 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.71: Fixed last decoded frame.
 V0.70: Added RDM capability (DMX512-A normative reference).
 V0.61: Updated description.
 V0.6: Updated packet view color palette
@@ -252,14 +253,14 @@ function on_decode_signals (resume)
 
         if(j==uart_items.length-1)
         {
-            if(!ScanaStudio.trs_is_not_last(channel))
+            // if(!ScanaStudio.trs_is_not_last(channel))
             {
                 if(trame_started && (trame.length != 0))//searching for end condition
                 {
-                    if( (trs.value==0) && (trs.sample_index - last_trs.sample_index >= sample_rate*CONST_t_break_type) )
+                    // if( (trs.value==0) && (trs.sample_index - last_trs.sample_index >= sample_rate*CONST_t_break_type) )
                     {
                         trame_ended = true;
-                        ignore_item = true;
+                        // ignore_item = true;
                     }
                 }
             }
