@@ -5,13 +5,14 @@ DMX512 (Digital Multiplex) is a standard for digital communication networks that
 Signals are based on UART.
 DMX512-A include RDM improvement that allow bidirectional communication between slaves devices and the master.
 </DESCRIPTION>
-<VERSION> 0.71 </VERSION>
+<VERSION> 0.72 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.72: Added discovery response decoding.
 V0.71: Fixed last decoded frame.
 V0.70: Added RDM capability (DMX512-A normative reference).
 V0.61: Updated description.
@@ -108,7 +109,7 @@ const   CONST_t_break_min       = 88e-6,
         CONST_t_break_type      = 88e-6,
         CONST_t_break_max       = 1,
         CONST_t_btw_break       = 1.2e-3,
-        CONST_t_MAB_min         = 8e-6, //MAB = Mark After Break
+        CONST_t_MAB_min         = 7e-6, //MAB = Mark After Break
         CONST_t_MAB_type        = 8e-6,
         CONST_t_MAB_max         = 1,
         CONST_time_tolerance    = 0.02, //2%
@@ -125,7 +126,8 @@ const   ENUM_STATE_BREAK    = 0,
         ENUM_STATE_DATA     = 4;
 
 const   TRAME_DMX = 0,
-        TRAME_RDM = 1;
+        TRAME_RDM = 1,
+        TRAME_DISCO = 2;
 
 // RDM doc :
 // https://getdlight.com/media/kunena/attachments/42/ANSI_E1-20_2010.pdf
@@ -143,6 +145,12 @@ const   RDM_STATE_SUB_START         = 0,
         RDM_STATE_PARAM_DATA        = 11,
         RDM_STATE_CHECKSUM          = 12,
         RDM_STATE_START             = 0xFF;
+
+const   DISCO_STATE_PREAMBLE        = 0,
+        DISCO_STATE_SEP_PREAMBLE    = 1,
+        DISCO_STATE_MAN_ID          = 2,
+        DISCO_STATE_DEV_ID          = 3,
+        DISCO_STATE_CHECKSUM        = 4;
 
 //for the next release
 // const NBR_MAX_CHANNEL = 30;//512;
@@ -315,6 +323,7 @@ function on_decode_signals (resume)
                         {
                             trame_type = TRAME_RDM;
                             rdm_cnt_slots = 0;
+                            rdm_cnt_i = 0;
                             rdm_chksum = 0xcc;
                             rdm_state = RDM_STATE_SUB_START;
                             ScanaStudio.packet_view_add_packet( true,
@@ -343,6 +352,23 @@ function on_decode_signals (resume)
                                 "Ok",
                                 ScanaStudio.PacketColors.Wrap.Title,
                                 ScanaStudio.PacketColors.Wrap.Content);
+                        }
+                        else if ((trame[i].content == "0xfe")) //Start a Discovery frame
+                        {
+                            trame_type = TRAME_DISCO;
+                            rdm_cnt_slots = 0;
+                            rdm_cnt_i = 0;
+                            rdm_chksum = 0;
+                            rdm_state = DISCO_STATE_PREAMBLE;
+                            sample_start_pkt = trame[0].start_sample_index
+                            ScanaStudio.packet_view_add_packet( true,
+                                                                channel,
+                                                                trame[0].start_sample_index,
+                                                                trame[trame.length-1].end_sample_index,
+                                                                "Discovery answer",
+                                                                "CH" + (channel + 1),
+                                                                ScanaStudio.get_channel_color(channel),
+                                                                ScanaStudio.get_channel_color(channel));
                         }
                         else //wrong start but still decode following byte
                         {
@@ -961,7 +987,7 @@ function on_decode_signals (resume)
                                                                                 trame[i].end_sample_index,
                                                                                 "!CHECKSUM",
                                                                                 tmp_byte_value + " Should be 0x" + rdm_chksum.toString(16),
-                                                                                ScanaStudio.PacketColors.Error.Tilte,
+                                                                                ScanaStudio.PacketColors.Error.Title,
                                                                                 ScanaStudio.PacketColors.Error.Content);
                                         }
                                         ScanaStudio.dec_item_end();
@@ -977,6 +1003,194 @@ function on_decode_signals (resume)
 
                                     break;
                                 }//end case RDM_STATE_CHECKSUM
+
+                            }//end switch rdm_state
+                        }
+                        else if(trame_type == TRAME_DISCO) // Discovery frame
+                        {
+                            switch(rdm_state)
+                            {
+                                case DISCO_STATE_PREAMBLE:
+                                {
+                                    if(trame[i].content != "0xfe")
+                                    {
+                                        //error
+                                    }
+
+                                    rdm_cnt_i++;
+                                    if(rdm_cnt_i>=6)
+                                    {
+                                        ScanaStudio.packet_view_add_packet( false,
+                                                                            channel,
+                                                                            sample_start_pkt,
+                                                                            trame[i].end_sample_index,
+                                                                            "Discovery answer",
+                                                                            "Response Preamble bytes",
+                                                                            ScanaStudio.PacketColors.Preamble.Title,
+                                                                            ScanaStudio.PacketColors.Preamble.Content);
+
+                                        ScanaStudio.dec_item_new(channel, sample_start_pkt, trame[i].end_sample_index);
+                                        ScanaStudio.dec_item_add_content("Response Preamble bytes");
+                                        ScanaStudio.dec_item_add_content("REP_Pre");
+                                        ScanaStudio.dec_item_end();
+                                        rdm_state = DISCO_STATE_SEP_PREAMBLE;
+                                        rdm_cnt_i = 0;
+                                        tmp_byte_value = "0x";
+                                        sample_start_pkt = 0;
+                                    }
+                                    break;
+                                }// end case DISCO_STATE_PREAMBLE
+
+                                case DISCO_STATE_SEP_PREAMBLE:
+                                {
+                                    if(trame[i].content != "0xaa")
+                                    {
+                                        //error
+                                    }
+                                    ScanaStudio.packet_view_add_packet( false,
+                                                                        channel,
+                                                                        trame[i].start_sample_index,
+                                                                        trame[i].end_sample_index,
+                                                                        "Separator",
+                                                                        trame[i].content,
+                                                                        ScanaStudio.PacketColors.Preamble.Title,
+                                                                        ScanaStudio.PacketColors.Preamble.Content);
+
+                                    ScanaStudio.dec_item_new(channel, trame[i].start_sample_index, trame[i].end_sample_index);
+                                    ScanaStudio.dec_item_add_content("Separator");
+                                    ScanaStudio.dec_item_add_content("Sep");
+                                    ScanaStudio.dec_item_end();
+                                    rdm_state = DISCO_STATE_MAN_ID;
+                                    rdm_cnt_i = 0;
+                                    tmp_byte_value = 0;
+                                    sample_start_pkt = 0;
+                                    rdm_chksum = 0;
+                                    break;
+                                }// end case DISCO_STATE_SEP_PREAMBLE
+
+                                case DISCO_STATE_MAN_ID:
+                                {
+                                    tmp_byte_value |= ((0x55 << ((rdm_cnt_i) % 2)) & parseInt(trame[i].content,16)) << (rdm_cnt_i<2? 8 : 0);
+
+                                    // rdm_chksum += ((0x55 << ((rdm_cnt_i) % 2)) & parseInt(trame[i].content,16));
+                                    rdm_chksum += parseInt(trame[i].content,16);
+
+                                    rdm_cnt_i++;
+                                    if(rdm_cnt_i>=4)
+                                    {
+                                        ScanaStudio.packet_view_add_packet( false,
+                                                                            channel,
+                                                                            sample_start_pkt,
+                                                                            trame[i].end_sample_index,
+                                                                            "Manufacturer ID",
+                                                                            "0x" + tmp_byte_value.toString(16),
+                                                                            ScanaStudio.PacketColors.Head.Title,
+                                                                            ScanaStudio.PacketColors.Head.Content);
+
+                                        ScanaStudio.dec_item_new(channel, sample_start_pkt, trame[i].end_sample_index);
+                                        ScanaStudio.dec_item_add_content("Manufacturer ID : 0x" + tmp_byte_value.toString(16));
+                                        ScanaStudio.dec_item_add_content("ManID 0x" + tmp_byte_value.toString(16));
+                                        ScanaStudio.dec_item_add_content("0x" + tmp_byte_value.toString(16));
+                                        ScanaStudio.dec_item_end();
+                                        rdm_state = DISCO_STATE_DEV_ID;
+                                        rdm_cnt_i = 0;
+                                        tmp_byte_value = "0x";
+                                        sample_start_pkt = 0;
+                                    }
+                                    else if(rdm_cnt_i == 1)
+                                    {
+                                        sample_start_pkt = trame[i].start_sample_index;
+                                    }
+                                    break;
+                                }// end case DISCO_STATE_MAN_ID
+
+                                case DISCO_STATE_DEV_ID:
+                                {
+                                    tmp_byte_value |= ((0x55 << ((rdm_cnt_i) % 2)) & parseInt(trame[i].content,16)) << (24 - 8*Math.round((rdm_cnt_i-1)/2));
+
+                                    // rdm_chksum += ((0x55 << ((rdm_cnt_i) % 2)) & parseInt(trame[i].content,16));
+                                    rdm_chksum += parseInt(trame[i].content,16);
+
+                                    rdm_cnt_i++;
+                                    if(rdm_cnt_i>=8)
+                                    {
+                                        ScanaStudio.packet_view_add_packet( false,
+                                                                            channel,
+                                                                            sample_start_pkt,
+                                                                            trame[i].end_sample_index,
+                                                                            "Device ID",
+                                                                            "0x" + tmp_byte_value.toString(16),
+                                                                            ScanaStudio.PacketColors.Data.Title,
+                                                                            ScanaStudio.PacketColors.Data.Content);
+
+                                        ScanaStudio.dec_item_new(channel, sample_start_pkt, trame[i].end_sample_index);
+                                        ScanaStudio.dec_item_add_content("Device ID : 0x" + tmp_byte_value.toString(16));
+                                        ScanaStudio.dec_item_add_content("DevID 0x" + tmp_byte_value.toString(16));
+                                        ScanaStudio.dec_item_add_content("0x" + tmp_byte_value.toString(16));
+                                        ScanaStudio.dec_item_end();
+                                        rdm_state = DISCO_STATE_CHECKSUM;
+                                        rdm_cnt_i = 0;
+                                        tmp_byte_value = "0x";
+                                        sample_start_pkt = 0;
+                                    }
+                                    else if(rdm_cnt_i == 1)
+                                    {
+                                        sample_start_pkt = trame[i].start_sample_index;
+                                    }
+                                    break;
+                                }// end case DISCO_STATE_DEV_ID2
+
+                                case DISCO_STATE_CHECKSUM:
+                                {
+                                    tmp_byte_value |= ((0x55 << ((rdm_cnt_i) % 2)) & parseInt(trame[i].content,16)) << (8 - 8*Math.round((rdm_cnt_i-1)/2));
+
+                                    rdm_cnt_i++;
+                                    if(rdm_cnt_i>=4)
+                                    {
+                                        ScanaStudio.dec_item_new(channel, sample_start_pkt, trame[i].end_sample_index);
+                                        if(rdm_chksum == tmp_byte_value)
+                                        {
+                                            ScanaStudio.dec_item_emphasize_success();
+                                            ScanaStudio.dec_item_add_content("CHECKSUM : 0x" + tmp_byte_value.toString(16));
+                                            ScanaStudio.dec_item_add_content("ChkSm : 0x" + tmp_byte_value.toString(16));
+                                            ScanaStudio.dec_item_add_content("0x" + tmp_byte_value.toString(16));
+                                            ScanaStudio.packet_view_add_packet( false,
+                                                                                channel,
+                                                                                sample_start_pkt,
+                                                                                trame[i].end_sample_index,
+                                                                                "CHECKSUM",
+                                                                                "0x" + tmp_byte_value.toString(16),
+                                                                                ScanaStudio.PacketColors.Check.Title,
+                                                                                ScanaStudio.PacketColors.Check.Content);
+                                        }
+                                        else
+                                        {
+                                            ScanaStudio.dec_item_emphasize_error();
+                                            ScanaStudio.dec_item_add_content("CHECKSUM : " + "0x" + tmp_byte_value.toString(16) + " Should be 0x" + rdm_chksum.toString(16));
+                                            ScanaStudio.dec_item_add_content("!ChkSm : " + "0x" + tmp_byte_value.toString(16));
+                                            ScanaStudio.dec_item_add_content("!" + "0x" + tmp_byte_value.toString(16));
+                                            ScanaStudio.packet_view_add_packet( false,
+                                                                                channel,
+                                                                                sample_start_pkt,
+                                                                                trame[i].end_sample_index,
+                                                                                "!CHECKSUM",
+                                                                                "0x" + tmp_byte_value.toString(16) + " Should be 0x" + rdm_chksum.toString(16),
+                                                                                ScanaStudio.PacketColors.Error.Title,
+                                                                                ScanaStudio.PacketColors.Error.Content);
+                                        }
+                                        ScanaStudio.dec_item_end();
+                                        rdm_state = RDM_STATE_START;
+                                        rdm_cnt_i = 0;
+                                        tmp_byte_value = "0x";
+                                        sample_start_pkt = 0;
+                                    }
+                                    else if(rdm_cnt_i == 1)
+                                    {
+                                        sample_start_pkt = trame[i].start_sample_index;
+                                    }
+                                    break;
+                                }// end case DISCO_STATE_CHECKSUM
+
 
                             }//end switch rdm_state
                         }
