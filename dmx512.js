@@ -5,13 +5,14 @@ DMX512 (Digital Multiplex) is a standard for digital communication networks that
 Signals are based on UART.
 DMX512-A include RDM improvement that allow bidirectional communication between slaves devices and the master.
 </DESCRIPTION>
-<VERSION> 0.72 </VERSION>
+<VERSION> 0.73 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.73: Fixed bug : error during live-mode.
 V0.72: Added discovery response decoding.
 V0.71: Fixed last decoded frame.
 V0.70: Added RDM capability (DMX512-A normative reference).
@@ -88,9 +89,10 @@ var channel;
 var trs;
 var last_trs;
 var trame = [];
+var ignore_item = false;
 var trame_started;
 var trame_ended;
-var trame_type = 0
+var trame_type = 0;
 var rdm_state;
 var rdm_cnt_i;
 var sample_start_pkt;
@@ -99,13 +101,15 @@ var rdm_pdl_cnt;
 var rdm_msg_len;
 var rdm_cnt_slots;
 var rdm_chksum;
+var uart_items = [];
+var last_i;
 //for the next release
 // var select_decoder;
 // var list_channel = [];
 // var i_ch;
 
 //time constant in s from http://stsserd.free.fr/Cours_sts2/Logique/Pr%E9sentation%20DMX512.pdf
-const   CONST_t_break_min       = 88e-6,
+const   CONST_t_break_min       = 87e-6,
         CONST_t_break_type      = 88e-6,
         CONST_t_break_max       = 1,
         CONST_t_btw_break       = 1.2e-3,
@@ -188,9 +192,12 @@ function on_decode_signals (resume)
         ScanaStudio.trs_reset(channel);
         trs = ScanaStudio.trs_get_next(channel);
         last_trs = trs;
+        ignore_item = false;
+        uart_items = [];
+        last_i = 0;
     }
 
-    var uart_items = ScanaStudio.pre_decode("uart.js",resume);
+    uart_items = ScanaStudio.pre_decode("uart.js",resume);
     var sample_rate = ScanaStudio.get_capture_sample_rate();
 
     for (var j = uart_items.length - 1; j >= 0; j--)
@@ -207,7 +214,7 @@ function on_decode_signals (resume)
 
     for (var j=0; (j<uart_items.length) && (!ScanaStudio.abort_is_requested()); j++)
     {
-        var ignore_item = false;
+        ignore_item = false;
 
         while ((last_trs.sample_index < uart_items[j].start_sample_index) && (ScanaStudio.trs_is_not_last(channel)) && (!ScanaStudio.abort_is_requested()))
         {
@@ -241,6 +248,7 @@ function on_decode_signals (resume)
                         if(!trame_started)//if frame is not started
                         {
                             trame = [];
+                            last_i = 0;
                             trame_started = true;
                             ignore_item = true;
                             break;
@@ -266,6 +274,7 @@ function on_decode_signals (resume)
                 if(trame_started && (trame.length != 0))//searching for end condition
                 {
                     // if( (trs.value==0) && (trs.sample_index - last_trs.sample_index >= sample_rate*CONST_t_break_type) )
+                    if(uart_items[j].end_sample_index + (uart_items[j].end_sample_index -uart_items[j].start_sample_index) < ScanaStudio.get_available_samples(channel))
                     {
                         trame_ended = true;
                         // ignore_item = true;
@@ -281,12 +290,11 @@ function on_decode_signals (resume)
                 trame.push(uart_items[j]);
             }
 
-            if(trame_ended)//decode trame
+            if(trame_ended && (trame.length != 0))//decode trame
             {
                 trame_ended = false;
-                trame_started = false;
-
-                for (var i=0; (i<trame.length) && (!ScanaStudio.abort_is_requested()); i++)
+                var i;
+                for (i=last_i; (i<trame.length) && (!ScanaStudio.abort_is_requested()); i++)
                 {
                     if (i==0)
                     {
@@ -372,6 +380,7 @@ function on_decode_signals (resume)
                         }
                         else //wrong start but still decode following byte
                         {
+                            trame_started = false;
                             ScanaStudio.dec_item_new(channel, trame[i].start_sample_index, trame[i].end_sample_index);
                             ScanaStudio.dec_item_add_content( "WRONG Start " + trame[i].content);
                             ScanaStudio.dec_item_add_content( trame[i].content);
@@ -956,7 +965,6 @@ function on_decode_signals (resume)
                                     rdm_cnt_i++;
                                     if(rdm_cnt_i>=2)
                                     {
-
                                         rdm_chksum = rdm_chksum%0x10000;
 
                                         ScanaStudio.dec_item_new(channel, sample_start_pkt, trame[i].end_sample_index);
@@ -991,6 +999,7 @@ function on_decode_signals (resume)
                                                                                 ScanaStudio.PacketColors.Error.Content);
                                         }
                                         ScanaStudio.dec_item_end();
+                                        trame_started = false;
                                         rdm_state = RDM_STATE_START;
                                         rdm_cnt_i = 0;
                                         tmp_byte_value = "0x";
@@ -1180,6 +1189,7 @@ function on_decode_signals (resume)
                                         }
                                         ScanaStudio.dec_item_end();
                                         rdm_state = RDM_STATE_START;
+                                        trame_started = false;
                                         rdm_cnt_i = 0;
                                         tmp_byte_value = "0x";
                                         sample_start_pkt = 0;
@@ -1196,6 +1206,7 @@ function on_decode_signals (resume)
                         }
                         else // Standard DMX or unrecognized frame
                         {
+                            trame_started = false;
                             ScanaStudio.dec_item_new(channel,trame[i].start_sample_index,trame[i].end_sample_index);
                             ScanaStudio.dec_item_add_content(trame[i].content);
                             ScanaStudio.dec_item_end();
@@ -1211,6 +1222,7 @@ function on_decode_signals (resume)
                         }
                     }//end data bytes
                 }//end for each item in trame
+                last_i = i;
             }//end if trame ended
         }//end if trame started
     }//end for each uart item
@@ -1244,14 +1256,13 @@ function on_build_demo_signals()
         var substart = 0x01;
         var dest_uid = [0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC];
         var src_uid = [0xCB, 0xA9, 0x87, 0x65, 0x43, 0x21];
+        var transa_num = 0x0;
         var port_id_rep = 0x01;
         var subdev = 0x0000;
         var command_class = 0x20;
         var param_id = 0x0030;
         var param = [0x01];
-        dmx512_builder.put_RDM_frame(substart, dest_uid, src_uid, port_id_rep, subdev, command_class, param_id, param);
-
-
+        dmx512_builder.put_RDM_frame(substart, dest_uid, src_uid, transa_num, port_id_rep, subdev, command_class, param_id, param);
     }
 }
 
@@ -1376,7 +1387,7 @@ ScanaStudio.BuilderObject = {
         this.put_MTBP();
     },
 
-    put_RDM_frame : function(substart, dest_uid, src_uid, port_id_rep, subdev, command_class, param_id, param)
+    put_RDM_frame : function(substart, dest_uid, src_uid, transaction_number, port_id_rep, subdev, command_class, param_id, param)
     {
         this.put_break();
         this.put_MAB();
@@ -1403,7 +1414,7 @@ ScanaStudio.BuilderObject = {
             chksum += this.put_mword(src_uid[i]);
         }
 
-        chksum += this.put_mword(0);//transaction number
+        chksum += this.put_mword(transaction_number);//transaction number
 
         chksum += this.put_mword(port_id_rep);//Port ID/response type
 
