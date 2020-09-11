@@ -1,7 +1,7 @@
 /* Protocol meta info:
 <NAME> SWD </NAME>
 <DESCRIPTION>
-SW-DP decoder according to the ARM® Debug Interface Architecture Specification ADIv6.0.
+SW-DP decoder according to the ARM Debug Interface Architecture Specification ADIv6.0.
 About the APACC, it can decode the MEM-AP and the JTAG-AP, others are consider unknown.
 </DESCRIPTION>
 <VERSION> 1.0 </VERSION>
