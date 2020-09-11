@@ -3,13 +3,14 @@
 <DESCRIPTION>
 PWM (Pulse Width Modulation) module. Can be used to decode and generate PWM signals.
 </DESCRIPTION>
-<VERSION> 0.3 </VERSION>
+<VERSION> 0.4 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.4: Correct the Builder (phase shift (fixed duty) and modulation phase for triangle and sawtooth)
 v0.3: Added phase shift option for fixed duty cycle generator.
 V0.2: Added dec_item_end() for each dec_item_new().
 V0.1: Initial release.
@@ -158,7 +159,7 @@ function on_draw_gui_signal_builder()
         ScanaStudio.gui_add_item_to_combo_box("Triangle",false);
         ScanaStudio.gui_add_item_to_combo_box("SawTooth",false);
       ScanaStudio.gui_add_engineering_form_input_box("f_mod","Modulation frequency",min_mod_f,max_mod_f,def_mod_f,"Hz");
-      ScanaStudio.gui_add_engineering_form_input_box("ph_mod","Modulation phase",0,360,"0","DEG(°)");
+      ScanaStudio.gui_add_engineering_form_input_box("ph_mod","Modulation phase",0,360,"0","DEG(�)");
       ScanaStudio.gui_add_engineering_form_input_box("freq_carrier","Carrier frequency",min_mod_f,max_car_f,def_car_f,"Hz");
       ScanaStudio.gui_add_engineering_form_input_box("duty_min","Carrier minimum (lower) frequency",0,100,10,"%");
       ScanaStudio.gui_add_engineering_form_input_box("duty_max","Carrier minimum (lower) frequency",0,100,90,"%");
@@ -174,7 +175,7 @@ function on_draw_gui_signal_builder()
 //Evaluate signal builder GUI
 function on_eval_gui_signal_builder()
 {
-  ScanaStudio.set_script_instance_name("PWM Builder on CH "+ (ScanaStudio.gui_get_value("channel")+1).toString());
+  ScanaStudio.set_script_instance_name("PWM_0 Builder on CH "+ (ScanaStudio.gui_get_value("channel")+1).toString());
   return "" //All good.
 }
 
@@ -304,24 +305,24 @@ ScanaStudio.BuilderObject = {
   },
   build_cycle_sawtooth : function()
   {
-    if (this.modulation != "sawtooth")
-    {
-      if (this.modulation.length > 0)
+      if (this.modulation != "sawtooth")
       {
-          ScanaStudio.console_error_msg("Please run configure_sawtooth() function before using build_cycle_sawtooth()");
-          this.modulation = ""; //don't display this message more than once
-          return;
+        if (this.modulation.length > 0)
+        {
+            ScanaStudio.console_error_msg("Please run configure_sawtooth() function before using build_cycle_sawtooth()");
+            this.modulation = ""; //don't display this message more than once
+            return;
+        }
       }
-    }
-    if (this.samples_acc_per_mod_period > this.samples_per_mod_period)
-    {
-      this.samples_acc_per_mod_period -= this.samples_per_mod_period;
-    }
-    var amp = this.duty_max - this.duty_min;
+      var amp = this.duty_max - this.duty_min;
 
-    this.samples_acc_per_mod_period+= this.samples_per_cycle;
-    var duty = this.duty_min + (amp * this.samples_acc_per_mod_period/this.samples_per_mod_period);
-		ScanaStudio.builder_add_cycles(this.channel,duty,this.samples_per_cycle,1);
+      this.samples_acc_per_mod_period+= this.samples_per_cycle;
+      if (this.samples_acc_per_mod_period > this.samples_per_mod_period)
+      {
+          this.samples_acc_per_mod_period -= this.samples_per_mod_period;
+      }
+      var duty = this.duty_min + (amp * this.samples_acc_per_mod_period/this.samples_per_mod_period);
+  		ScanaStudio.builder_add_cycles(this.channel,duty,this.samples_per_cycle,1);
   },
   configure_sine : function(channel,modulation_freq,modulation_phase,carrier_f,duty_min,duty_max)
   {
@@ -354,7 +355,7 @@ ScanaStudio.BuilderObject = {
     this.samples_per_mod_period = this.sample_rate / modulation_freq;
     this.samples_per_cycle = (this.sample_rate) / this.carrier_frequency;
     this.duty_increment_per_cycle = this.samples_per_cycle / (this.samples_per_mod_period);
-    this.samples_acc_per_mod_period = (modulation_phase/(2*Math.PI))*(this.samples_per_mod_period);
+    this.samples_acc_per_mod_period = (this.modulation_phase/(2*Math.PI))*(this.samples_per_mod_period);
   },
   configure_sawtooth : function(channel,modulation_freq,modulation_phase,carrier_f,duty_min,duty_max,carrier_phase)
   {
@@ -370,23 +371,31 @@ ScanaStudio.BuilderObject = {
     this.samples_per_mod_period = this.sample_rate / modulation_freq;
     this.samples_per_cycle = (this.sample_rate) / this.carrier_frequency;
     this.duty_increment_per_cycle = this.samples_per_cycle / (this.samples_per_mod_period);
-    this.samples_acc_per_mod_period = (modulation_phase/(2*Math.PI))*(this.samples_per_mod_period);
+    this.samples_acc_per_mod_period = (this.modulation_phase/(2*Math.PI))*(this.samples_per_mod_period);
 
     //Do the carrier phase shift
     if ((carrier_phase == 0) || (carrier_phase === undefined))
     {
     }
-    else if (carrier_phase <= 180)
+    // Before
+    //else if (carrier_phase <= 180)
+    // After
+    else if (carrier_phase <= ((1-duty_min)*360))
     {
         ScanaStudio.builder_add_samples(channel,0,this.samples_per_cycle*carrier_phase/360);
         //ScanaStudio.builder_add_samples(channel,1,this.samples_per_cycle*0.25);
     }
     else
     {
-        ScanaStudio.builder_add_samples(channel,1,
-            (this.samples_per_cycle*carrier_phase/360) - (this.samples_per_cycle*0.5)
-        );
-        ScanaStudio.builder_add_samples(channel,0,this.samples_per_cycle*0.5);
+        // Before
+        // ScanaStudio.builder_add_samples(channel,1,
+        //     (this.samples_per_cycle*carrier_phase/360) - (this.samples_per_cycle*0.5)
+        // );
+        // ScanaStudio.builder_add_samples(channel,0,this.samples_per_cycle*0.5);
+        // After
+        var samples_high = this.samples_per_cycle*carrier_phase/360 - this.samples_per_cycle*(1-duty_min);
+        ScanaStudio.builder_add_samples(channel, 1, samples_high);
+        ScanaStudio.builder_add_samples(channel, 0, this.samples_per_cycle*(1-duty_min));
     }
   }
 };
