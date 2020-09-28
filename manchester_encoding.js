@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Manchester code is a line code in which the encoding of each data bit is either low then high, or high then low, for equal time
 </DESCRIPTION>
-<VERSION> 0.3 </VERSION>
+<VERSION> 0.4 </VERSION>
 <AUTHOR_NAME>  Vladislav Kosinov </AUTHOR_NAME>
 <AUTHOR_URL> v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright 2019 Ikalogic SAS </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.4: Fix long pulses decoding
 V0.3: Added dec_item_end() for each dec_item_new().
 V0.2: Add unknown states handling.
 V0.1: Initial release.
@@ -182,6 +183,10 @@ function decode_bit (trs_st, trs_end)
     else if ((t < (t2 + get_t_margin(t2))) && (t > (t2 - get_t_margin(t2))))
     {
         bitstream_arr.push(new BitObject(trs_st.value, BIT_TYPE.TWO_T, trs_st.sample_index));
+        bitstream_arr.push(new BitObject(trs_end.value, BIT_TYPE.TWO_T, trs_end.sample_index));
+    }
+    else if ((t > (t2 - get_t_margin(t2))))
+    {
         bitstream_arr.push(new BitObject(trs_end.value, BIT_TYPE.TWO_T, trs_end.sample_index));
     }
     else
