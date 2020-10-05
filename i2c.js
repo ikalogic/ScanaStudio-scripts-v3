@@ -741,7 +741,7 @@ function on_build_trigger()
         trig_build_start();
         for(var i=0; i<7; i++)
         {
-            trig_build_bit(trig_addr>>(6-i));
+            trig_build_bit(trig_addr>>(6-i) & 0x01);
         }
 
         switch(trig_access_type)
