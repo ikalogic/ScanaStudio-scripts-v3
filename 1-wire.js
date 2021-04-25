@@ -3,13 +3,14 @@
 <DESCRIPTION>
 1-Wire protocol analyzer. Decodes Reset, presence and byte fields.
 </DESCRIPTION>
-<VERSION> 0.12 </VERSION>
+<VERSION> 0.13 </VERSION>
 <AUTHOR_NAME> Vladislav Kosinov, Alexander Goomenyuk </AUTHOR_NAME>
 <AUTHOR_URL> v.kosinov@ikalogic.com, emerg.reanimator@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.13: Fixed undefined variable error in case of missing reset pulse. Relaxed reset timing.
 v0.12: Fixed incomplete parsing while capturing.
 v0.11: UI parameters are respected. Fixed FSM loop in case of reset after data.
 v0.10: Backport of 1-wire decoder.
@@ -32,9 +33,9 @@ V0.0: Initial release.
 
 var DEBUG_SCOPES =
 {
-	BIT_STREAM 	: 0x01,
-	DECODER		: 0x02,
-	DECODER_FSM	: 0x04,
+	BIT_STREAM  : 0x01,
+	DECODER     : 0x02,
+	DECODER_FSM : 0x04,
 };
 
 var STATE =
@@ -58,7 +59,7 @@ var ROM_CMD =
 	OVD_SKIP_ROM  : {code: 0x3C, str: "OVERDRIVE SKIP ROM "},
 	SEARCH_ROM    : {code: 0xF0, str: "SEARCH ROM "},
 	ALARM_SEARCH  : {code: 0xEC, str: "ALARM SEARCH "},
-	UNKNOWN		  : {code: 0x00, str: "UNKNOWN"},
+	UNKNOWN       : {code: 0x00, str: "UNKNOWN"},
 };
 
 var MEM_CMD =
@@ -140,7 +141,7 @@ var STANDARD_DELAYS =
 	RSTL_STD : 480,
 	RSTL_MIN : 380,
 	PDH_MIN  : 15,
-	PDH_MAX  : 60,
+	PDH_MAX  : 80, // Relaxed reset pulse time
 	PDL_MIN  : 60,
 	PDL_MAX  : 240,
 
@@ -450,7 +451,7 @@ function on_decode_signals_decode_bit_stream(next_tr)
 			}
 			else
 			{
-				ScanaStudio.console_warning_msg("on_decode_signals_decode_bit_stream() : presence pulse missing", trPDL.sample_index);
+				ScanaStudio.console_warning_msg("on_decode_signals_decode_bit_stream() : presence pulse missing");
 				g_owObjects.push(new OWObject(OWOBJECT_TYPE.PRESENCE, false, next_tr.sample_index, next_tr.sample_index + get_num_samples_for_us(g_owDelays.PDH_MAX), false, false));
 				next_tr = trPDH;
 			}
