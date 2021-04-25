@@ -141,7 +141,7 @@ var STANDARD_DELAYS =
 	RSTL_STD : 480,
 	RSTL_MIN : 380,
 	PDH_MIN  : 15,
-	PDH_MAX  : 80, // Relaxed reset pulse time
+	PDH_MAX  : 80, // Relaxed reset pulse time: 80 us vs. 60 us as specified
 	PDL_MIN  : 60,
 	PDL_MAX  : 240,
 
