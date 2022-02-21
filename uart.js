@@ -4,14 +4,15 @@
 <DESCRIPTION>
 Serial UART (Universal asynchronous receiver/transmitter) Protocol Decoder.
 </DESCRIPTION>
-<VERSION> 1.53 </VERSION>
+<VERSION> 1.54 </VERSION>
 <AUTHOR_NAME>	Vladislav Kosinov, Ibrahim Kamal, Nicolas Bastit </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/UART-ScanaStudio-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright 2019 Ikalogic SAS </COPYRIGHT>
 <LICENSE>	This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V1.52: Fixed bug in Hex View when using more than 8 bits, and added 0/1 sampling points (Thanks to @hristomirchev)
+V1.54: Fixed bug that caused unexisting start bits to be detected in some rare situations.
+V1.53: Fixed bug in Hex View when using more than 8 bits, and added 0/1 sampling points (Thanks to @hristomirchev)
 V1.52: Fixed a bug that caused stop bits to go undetected.
 V1.51: Fixed bug that could cause decoder to freeze
 V1.50: Added dec_item_end() for each dec_item_new().
@@ -221,28 +222,37 @@ function on_decode_signals(resume)
                 //wait until we have enough samples for the start bit
                 if (ScanaStudio.get_available_samples(channel) > (cursor + samples_per_bit))
                 {
-                    //Add start bit item
-                    ScanaStudio.dec_item_new(   channel,
-                                                cursor + margin,
-                                                cursor + samples_per_bit - margin);
-                    ScanaStudio.dec_item_add_content("Start");
-                    ScanaStudio.dec_item_add_content("S");
-                    ScanaStudio.dec_item_end();
-
-                    cursor += samples_per_bit; //Advance after start bit
-
                     ScanaStudio.bit_sampler_init(channel,cursor + (samples_per_bit*0.5),samples_per_bit);
-                    if (invert > 0)
+                    if (ScanaStudio.bit_sampler_next(channel) == start_bit_value)
                     {
-                        parity_value = 1;
-                    }
-                    else {
-                        parity_value = 0;
-                    }
-                    transfer_value = 0;
-                    state_machine++;
+                        //Add start bit item
+                        ScanaStudio.dec_item_new(   channel,
+                                                    cursor + margin,
+                                                    cursor + samples_per_bit - margin);
+                        ScanaStudio.dec_item_add_content("Start");
+                        ScanaStudio.dec_item_add_content("S");
+                        ScanaStudio.dec_item_end();
 
-                    //ScanaStudio.console_info_msg("Start of data",cursor);
+                        cursor += samples_per_bit; //Advance after start bit
+
+                        ScanaStudio.bit_sampler_init(channel,cursor + (samples_per_bit*0.5),samples_per_bit);
+                        if (invert > 0)
+                        {
+                            parity_value = 1;
+                        }
+                        else
+                        {
+                            parity_value = 0;
+                        }
+                        transfer_value = 0;
+                        state_machine++;
+                    }
+                    else
+                    {
+                        state_machine = 0;
+                        break;
+                    }
+
                 }
                 else {
                     //ScanaStudio.console_info_msg("Waiting for start bit",ScanaStudio.get_available_samples(channel));
@@ -251,7 +261,7 @@ function on_decode_signals(resume)
                 }
             case 2:
                 //Wait until there is enough samples to capture a whole word
-                if (ScanaStudio.get_available_samples(channel) > (cursor + (samples_per_bit * (nbits + 3))))
+                if (ScanaStudio.get_available_samples(channel) > (cursor + (samples_per_bit * (nbits + 4))))
                 {
                     //Add UART word
                     for (bit_counter = 0; bit_counter < nbits; bit_counter++)
@@ -291,7 +301,7 @@ function on_decode_signals(resume)
                         }
                         else
                         {
-                            ScanaStudio.dec_item_add_content("Parity ERROR");
+                            ScanaStudio.dec_item_add_content("Parity ERROR, expecting (" + parity_value + ")");
                             ScanaStudio.dec_item_add_content("Par. Err");
                             ScanaStudio.dec_item_add_content("Err");
                             ScanaStudio.dec_item_add_content("!");
