@@ -3,14 +3,15 @@
 <DESCRIPTION>
 I2C support for ScanaStudio.
 </DESCRIPTION>
-<VERSION> 0.9 </VERSION>
+<VERSION> 0.10 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-v0.9: Better packet view data display 
+v0.10: Fix bug related to extended address, Fix bug that caused decoding freeze in some cases.
+v0.9: Better packet view data display
 v0.8: Added trigger capability
 V0.7: Updated packet view
 V0.6: Added hex and packet views
@@ -123,7 +124,7 @@ function on_decode_signals (resume)
 
     while (ScanaStudio.abort_is_requested() == false)
     {
-        if ((!ScanaStudio.trs_is_not_last(ch_sda)) && (!ScanaStudio.trs_is_not_last(ch_scl)))
+        if ((!ScanaStudio.trs_is_not_last(ch_sda)) || (!ScanaStudio.trs_is_not_last(ch_scl)))
         {
             break;
         }
@@ -452,7 +453,7 @@ function process_i2c_bit (value, sample_index)
             var addr = format_content(byte >> add_shift, address_format, add_len)
             i2c_packet_arr.push(new I2cPacketObject(false, item_st_sample, item_end_sample, "Address",
                                 operation_str + " " + addr,
-                                ScanaStudio.PacketColors.Preamble.Title, 
+                                ScanaStudio.PacketColors.Preamble.Title,
                                 ScanaStudio.PacketColors.Preamble.Content,
                                 addr));
             bit_counter = 0;
@@ -487,9 +488,12 @@ function process_i2c_bit (value, sample_index)
             add_sample_points();
             ScanaStudio.dec_item_end();
 
+            var addr = format_content(ext_add,address_format, 10);
             i2c_packet_arr.push(new I2cPacketObject(false, item_st_sample, item_end_sample, "Address",
                                 "10 bit address = " + format_content(ext_add,address_format, 10),
-                                ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content));
+                                ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content,
+                                addr));
+
             bit_counter = 0;
             last_frame_state = frame_state;
             frame_state = I2C.ACK;
