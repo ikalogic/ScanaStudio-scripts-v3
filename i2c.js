@@ -3,13 +3,14 @@
 <DESCRIPTION>
 I2C support for ScanaStudio.
 </DESCRIPTION>
-<VERSION> 0.10 </VERSION>
+<VERSION> 0.11 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.11: Fix START/STOP conditions on screen width.
 v0.10: Fix bug related to extended address, Fix bug that caused decoding freeze in some cases.
 v0.9: Better packet view data display
 v0.8: Added trigger capability
@@ -162,6 +163,11 @@ function on_decode_signals (resume)
                             }
                             else
                             {
+                                if ((last_trs_scl.sample_index <= 0) || (last_trs_scl.sample_index <= 0))
+                                {
+                                    i2c_condition_width = sampling_rate / 500000
+                                }
+
                                 item_st_sample = last_trs_sda.sample_index - i2c_condition_width;
                                 item_end_sample = last_trs_sda.sample_index + i2c_condition_width;
                                 last_dec_item_end_sample = last_trs_sda.sample_index + i2c_condition_width;
@@ -203,9 +209,9 @@ function on_decode_signals (resume)
                         }
                         else
                         {
-                            i2c_condition_width = (last_trs_sda.sample_index-last_trs_scl.sample_index)*0.75;
+                            i2c_condition_width = (last_trs_sda.sample_index - last_trs_scl.sample_index) * 0.75;
 
-                            if (last_trs_sda.sample_index - i2c_condition_width <= last_dec_item_end_sample)
+                            if ((last_trs_sda.sample_index - i2c_condition_width) <= last_dec_item_end_sample)
                             {
                                 i2c_condition_width = 2;
                                 item_st_sample = last_dec_item_end_sample + 1;
@@ -214,6 +220,11 @@ function on_decode_signals (resume)
                             }
                             else
                             {
+                                if ((last_trs_scl.sample_index <= 0) || (last_trs_scl.sample_index <= 0))
+                                {
+                                    i2c_condition_width = sampling_rate / 500000
+                                }
+
                                 item_st_sample = last_trs_sda.sample_index - i2c_condition_width;
                                 item_end_sample = last_trs_sda.sample_index + i2c_condition_width;
                                 last_dec_item_end_sample = last_trs_sda.sample_index + i2c_condition_width;
