@@ -3,15 +3,16 @@
 <DESCRIPTION>
 I2C support for ScanaStudio.
 </DESCRIPTION>
-<VERSION> 0.11 </VERSION>
+<VERSION> 0.12 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-v0.11: Fix START/STOP conditions on screen width.
-v0.10: Fix bug related to extended address, Fix bug that caused decoding freeze in some cases.
+v0.12: Added option to filter high-frequency noise
+v0.11: Fix START/STOP conditions on screen width
+v0.10: Fix bug related to extended address, Fix bug that caused decoding freeze in some cases
 v0.9: Better packet view data display
 v0.8: Added trigger capability
 V0.7: Updated packet view
@@ -24,26 +25,29 @@ V0.1: Initial release
 </RELEASE_NOTES>
 */
 
-//Decoder GUI
+/*
+  Define decoder configuration GUI
+*/
 function on_draw_gui_decoder()
 {
-  //Define decoder configuration GUI
-  ScanaStudio.gui_add_ch_selector("ch_sda","SDA Channel","SDA");
-  ScanaStudio.gui_add_ch_selector("ch_scl","SCL Channel","SCL");
-  ScanaStudio.gui_add_new_tab("Advanced options",false);
-    ScanaStudio.gui_add_combo_box("address_opt","Address convention");
-      ScanaStudio.gui_add_item_to_combo_box("7 bit address",true);
-      ScanaStudio.gui_add_item_to_combo_box("8 bit address (inlcuding R/W flag)",false);
-    ScanaStudio.gui_add_combo_box("address_format","Address display format");
-      ScanaStudio.gui_add_item_to_combo_box("HEX",true);
-      ScanaStudio.gui_add_item_to_combo_box("Binary",false);
-      ScanaStudio.gui_add_item_to_combo_box("Decimal",false);
-    ScanaStudio.gui_add_combo_box("data_format","Data display format");
-      ScanaStudio.gui_add_item_to_combo_box("HEX",true);
-      ScanaStudio.gui_add_item_to_combo_box("Binary",false);
-      ScanaStudio.gui_add_item_to_combo_box("Decimal",false);
-      ScanaStudio.gui_add_item_to_combo_box("ASCII",false);
-  ScanaStudio.gui_end_tab();
+    ScanaStudio.gui_add_ch_selector("ch_sda", "SDA Channel", "SDA");
+    ScanaStudio.gui_add_ch_selector("ch_scl", "SCL Channel", "SCL");
+
+    ScanaStudio.gui_add_new_tab("Advanced options", false);
+        ScanaStudio.gui_add_combo_box("address_opt", "Address convention");
+            ScanaStudio.gui_add_item_to_combo_box("7 bit address", true);
+            ScanaStudio.gui_add_item_to_combo_box("8 bit address (inlcuding R/W flag)", false);
+        ScanaStudio.gui_add_combo_box("address_format", "Address display format");
+            ScanaStudio.gui_add_item_to_combo_box("HEX", true);
+            ScanaStudio.gui_add_item_to_combo_box("Binary", false);
+            ScanaStudio.gui_add_item_to_combo_box("Decimal", false);
+        ScanaStudio.gui_add_combo_box("data_format", "Data display format");
+            ScanaStudio.gui_add_item_to_combo_box("HEX", true);
+            ScanaStudio.gui_add_item_to_combo_box("Binary", false);
+            ScanaStudio.gui_add_item_to_combo_box("Decimal", false);
+            ScanaStudio.gui_add_item_to_combo_box("ASCII", false);
+        ScanaStudio.gui_add_check_box("en_noise_flter", "Ignore high-frequency noise on data and clock lines", false);
+    ScanaStudio.gui_end_tab();
 }
 
 //Global variables
@@ -52,7 +56,7 @@ var I2C =
     ADDRESS     : 0x01,
     ACK         : 0x02,
     DATA        : 0x04,
-    ADDRESS_EXT : 0x08,
+    ADDRESS_EXT : 0x08
 };
 
 function I2cPacketObject (root, st_sample, end_sample, title, content, title_color, content_color, extra_data)
@@ -79,14 +83,17 @@ var address_opt;
 var address_format;
 var data_format;
 
+/*
+  Get GUI values
+*/
 function reload_dec_gui_values()
 {
-    //get GUI values
-    ch_sda = ScanaStudio.gui_get_value("ch_sda");
-    ch_scl = ScanaStudio.gui_get_value("ch_scl");
-    address_opt = ScanaStudio.gui_get_value("address_opt");
+    ch_sda         = ScanaStudio.gui_get_value("ch_sda");
+    ch_scl         = ScanaStudio.gui_get_value("ch_scl");
+    address_opt    = ScanaStudio.gui_get_value("address_opt");
     address_format = ScanaStudio.gui_get_value("address_format");
-    data_format = ScanaStudio.gui_get_value("data_format");
+    data_format    = ScanaStudio.gui_get_value("data_format");
+    en_noise_flter = ScanaStudio.gui_get_value("en_noise_flter");
 }
 
 function on_decode_signals (resume)
@@ -133,8 +140,13 @@ function on_decode_signals (resume)
         switch (state_machine)
         {
             case 0: //advance SCL
-                last_trs_scl = trs_scl;
-                trs_scl = ScanaStudio.trs_get_next(ch_scl);
+                do
+                {
+                    last_trs_scl = trs_scl;
+                    trs_scl = ScanaStudio.trs_get_next(ch_scl);
+                }
+                while (check_signal_noise(trs_scl, last_trs_scl));
+
                 //ScanaStudio.console_info_msg("SCL " + trs_scl.sample_index, trs_scl.sample_index);
                 state_machine++;
             break;
@@ -142,13 +154,18 @@ function on_decode_signals (resume)
             case 1: //Advance SDA iterator and detect bits or conditions
                 if (trs_sda.sample_index <= trs_scl.sample_index)
                 {
-                    last_trs_sda = trs_sda;
-                    trs_sda = ScanaStudio.trs_get_next(ch_sda);
+                    do
+                    {
+                        last_trs_sda = trs_sda;
+                        trs_sda = ScanaStudio.trs_get_next(ch_sda);
+                    }
+                    while (check_signal_noise(trs_sda, last_trs_sda));
+
                     //ScanaStudio.console_info_msg("SDA " + trs_sda.sample_index, trs_sda.sample_index);
 
-                    if ((last_trs_sda.sample_index > last_trs_scl.sample_index)
-                      && (last_trs_sda.sample_index < trs_scl.sample_index)
-                      && (last_trs_scl.value == 1)) //Check S/P condition
+                    if ((last_trs_sda.sample_index > last_trs_scl.sample_index)     // Check for Start / Stop conditions
+                        && (last_trs_sda.sample_index < trs_scl.sample_index)
+                        && (last_trs_scl.value == 1))
                     {
                         if ((last_trs_sda.value == 0))
                         {
@@ -252,7 +269,7 @@ function on_decode_signals (resume)
                         //ScanaStudio.console_info_msg("SDA bit value=" + last_trs_sda.value,trs_scl.sample_index);
                         if (packet_started == true)
                         {
-                            process_i2c_bit(last_trs_sda.value,trs_scl.sample_index);
+                            process_i2c_bit(last_trs_sda.value, trs_scl.sample_index);
                         }
                     }
 
@@ -261,6 +278,25 @@ function on_decode_signals (resume)
             break;
         }
     }
+}
+
+/*
+  Helper function to find a signal glitches on the data or clock lines
+*/
+function check_signal_noise (tr1, tr2)
+{
+    if (en_noise_flter)
+    {
+        var min_width_s = 200e-9    // Filter everything shorter than 200 ns (5 Mhz)
+        var impulsion_width_s = (Math.abs(tr1.sample_index - tr2.sample_index) * (1 / sampling_rate));
+
+        if (impulsion_width_s <= min_width_s)
+        {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 function process_i2c_bit (value, sample_index)

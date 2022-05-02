@@ -3,15 +3,16 @@
 <DESCRIPTION>
 I2C Temperature Sensors and Humidity Sensors decoder. Supported sensors : SHT20, SHT21, SHT25, STS21, HTU21A, HTU20D, HTU21D, HTU_3800, Si7006_A10, Si7020_A10, Si7021_A10, Si7013_A10
 </DESCRIPTION>
-<VERSION> 0.2 </VERSION>
+<VERSION> 0.3 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-V0.2:  Fixed bug : CMD not decoded after a Soft Reset
-V0.1:  Ported from older decoders library (https://github.com/ikalogic/ScanaStudio-Decoders/blob/master/I2C_temp_hum_sens.js)
+V0.3: Added option to filter high-frequency noise
+V0.2: Fixed bug : CMD not decoded after a Soft Reset
+V0.1: Ported from older decoders library (https://github.com/ikalogic/ScanaStudio-Decoders/blob/master/I2C_temp_hum_sens.js)
 </RELEASE_NOTES>
 */
 
@@ -88,6 +89,7 @@ function on_draw_gui_decoder()
     ScanaStudio.gui_add_item_to_combo_box(DEVICE_TABLE[i].str,first_item);
     first_item = false;
   }
+
   // ScanaStudio.gui_add_new_tab("Device configuration",true);
   //   // ScanaStudio.gui_add_combo_box("res","Bit resolution");
   //   //   ScanaStudio.gui_add_item_to_combo_box("RH : 12 and T : 14",false);
@@ -96,6 +98,7 @@ function on_draw_gui_decoder()
   //   //   ScanaStudio.gui_add_item_to_combo_box("RH : 08 and T : 12",false);
   //
   // ScanaStudio.gui_end_tab();
+
   ScanaStudio.gui_add_new_tab("Advanced options",false);
     ScanaStudio.gui_add_combo_box("address_opt","Address convention");
       ScanaStudio.gui_add_item_to_combo_box("7 bit address",true);
@@ -109,6 +112,7 @@ function on_draw_gui_decoder()
       ScanaStudio.gui_add_item_to_combo_box("Binary",false);
       ScanaStudio.gui_add_item_to_combo_box("Decimal",false);
       ScanaStudio.gui_add_item_to_combo_box("ASCII",false);
+      ScanaStudio.gui_add_check_box("en_noise_flter", "Ignore high-frequency noise on data and clock lines", false);
   ScanaStudio.gui_end_tab();
 }
 

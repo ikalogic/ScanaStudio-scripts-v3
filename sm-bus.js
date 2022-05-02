@@ -3,15 +3,16 @@
 <DESCRIPTION>
 System Management Bus (SMBus) protocol analyzer.
 </DESCRIPTION>
-<VERSION> 0.5 </VERSION>
+<VERSION> 0.6 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.6: Added option to filter high-frequency noise
 V0.5: Added packet and hex views
-V0.3: Added dec_item_end() for each dec_item_new().
+V0.3: Added dec_item_end() for each dec_item_new()
 V0.2: Added pre-decoding support
 V0.1: Initial release.
 </RELEASE_NOTES>
@@ -51,6 +52,7 @@ function on_draw_gui_decoder()
       ScanaStudio.gui_add_item_to_combo_box("Binary",false);
       ScanaStudio.gui_add_item_to_combo_box("Decimal",false);
       ScanaStudio.gui_add_item_to_combo_box("ASCII",false);
+      ScanaStudio.gui_add_check_box("en_noise_flter", "Ignore high-frequency noise on data and clock lines", false);
   ScanaStudio.gui_end_tab();
 
 }
