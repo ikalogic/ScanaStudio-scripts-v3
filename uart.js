@@ -4,13 +4,14 @@
 <DESCRIPTION>
 Serial UART (Universal asynchronous receiver/transmitter) Protocol Decoder.
 </DESCRIPTION>
-<VERSION> 1.54 </VERSION>
+<VERSION> 1.55 </VERSION>
 <AUTHOR_NAME>	Vladislav Kosinov, Ibrahim Kamal, Nicolas Bastit </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/UART-ScanaStudio-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright 2019 Ikalogic SAS </COPYRIGHT>
 <LICENSE>	This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V1.55 Removed deprecated call to function set_async_mode().
 V1.54: Fixed bug that caused unexisting start bits to be detected in some rare situations.
 V1.53: Fixed bug in Hex View when using more than 8 bits, and added 0/1 sampling points (Thanks to @hristomirchev)
 V1.52: Fixed a bug that caused stop bits to go undetected.
@@ -510,8 +511,6 @@ function on_eval_gui_trigger()
 
 function on_build_trigger()
 {
-
-    ScanaStudio.flexitrig_set_async_mode();
     reload_dec_gui_values();
     trig_alt = ScanaStudio.gui_get_value("trig_alt");
     trig_byte = ScanaStudio.gui_get_value("trig_byte");
