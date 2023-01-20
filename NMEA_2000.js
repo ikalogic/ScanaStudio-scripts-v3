@@ -27,12 +27,14 @@ A long list of PGN with the field significance : https://github.com/canboat/canb
 */
 
 
-//Decoder GUI
+
+//Decoder GUI
 function on_draw_gui_decoder()
 {
     //Define decoder configuration GUI
     ScanaStudio.gui_add_ch_selector("ch","NMEA Channel","NMEA");
     ScanaStudio.gui_add_engineering_form_input_box("rate","Bit rate",100,1e6,250e3,"Bit/s");
+    ScanaStudio.gui_add_check_box("can_fd_iso","CAN FD ISO CRC (ISO 11898-1:2015)",false);
     ScanaStudio.gui_add_new_tab("Display options",false);
       ScanaStudio.gui_add_combo_box("id_format","ID display format");
         ScanaStudio.gui_add_item_to_combo_box("HEX",true);
@@ -50,7 +52,6 @@ function on_draw_gui_decoder()
 
     //Add hidden elements for the CAN decoder
     ScanaStudio.gui_add_hidden_field("rate_fd",2);
-    ScanaStudio.gui_add_hidden_field("can_fd_iso","false");
 }
 
 //Evaluate decoder GUI
@@ -2394,7 +2395,10 @@ function crc_calc(bits,crc_len)
       poly = 0xC599;
   }
 
-  crc = (1 << (crc_len -1)); //NOTE: For CAN FD ISO only!
+  if (can_fd_iso)
+  {
+    crc = (1 << (crc_len -1)); //NOTE: For CAN FD ISO only!
+  }
 
   for (b = 0; b < bits.length; b++)
   {
