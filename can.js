@@ -1853,7 +1853,10 @@ function crc_calc(bits,crc_len)
       poly = 0xC599;
   }
 
-  crc = (1 << (crc_len -1)); //NOTE: For CAN FD ISO only!
+  if (can_fd_iso)
+  {
+    crc = (1 << (crc_len -1)); //NOTE: For CAN FD ISO only!
+  }
 
   for (b = 0; b < bits.length; b++)
   {
