@@ -10,5 +10,5 @@ Since ScanaStudio V3.1.1 the scripting system have been redesigned to support ma
 
 
 ## Writing your own ScanaStudio script with VSCode support
-Code news! On Februrary 2023, we have released a VSCode extention to help you wirting your own scripts. Get started by reading the Scripting user manual here: https://www.ikalogic.com/kb/scripting/ScanaStudio-scripting-manual/
+Good news! On Februrary 2023, we have released a VSCode extention to help you wirting your own scripts. Get started by reading the Scripting user manual here: https://www.ikalogic.com/kb/scripting/ScanaStudio-scripting-manual/
 
