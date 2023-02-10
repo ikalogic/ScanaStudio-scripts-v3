@@ -5,9 +5,9 @@ Build signals from a CSV file.
 </DESCRIPTION>
 <VERSION> 0.3 </VERSION>
 <AUTHOR_NAME> Camille Perrin</AUTHOR_NAME>
-<AUTHOR_URL> Your mail </AUTHOR_URL>
+<AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/CSV-importer-script-documentation </HELP_URL>
-<COPYRIGHT> Copyright Camille </COPYRIGHT>
+<COPYRIGHT> Copyright IKALOGIC SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
 V0.3:  Now can be used by SP1000G series (Pattern generator).
