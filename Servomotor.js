@@ -3,20 +3,16 @@
 <DESCRIPTION>
 Decode servomotor command signal.
 </DESCRIPTION>
-<VERSION> 1.0 </VERSION>
+<VERSION> 2.0 </VERSION>
 <AUTHOR_NAME> Corentin Maravat </AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ikalogic SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V2.0: Added VAC
 V1.0:  Initial release.
 </RELEASE_NOTES>
-*/
-
-/*Sources :https://arduino.blaisepascal.fr/controle-dun-servomoteur/
-https://eskimon.fr/tuto-arduino-602-un-moteur-qui-a-de-la-t%C3%AAte-le-servomoteur
-https://www.carnetdumaker.net/articles/controler-un-servomoteur-avec-une-carte-arduino-genuino/
 */
 
 
@@ -36,6 +32,13 @@ function on_draw_gui_decoder()
   ScanaStudio.gui_add_combo_box("display","Angle Display");
   ScanaStudio.gui_add_item_to_combo_box("°",true);
   ScanaStudio.gui_add_item_to_combo_box("%",false);
+  ScanaStudio.gui_add_new_tab("Virtual Analog Channels",true);
+      ScanaStudio.gui_add_check_box("angle_disp_deg", "Display a graphic for angle in °", false);
+      ScanaStudio.gui_add_check_box("angle_disp_percent", "Display a graphic for angle in %", false);
+      ScanaStudio.gui_add_check_box("speed_disp", "Display a graphic for speed in sec/60°", false);
+      ScanaStudio.gui_add_check_box("speed_display_perc", "Display a graphic for speed in %", false);
+
+  ScanaStudio.gui_end_tab();
 }
 
 //Evaluate decoder GUI
@@ -50,6 +53,10 @@ function on_eval_gui_decoder()
 
 function reload_dec_gui_values()
 {
+    angle_disp_deg = ScanaStudio.gui_get_value("angle_disp_deg");
+    angle_disp_percent = ScanaStudio.gui_get_value("angle_disp_percent");
+    speed_display = ScanaStudio.gui_get_value("speed_disp");
+    speed_display_perc = ScanaStudio.gui_get_value("speed_display_perc");
     ch_servo = ScanaStudio.gui_get_value("ch_servo");
     type = ScanaStudio.gui_get_value("type");
     pulse_min = ScanaStudio.gui_get_value("pulse_min");
@@ -101,6 +108,26 @@ function on_decode_signals(resume)
       if (trs.value == 0)
       {
           trs = ScanaStudio.trs_get_previous(ch_servo);
+      }
+      if (angle_disp_deg)
+      {
+          ScanaStudio.vac_create_channel(0, "°", "#118c8c", "Angle in deg");
+          ScanaStudio.vac_set_size(0, 5);
+      }
+      if (angle_disp_percent)
+      {
+          ScanaStudio.vac_create_channel(1, "%", "#118c8c", "Angle in percent");
+          ScanaStudio.vac_set_size(1, 5);
+      }
+      if (speed_display)
+      {
+          ScanaStudio.vac_create_channel(2, "sec/60°", "#118c8c", "Speed");
+          ScanaStudio.vac_set_size(2, 5);
+      }
+      if (speed_display_perc)
+      {
+          ScanaStudio.vac_create_channel(3, "%", "#118c8c", "Speed");
+          ScanaStudio.vac_set_size(3, 5);
       }
       //init global variables
       state_machine = 0;
@@ -157,11 +184,19 @@ function on_decode_signals(resume)
                       {
                           angle = ((pulse_length/sampling_rate) - pulse_min)*angle_range/total_range;
                           unit = " °";
+                          if (angle_disp_deg)
+                          {
+                              ScanaStudio.vac_append_sample(0, end_high, angle);
+                          }
                       }
                       else
                       {
                           angle = ((pulse_length/sampling_rate) - pulse_min)/total_range*100;
                           unit = " %";
+                          if (angle_disp_percent)
+                          {
+                              ScanaStudio.vac_append_sample(1, end_high, angle);
+                          }
                       }
                       state_machine = 2;
                   }
@@ -190,11 +225,19 @@ function on_decode_signals(resume)
                                   ScanaStudio.dec_item_add_content(angle.toFixed(2) + unit);
                                   ScanaStudio.dec_item_end();
                                   first_period = false;
+                                  if (speed_display)
+                                  {
+                                      ScanaStudio.vac_append_sample(2, trs.sample_index, speed);
+                                  }
                               }
                           }
                           else
                           {
                               speed = (start_high-last_start_high)/sampling_rate*60/(Math.abs(angle - last_angle));
+                              if (speed_display)
+                              {
+                                  ScanaStudio.vac_append_sample(2, trs.sample_index, speed);
+                              }
                               if (trs.value == 1)
                               {
                                   ScanaStudio.dec_item_new(ch_servo,start_high,trs.sample_index - 1);
@@ -202,6 +245,7 @@ function on_decode_signals(resume)
                                   {
                                       ScanaStudio.dec_item_add_content("Angle : " + angle.toFixed(2) + unit + "and speed : no movement");
                                       ScanaStudio.dec_item_add_content(angle.toFixed(2) + unit);
+
                                   }
                                   else
                                   {
@@ -217,6 +261,10 @@ function on_decode_signals(resume)
                       {
                           speed_percentage = (pulse_length/sampling_rate - (pulse_min + 0.5*total_range))/(0.5*total_range)*100;
                           ScanaStudio.dec_item_new(ch_servo,start_high,trs.sample_index - 1);
+                          if (speed_display_perc)
+                          {
+                              ScanaStudio.vac_append_sample(3, trs.sample_index, Math.abs(speed_percentage));
+                          }
                           if (speed_percentage < 0)
                           {
                               speed_percentage = Math.abs(speed_percentage);
@@ -257,7 +305,6 @@ function on_decode_signals(resume)
 //Trigger sequence GUI
 function on_draw_gui_trigger()
 {
-
   ScanaStudio.gui_add_new_selectable_containers_group("trig_alternative","Select trigger alternative");
     ScanaStudio.gui_add_new_container("Trigger on a specific angle ",true); // trig_alternative = 0
         ScanaStudio.gui_add_text_input("trig_angle","Trigger Angle (%)","35");
@@ -481,6 +528,9 @@ function on_build_demo_signals()
     var servo_builder = ScanaStudio.BuilderObject;
     var sample_rate = ScanaStudio.builder_get_sample_rate();
     var ch_servo = ScanaStudio.gui_get_value("ch_servo");
+    ScanaStudio.console_info_msg("samples_to_build " +samples_to_build);
+    ScanaStudio.console_info_msg("sample_rate " +sample_rate);
+    ScanaStudio.console_info_msg("ScanaStudio.builder_get_samples_acc(ch_servo) " +ScanaStudio.builder_get_samples_acc(ch_servo));
     var silence_period = samples_to_build/100;
     reload_dec_gui_values();
     var baud = 50;
@@ -497,6 +547,7 @@ function on_build_demo_signals()
     {
         servo_builder.put_rng_angle();
     }
+    ScanaStudio.console_info_msg("ScanaStudio.builder_get_samples_acc(ch_servo) " +ScanaStudio.builder_get_samples_acc(ch_servo));
 }
 
 
@@ -504,9 +555,8 @@ function on_build_demo_signals()
 function on_draw_gui_signal_builder()
 {
     var max_car_f = 500; //at least 10 samples per period
-    var max_mod_f = max_car_f/10; //At least 5 carrier periods per modulations period
-    var min_mod_f = 2 * ScanaStudio.builder_get_sample_rate()
-                    / ScanaStudio.builder_get_maximum_samples_count(); //at least 2 full periods
+    var max_mod_f = 50; //At least 5 carrier periods per modulations period
+    var min_mod_f = 10; //at least 2 full periods
     var def_mod_f = Math.round((max_mod_f + min_mod_f) / 2);
     var def_car_f = 50;
     if (min_mod_f >= max_mod_f)
