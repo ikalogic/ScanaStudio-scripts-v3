@@ -438,8 +438,8 @@ function on_pattern_generate() {
 
     /*VAR USED TO SEND CHUNKS*/
 
-    var samples_acc = 0;
-    var compteur = 0;
+    var cycles_accumulator = 0;
+    var chunk_counter = 0;
     var first_chunk = true;
     var number_of_cycles = ScanaStudio.gui_get_value("nb_of_cycles");
 
@@ -493,13 +493,13 @@ function on_pattern_generate() {
         );
     }
 
-    while (samples_acc <= number_of_cycles) {
-        samples_acc += 1;
+    while (cycles_accumulator <= number_of_cycles) {
+        cycles_accumulator += 1;
 
         /*SEND CHUNK*/
 
-        if (samples_acc > (ScanaStudio.builder_get_max_chunk_size() * 0.45)) {
-            number_of_cycles = number_of_cycles - samples_acc;
+        if (cycles_accumulator > (ScanaStudio.builder_get_max_chunk_size() * 0.45)) {
+            number_of_cycles = number_of_cycles - cycles_accumulator;
             if (first_chunk == true) //first chunk
             {
                 first_chunk = false;
@@ -510,10 +510,10 @@ function on_pattern_generate() {
                 ScanaStudio.console_info_msg("_done");
             }
 
-            compteur += 1;
+            chunk_counter += 1;
             ScanaStudio.builder_start_chunk();
-            ScanaStudio.console_info_msg("chunk number " + compteur + " sent");
-            samples_acc = 0;
+            ScanaStudio.console_info_msg("chunk number " + chunk_counter + " sent");
+            cycles_accumulator = 0;
 
         }
 
@@ -541,7 +541,7 @@ function on_pattern_generate() {
 
     /*SEND LAST CHUNK*/
 
-    if (compteur == 0) {
+    if (chunk_counter == 0) {
     }
     else {
         ScanaStudio.console_info_msg("builder_wait");
@@ -549,7 +549,6 @@ function on_pattern_generate() {
         ScanaStudio.console_info_msg("_done");
     }
     ScanaStudio.console_info_msg("ScanaStudio.builder_get_max_chunk_size() end " + (ScanaStudio.builder_get_max_chunk_size() * 0.95));
-    ScanaStudio.console_info_msg("samples_acc end " + (samples_acc));
     ScanaStudio.builder_start_chunk();
     ScanaStudio.console_info_msg("Last chunk sent");
     ScanaStudio.builder_wait_done(500);
