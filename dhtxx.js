@@ -6,13 +6,14 @@ The technology of a dedicated digital modules collection and the temperature and
 The sensor includes a resistive sense of wet component and an NTC temperature measurement device, and is connected with a high-performance 8-bit microcontroller.
 DHT22 has a larger range of temperature.
 </DESCRIPTION>
-<VERSION> 0.25 </VERSION>
+<VERSION> 0.26 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.26: fixed builder and added graphic display.
 V0.25: added sample points and hex view data.
 V0.24: fixed enforce timing constraint option.
 V0.23: Added enforce timing constraint option.
@@ -38,6 +39,9 @@ function on_draw_gui_decoder()
         ScanaStudio.gui_add_item_to_combo_box("Kelvin");
 
     ScanaStudio.gui_add_check_box("strict_timing","Enforce strict dth11/22 timming constraint", false);
+
+    ScanaStudio.gui_add_check_box("graph_temp","Display temperature on a graph", false);
+    ScanaStudio.gui_add_check_box("graph_hum","Display humidity on a graph", false);
 }
 
 //times constants according to https://akizukidenshi.com/download/ds/aosong/AM2302.pdf
@@ -103,6 +107,9 @@ var DHTxx = DHT11;
 var temperature_unit;
 var channel;
 var strict_timing;
+var graph_temp;
+var graph_hum;
+var tab_vac_id = [];
 
 var state_machine;
 var sampling_rate;
@@ -130,6 +137,10 @@ function reload_dec_gui_values()
 
     temperature_unit = Number(ScanaStudio.gui_get_value("tempUnit"));
     strict_timing = ScanaStudio.gui_get_value("strict_timing");
+    graph_temp = ScanaStudio.gui_get_value("graph_temp");
+    graph_hum = ScanaStudio.gui_get_value("graph_hum");
+    tab_vac_id.push(0);
+    tab_vac_id.push(0);
     ScanaStudio.set_script_instance_name(DHTxx.device_name + " on CH" + (ScanaStudio.gui_get_value("ch")+1).toString());
 }
 
@@ -397,6 +408,24 @@ function on_decode_signals(resume)
                                 ScanaStudio.dec_item_add_content("Relative Humidity : " + val + "%");
                                 ScanaStudio.dec_item_add_content("RH : " + val + "%");
                                 ScanaStudio.dec_item_add_content(val + "%");
+                                if(graph_hum)
+                                {
+                                    if(tab_vac_id[0] == 0)
+                                    {
+                                        tab_vac_id[0] = 1;
+                                        ScanaStudio.vac_create_channel(tab_vac_id[0],
+                                        "%",
+                                        "#0000FF",
+                                        "Relative Humidity");
+                                    }
+                                    ScanaStudio.vac_append_sample(tab_vac_id[0],
+                                    trs.sample_index,
+                                    val);
+                                }
+                                else
+                                {
+                                    ScanaStudio.vac_remove_channel(1);
+                                }
 
                                 for(i=0; i<bits_sample_t.length; i++)
                                 {
@@ -412,7 +441,7 @@ function on_decode_signals(resume)
                                         channel,
                                         start_of_step,
                                         trs.sample_index,
-                                        "Temp :",
+                                        "Hum :",
                                         val + unity + " is out of device range !",
                                         COLOR_T_WARNING,
                                         COLOR_C_WARNING);
@@ -458,21 +487,39 @@ function on_decode_signals(resume)
                                         val_mod = val;
                                         break;
 
-                                    case 1://Farenheit
-                                        val_mod + val + 273.15;
+                                    case 1://Kelvin
+                                        val_mod = val + 273.15;
                                         unity = "K";
                                         break;
 
-                                    case 2://Kelvin
+                                    case 2://Farenheit
                                         val_mod = (val * 9/5) + 32;
                                         unity = "°F";
                                         break;
                                 }
 
                                 ScanaStudio.dec_item_new(channel, start_of_step, trs.sample_index);
-                                ScanaStudio.dec_item_add_content("Temperature : " + val + unity);
-                                ScanaStudio.dec_item_add_content("T : " + val + unity);
-                                ScanaStudio.dec_item_add_content(val + unity);
+                                ScanaStudio.dec_item_add_content("Temperature : " + val_mod + unity);
+                                ScanaStudio.dec_item_add_content("T : " + val_mod + unity);
+                                ScanaStudio.dec_item_add_content(val_mod + unity);
+                                if(graph_temp)
+                                {
+                                    if(tab_vac_id[1] == 0)
+                                    {
+                                        tab_vac_id[1] = 2;
+                                        ScanaStudio.vac_create_channel(tab_vac_id[1],
+                                        unity,
+                                        "#FF0000",
+                                        "Relative Humidity");
+                                    }
+                                    ScanaStudio.vac_append_sample(tab_vac_id[1],
+                                    trs.sample_index,
+                                    val_mod);
+                                }
+                                else
+                                {
+                                    ScanaStudio.vac_remove_channel(2);
+                                }
 
                                 for(i=0; i<bits_sample_t.length; i++)
                                 {
@@ -491,7 +538,7 @@ function on_decode_signals(resume)
                                         start_of_step,
                                         trs.sample_index,
                                         "Temp :",
-                                        val + unity + " is out of device range !",
+                                        val_mod + unity + " is out of device range !",
                                         COLOR_T_WARNING,
                                         COLOR_C_WARNING);
                                 }
@@ -502,7 +549,7 @@ function on_decode_signals(resume)
                                         start_of_step,
                                         trs.sample_index,
                                         "Temp :",
-                                        val + unity,
+                                        val_mod + unity,
                                         COLOR_T_T,
                                         COLOR_C_T);
                                 }
@@ -610,7 +657,6 @@ ScanaStudio.BuilderObject =
         this.DHTxx = _DHTxx;
         this.ch = _ch;
         this.sample_rate = sample_rate;
-        ScanaStudio.builder_add_samples(this.ch, 1, 0);
     },
 
     put_silence : function (duration_s)
