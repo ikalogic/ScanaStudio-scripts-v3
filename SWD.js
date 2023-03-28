@@ -4,13 +4,14 @@
 SW-DP decoder according to the ARM Debug Interface Architecture Specification ADIv6.0.
 About the APACC, it can decode the MEM-AP and the JTAG-AP, others are consider unknown.
 </DESCRIPTION>
-<VERSION> 1.0 </VERSION>
+<VERSION> 1.1 </VERSION>
 <AUTHOR_NAME> Corentin Maravat </AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ikalogic SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V1.1:  Bug fix : variable declaration.
 V1.0:  Initial release.
 </RELEASE_NOTES>
 */
@@ -164,6 +165,7 @@ var rng_A = 0;
 var clk_lvl = 0;
 var rng_data = 0;
 var second_trn = false;
+var trs_io;
 
 
 //decoder state
@@ -193,7 +195,7 @@ function on_decode_signals(resume)
       {
           trs_clk = ScanaStudio.trs_get_next(ch_clk);
       }
-      var trs_io = ScanaStudio.trs_reset(ch_io);
+      trs_io = ScanaStudio.trs_reset(ch_io);
       trs_io = ScanaStudio.trs_get_next(ch_io);
       tmp_trs_sample_index = trs_io.sample_index;
       while( (tmp_trs_sample_index == trs_io.sample_index) && (ScanaStudio.trs_is_not_last(ch_io) == true) )
