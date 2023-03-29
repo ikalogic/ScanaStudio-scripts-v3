@@ -3,7 +3,7 @@
 <DESCRIPTION>
 JTAG (named after the Joint Test Action Group which codified it) is an industry standard for verifying designs and testing printed circuit boards after manufacture.
 </DESCRIPTION>
-<VERSION> 0.31 </VERSION>
+<VERSION> 0.40 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
@@ -11,6 +11,7 @@ JTAG (named after the Joint Test Action Group which codified it) is an industry 
 of the GNU General Public License GPLv3 </LICENSE>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <RELEASE_NOTES>
+V0.40: Fixed builder.
 V0.31: Updated description.
 V0.3: Change url and added packet view.
 V0.2: Added dec_item_end() for each dec_item_new().
@@ -1484,6 +1485,7 @@ ScanaStudio.BuilderObject = {
 
     set_output : function(tck_out, tms_out, tdi_out, tdo_out, samples_count)
     {
+        if(samples_count == 0) samples_count = 1;
         ScanaStudio.builder_add_samples(this.ch_tck, tck_out, samples_count);
         ScanaStudio.builder_add_samples(this.ch_tms, tms_out, samples_count);
         ScanaStudio.builder_add_samples(this.ch_tdi, tdi_out, samples_count);
