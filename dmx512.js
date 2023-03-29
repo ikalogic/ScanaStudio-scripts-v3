@@ -5,13 +5,14 @@ DMX512 (Digital Multiplex) is a standard for digital communication networks that
 Signals are based on UART.
 DMX512-A include RDM improvement that allow bidirectional communication between slaves devices and the master.
 </DESCRIPTION>
-<VERSION> 0.73 </VERSION>
+<VERSION> 0.74 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.74: Improved builder and decoder.
 V0.73: Fixed bug : error during live-mode.
 V0.72: Added discovery response decoding.
 V0.71: Fixed last decoded frame.
@@ -54,7 +55,8 @@ function on_draw_gui_decoder()
     ScanaStudio.gui_add_hidden_field("order", 0);
     ScanaStudio.gui_add_hidden_field("invert", 0);
     ScanaStudio.gui_add_hidden_field("hexview_endianness", 0);
-}
+
+}
 
 function on_eval_gui_decoder()
 {
@@ -210,6 +212,17 @@ function on_decode_signals (resume)
         {
             uart_items.splice(j,1);
         }
+    }
+
+    ScanaStudio.trs_reset(channel);
+    trs = ScanaStudio.trs_get_next(channel);
+    while(last_trs.sample_index > trs.sample_index)
+    {
+        if(!ScanaStudio.trs_is_not_last(channel))
+        {
+            return;
+        }
+        trs = ScanaStudio.trs_get_next(channel);
     }
 
     for (var j=0; (j<uart_items.length) && (!ScanaStudio.abort_is_requested()); j++)
@@ -1292,7 +1305,10 @@ ScanaStudio.BuilderObject = {
             duration_s = Math.random()*(CONST_t_break_max - CONST_t_break_min) + CONST_t_break_min;
         else
             duration_s = CONST_t_break_type;
-        ScanaStudio.builder_add_samples(this.channel, 0, duration_s * this.sample_rate);
+        var samples_count = duration_s*this.sample_rate;
+        if (samples_count == 0)
+            samples_count = 1;
+        ScanaStudio.builder_add_samples(this.channel, 0, samples_count);
     },
 
     put_MAB : function()
@@ -1302,7 +1318,10 @@ ScanaStudio.BuilderObject = {
             duration_s = Math.random()*(CONST_t_MAB_max - CONST_t_MAB_min) + CONST_t_MAB_min;
         else
             duration_s = CONST_t_MAB_type;
-        ScanaStudio.builder_add_samples(this.channel, 1, duration_s * this.sample_rate);
+        var samples_count = duration_s*this.sample_rate;
+        if (samples_count == 0)
+            samples_count = 1;
+        ScanaStudio.builder_add_samples(this.channel, 1, samples_count);
     },
 
     put_MTBF : function()
@@ -1312,7 +1331,10 @@ ScanaStudio.BuilderObject = {
             duration_s = Math.random()*(CONST_t_MTBF_max - CONST_t_MTBF_min) + CONST_t_MTBF_min;
         else
             duration_s = CONST_t_MTBF_min;
-        ScanaStudio.builder_add_samples(this.channel, 1, duration_s * this.sample_rate);
+        var samples_count = duration_s*this.sample_rate;
+        if (samples_count == 0)
+            samples_count = 1;
+        ScanaStudio.builder_add_samples(this.channel, 1, samples_count);
     },
 
     put_MTBP : function()
@@ -1322,7 +1344,10 @@ ScanaStudio.BuilderObject = {
             duration_s = Math.random()*(CONST_t_MTBP_max - CONST_t_MTBP_min) + CONST_t_MTBP_min;
         else
             duration_s = CONST_t_MTBP_min;
-        ScanaStudio.builder_add_samples(this.channel, 1, duration_s * this.sample_rate);
+        var samples_count = duration_s*this.sample_rate;
+        if (samples_count == 0)
+            samples_count = 1;
+        ScanaStudio.builder_add_samples(this.channel, 1, samples_count);
     },
 
     put_bit : function(bit_val)
@@ -1332,7 +1357,10 @@ ScanaStudio.BuilderObject = {
             duration_s = ((Math.random()*2 - 1) * CONST_time_tolerance + 1) * CONST_t_bit; // CONST_t_bit +/- CONST_time_tolerance
         else
             duration_s = CONST_t_bit;
-        ScanaStudio.builder_add_samples(this.channel, bit_val, duration_s * this.sample_rate);
+        var samples_count = duration_s*this.sample_rate;
+        if (samples_count == 0)
+            samples_count = 1;
+        ScanaStudio.builder_add_samples(this.channel, bit_val, samples_count);
     },
 
     put_word : function(byte_val)
