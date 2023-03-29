@@ -3,13 +3,14 @@
 <DESCRIPTION>
  Frequency modulation logic signal generator
  </DESCRIPTION>
-<VERSION> 0.3 </VERSION>
-<AUTHOR_NAME> Camille Perrin</AUTHOR_NAME>
+<VERSION> 0.4 </VERSION>
+<AUTHOR_NAME> Camille Perrin </AUTHOR_NAME>
 <AUTHOR_URL> Your mail </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.4:  Improved vac.
 V0.3:  Now can be used by SP1000G series (Pattern generator).
 V0.2:  Fixed mistakes in error messages.
 V0.1:  Initial release.
@@ -496,6 +497,10 @@ function on_decode_signals(resume)
       {
           ScanaStudio.vac_create_channel(0, "Hz", "#118c8c", "Frequency");
           ScanaStudio.vac_set_size(0, 5);
+      }
+      else
+      {
+        ScanaStudio.vac_remove_channel(0);
       }
   }
 
