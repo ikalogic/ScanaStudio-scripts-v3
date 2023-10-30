@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Build signals from a CSV file.
 </DESCRIPTION>
-<VERSION> 0.3 </VERSION>
-<AUTHOR_NAME> Camille Perrin</AUTHOR_NAME>
+<VERSION> 0.4 </VERSION>
+<AUTHOR_NAME> Camille Perrin, I. KAMAL</AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/CSV-importer-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.4:  Fix bug when parsing CSV file with "1 Sample per line" structure.
 V0.3:  Now can be used by SP1000G series (Pattern generator).
 V0.2:  Improved separator and time format and last transition.
 V0.1:  Initial release.
@@ -20,15 +21,11 @@ V0.1:  Initial release.
 
 var ENCODING = "UTF-8";
 
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-/*                                                                        SIGNAL BUILDER                                                                         */
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-
-/*-------------------------------------------------------------------------------------------------------------------------------------------------------*/
-/*CONSTRUCTION OF THE "WELCOME MENU" WHEN THE SCRIPT IS LAUNCHED ON SCANASTUDIO : THE USER IS ASKED TO SET SOME VALUES, WHICH WILL BE USED IN THIS SCRIPT*/
-/*-------------------------------------------------------------------------------------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------------------------------*/
+/*                      SIGNAL BUILDER                                                              */
+/*--------------------------------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------------------------------*/
 
 function on_draw_gui_signal_builder()
 {
@@ -47,7 +44,9 @@ function on_draw_gui_signal_builder()
           ScanaStudio.gui_add_engineering_form_input_box("csv_period","Sampling period",1e-9,1,"100e-6","s");
       ScanaStudio.gui_end_container();
       ScanaStudio.gui_add_new_container("1 or more transitions per line",true);
-          ScanaStudio.gui_add_info_label("A column in the CSV file should contain absolute time (expressed in seconds), other columns should contain one or more transition(s), e.g.:\n0.123 ; 0 ; 1 ; 1 ; 0\n0.241 ; 0 ; 0 ; 1 ; 0");
+          ScanaStudio.gui_add_info_label("A column in the CSV file should contain absolute time (expressed in seconds), "+
+          "other columns should contain one or more transition(s), e.g.:\n"+
+          "0.123 ; 0 ; 1 ; 1 ; 0\n0.241 ; 0 ; 0 ; 1 ; 0");
           ScanaStudio.gui_add_combo_box("col_time","Time column");
           for (col = 0; col <= ScanaStudio.get_device_channels_count(); col++)
           {
@@ -151,7 +150,8 @@ function on_eval_gui_signal_builder()
     var delta_samples = Math.round(delta_time*sample_rate);
     if (delta_samples == 0)
     {
-        return ("CSV Sampling period too high for the selected device sampling rate. Please reduce CSV sampling rate or increase device sampling rate.");
+        return ("CSV Sampling period too high for the selected device sampling rate." +
+        " Please reduce CSV sampling rate or increase device sampling rate.");
     }
 
     /*INDICATED WHICH CHANNEL IS CLOSED/OPEN*/
@@ -164,16 +164,13 @@ function on_eval_gui_signal_builder()
         col_ch = ScanaStudio.gui_get_value("col_ch" + ch) - 1; //col_ch = selected column for a channel
         if (col_ch ==-1)                                       //if for a channel, column "not imported", col_ch=-1
         {
-            ScanaStudio.console_info_msg("channel " + (ch+1) + " is closed");
         }
         else
         {
-            ScanaStudio.console_info_msg("channel " + (ch+1) + " is opened");
             number_of_opened_channels+=1;
         }
     }
 
-    ScanaStudio.console_info_msg("Number of opened channels : " + number_of_opened_channels);
 
     return ""; //All good.
 }
@@ -185,7 +182,6 @@ function on_eval_gui_signal_builder()
 function on_build_signals()
 {
     /*USE THE FUNCTION BELOW TO GET NUMBER OF SAMPLES TO BE BUILT*/
-
     var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
     var sample_rate = ScanaStudio.builder_get_sample_rate();
     var max_time = samples_to_build / sample_rate;
@@ -314,10 +310,12 @@ function on_build_signals()
 
           for (ch = 0; ch < ScanaStudio.get_device_channels_count(); ch++)
           {
-
-              if (ch_map[ch]==-1)
+              sample_val = parseInt(cols[ch_map[ch]]);
+              if ((ch_map[ch]==-1)||(sample_val==NaN))
               {
-                  sample_val = parseInt(cols[ch_map[ch]]);
+              }
+              else
+              {
                   ScanaStudio.builder_add_samples(ch,sample_val,delta_samples);
               }
           }
@@ -342,15 +340,11 @@ function on_build_signals()
     }
 }
 
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-/*                                                                       PATTERN GENERATOR                                                                       */
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-/*---------------------------------------------------------------------------------------------------------------------------------------------------------------*/
-
-/*-------------------------------------------------------------------------------------------------------------------------------------------------------*/
-/*CONSTRUCTION OF THE "WELCOME MENU" WHEN THE SCRIPT IS LAUNCHED ON SCANASTUDIO : THE USER IS ASKED TO SET SOME VALUES, WHICH WILL BE USED IN THIS SCRIPT*/
-/*-------------------------------------------------------------------------------------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------------------------------*/
+/*                          PATTERN GENERATOR            */
+/*--------------------------------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------------------------------*/
 
 function on_draw_gui_pattern_generator()
 {
@@ -490,7 +484,8 @@ function on_eval_gui_pattern_generator()
     var delta_samples = Math.round(delta_time*sample_rate);
     if (delta_samples == 0)
     {
-        return ("CSV Sampling period too high for the selected device sampling rate. Please reduce CSV sampling rate or increase device sampling rate.");
+        return ("CSV Sampling period too high for the selected device sampling rate. "+
+        "Please reduce CSV sampling rate or increase device sampling rate.");
     }
 
     /*INDICATED WHICH CHANNELS IS CLOSED/OPEN*/
@@ -715,7 +710,7 @@ function on_pattern_generate()
           var delta_samples = Math.round(delta_time*sample_rate);
           samples_acc += 1;
 
-          if (samples_acc>ScanaStudio.builder_get_max_chunk_size()*0.45)
+          if (samples_acc > ScanaStudio.builder_get_max_chunk_size()*0.45)
           {
               if(first_chunk==true) //first chunk
               {
