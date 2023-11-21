@@ -3,13 +3,14 @@
 <DESCRIPTION>
 PWM (Pulse Width Modulation) module. Can be used to decode and generate PWM signals.
 </DESCRIPTION>
-<VERSION> 0.5 </VERSION>
-<AUTHOR_NAME> Ibrahim Kamal, Camille Perrin</AUTHOR_NAME>
+<VERSION> 0.6 </VERSION>
+<AUTHOR_NAME> Ibrahim Kamal, Camille Perrin, Nicolas BASTIT</AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
-<COPYRIGHT> Copyright Camille </COPYRIGHT>
+<COPYRIGHT> Copyright Ikalogic </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.6: Fixed infinite generation for SP1000G series.
 v0.5: Now can be used by SP1000G series (Pattern generator).
 v0.4: Correct the Builder (phase shift (fixed duty) and modulation phase for triangle and sawtooth)
 v0.3: Added phase shift option for fixed duty cycle generator.
@@ -458,92 +459,129 @@ function on_pattern_generate() {
             ScanaStudio.gui_get_value("simple_pwm_val") / 100,//duty_max
             0
         );
+        // ScanaStudio.builder_set_repeat_count(number_of_cycles);
+        pwm_builder.build_cycle_sawtooth();
     }
-    else if (mod_type == 0) //Sine
+    else 
     {
-        pwm_builder.configure_sine(
-            channel, //channel
-            ScanaStudio.gui_get_value("f_mod"), //modulation_freq
-            ScanaStudio.gui_get_value("ph_mod"), //modulation_phase
-            ScanaStudio.gui_get_value("freq_carrier"), //carrier_f
-            ScanaStudio.gui_get_value("duty_min") / 100,//duty_min
-            ScanaStudio.gui_get_value("duty_max") / 100 //duty_max
-        );
-    }
-    else if (mod_type == 1) //Triangle
-    {
-        pwm_builder.configure_triangle(
-            channel, //channel
-            ScanaStudio.gui_get_value("f_mod"), //modulation_freq
-            ScanaStudio.gui_get_value("ph_mod"), //modulation_phase
-            ScanaStudio.gui_get_value("freq_carrier"), //carrier_f
-            ScanaStudio.gui_get_value("duty_min") / 100,//duty_min
-            ScanaStudio.gui_get_value("duty_max") / 100 //duty_max
-        );
-    }
-    else if (mod_type == 2) //SawTooth
-    {
-        pwm_builder.configure_sawtooth(
-            channel, //channel
-            ScanaStudio.gui_get_value("f_mod"), //modulation_freq
-            ScanaStudio.gui_get_value("ph_mod"), //modulation_phase
-            ScanaStudio.gui_get_value("freq_carrier"), //carrier_f
-            ScanaStudio.gui_get_value("duty_min") / 100,//duty_min
-            ScanaStudio.gui_get_value("duty_max") / 100 //duty_max
-        );
-    }
-
-    while (cycles_accumulator <= number_of_cycles) {
-        cycles_accumulator += 1;
-
-        /*SEND CHUNK*/
-
-        if (cycles_accumulator > (ScanaStudio.builder_get_max_chunk_size() * 0.45)) {
-            number_of_cycles = number_of_cycles - cycles_accumulator;
-            if (first_chunk == true) //first chunk
-            {
-                first_chunk = false;
-            }
-            else {
-                ScanaStudio.console_info_msg("builder_wait");
-                ScanaStudio.builder_wait_done(500);
-                ScanaStudio.console_info_msg("_done");
-            }
-
-            chunk_counter += 1;
-            ScanaStudio.builder_start_chunk();
-            ScanaStudio.console_info_msg("chunk number " + chunk_counter + " sent");
-            cycles_accumulator = 0;
-
+        if (mod_type == 0) //Sine
+        {
+            pwm_builder.configure_sine(
+                channel, //channel
+                ScanaStudio.gui_get_value("f_mod"), //modulation_freq
+                ScanaStudio.gui_get_value("ph_mod"), //modulation_phase
+                ScanaStudio.gui_get_value("freq_carrier"), //carrier_f
+                ScanaStudio.gui_get_value("duty_min") / 100,//duty_min
+                ScanaStudio.gui_get_value("duty_max") / 100 //duty_max
+            );
+        }
+        else if (mod_type == 1) //Triangle
+        {
+            pwm_builder.configure_triangle(
+                channel, //channel
+                ScanaStudio.gui_get_value("f_mod"), //modulation_freq
+                ScanaStudio.gui_get_value("ph_mod"), //modulation_phase
+                ScanaStudio.gui_get_value("freq_carrier"), //carrier_f
+                ScanaStudio.gui_get_value("duty_min") / 100,//duty_min
+                ScanaStudio.gui_get_value("duty_max") / 100 //duty_max
+            );
+        }
+        else if (mod_type == 2) //SawTooth
+        {
+            pwm_builder.configure_sawtooth(
+                channel, //channel
+                ScanaStudio.gui_get_value("f_mod"), //modulation_freq
+                ScanaStudio.gui_get_value("ph_mod"), //modulation_phase
+                ScanaStudio.gui_get_value("freq_carrier"), //carrier_f
+                ScanaStudio.gui_get_value("duty_min") / 100,//duty_min
+                ScanaStudio.gui_get_value("duty_max") / 100 //duty_max
+            );
         }
 
-        /*BUILD SAMPLE DEPENDING MODULATION TYPE SELECTED*/
-
-        else {
-            if (gen_type_group == 0) {
-                pwm_builder.build_cycle_sawtooth();
-            }
-            else if (mod_type == 0) //Sine
+        if((ScanaStudio.gui_get_value("freq_carrier")/ScanaStudio.gui_get_value("f_mod")) <= (ScanaStudio.builder_get_max_chunk_size() * 0.45))
+        {
+            for(var i=0; (i<(ScanaStudio.gui_get_value("freq_carrier")/ScanaStudio.gui_get_value("f_mod")))&&(ScanaStudio.abort_is_requested() == false); i++)
             {
-                pwm_builder.build_cycle_sine();
-            }
-            else if (mod_type == 1) //Triangle
-            {
-                pwm_builder.build_cycle_triangle();
-            }
-            else if (mod_type == 2) //SawTooth
-            {
-                pwm_builder.build_cycle_sawtooth();
+                if (gen_type_group == 0) 
+                {
+                    pwm_builder.build_cycle_sawtooth();
+                }
+                else if (mod_type == 0) //Sine
+                {
+                    pwm_builder.build_cycle_sine();
+                }
+                else if (mod_type == 1) //Triangle
+                {
+                    pwm_builder.build_cycle_triangle();
+                }
+                else if (mod_type == 2) //SawTooth
+                {
+                    pwm_builder.build_cycle_sawtooth();
+                }
             }
         }
-
+        else
+        {
+            while ((cycles_accumulator <= number_of_cycles) && (ScanaStudio.abort_is_requested() == false))
+            {
+                cycles_accumulator += 1;
+    
+                /*SEND CHUNK*/
+    
+                if (cycles_accumulator > (ScanaStudio.builder_get_max_chunk_size() * 0.45)) 
+                {
+                    number_of_cycles = number_of_cycles - cycles_accumulator;
+                    if (first_chunk == true) //first chunk
+                    {
+                        first_chunk = false;
+                    }
+                    else 
+                    {
+                        ScanaStudio.console_info_msg("builder_wait");
+                        ScanaStudio.builder_wait_done(500);
+                        ScanaStudio.console_info_msg("_done");
+                    }
+    
+                    chunk_counter += 1;
+                    ScanaStudio.builder_start_chunk();
+                    ScanaStudio.console_info_msg("chunk number " + chunk_counter + " sent");
+                    cycles_accumulator = 0;
+                }
+    
+                /*BUILD SAMPLE DEPENDING MODULATION TYPE SELECTED*/
+    
+                else 
+                {
+                    if (gen_type_group == 0) 
+                    {
+                        pwm_builder.build_cycle_sawtooth();
+                    }
+                    else if (mod_type == 0) //Sine
+                    {
+                        pwm_builder.build_cycle_sine();
+                    }
+                    else if (mod_type == 1) //Triangle
+                    {
+                        pwm_builder.build_cycle_triangle();
+                    }
+                    else if (mod_type == 2) //SawTooth
+                    {
+                        pwm_builder.build_cycle_sawtooth();
+                    }
+                }
+    
+            }
+        }
     }
 
     /*SEND LAST CHUNK*/
 
-    if (chunk_counter == 0) {
+    if (chunk_counter == 0) 
+    {
+        ScanaStudio.builder_set_repeat_count(number_of_cycles);
     }
-    else {
+    else 
+    {
         ScanaStudio.console_info_msg("builder_wait");
         ScanaStudio.builder_wait_done(500);
         ScanaStudio.console_info_msg("_done");
@@ -555,7 +593,8 @@ function on_pattern_generate() {
 
 }
 
-function get_builder_object() {
+function get_builder_object() 
+{
     var builder = ScanaStudio.BuilderObject;
     return builder;
 }
