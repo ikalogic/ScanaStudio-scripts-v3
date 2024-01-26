@@ -3,13 +3,14 @@
 <DESCRIPTION>
 PWM (Pulse Width Modulation) module. Can be used to decode and generate PWM signals.
 </DESCRIPTION>
-<VERSION> 0.6 </VERSION>
+<VERSION> 0.7 </VERSION>
 <AUTHOR_NAME> Ibrahim Kamal, Camille Perrin, Nicolas BASTIT</AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ikalogic </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.7: Fixed demo generation.
 v0.6: Fixed infinite generation for SP1000G series.
 v0.5: Now can be used by SP1000G series (Pattern generator).
 v0.4: Correct the Builder (phase shift (fixed duty) and modulation phase for triangle and sawtooth)
@@ -121,23 +122,23 @@ function on_build_demo_signals() {
     //Use the function below to get the number of samples to be built
     var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
     var sampling_rate = ScanaStudio.builder_get_sample_rate();
+    var ch_demo = ScanaStudio.gui_get_value("pwm_ch");
     var mod_f = sampling_rate / (samples_to_build / 100);
     if (mod_f < 1) mod_f = 1;
     var car_f = mod_f * 100;
     var pwm_builder = ScanaStudio.BuilderObject;
+
     pwm_builder.configure_sine(
-        ScanaStudio.gui_get_value("pwm_ch"), //channel
+        ch_demo, //channel
         mod_f, //modulation_freq
         0, //modulation_phase
         car_f, //carrier_f
         0.1,//duty_min
         0.9); //duty_max
 
-    ScanaStudio.builder_add_samples(1, 1, samples_to_build);
-
-    while (ScanaStudio.builder_get_samples_acc(0) < samples_to_build) {
+    while (ScanaStudio.builder_get_samples_acc(ch_demo) < samples_to_build) {
         pwm_builder.build_cycle_sine();
-        ScanaStudio.report_progress(ScanaStudio.builder_get_samples_acc(0) * 100 / samples_to_build);
+        ScanaStudio.report_progress(ScanaStudio.builder_get_samples_acc(ch_demo) * 100 / samples_to_build);
         if (ScanaStudio.abort_is_requested()) {
             break;
         }
