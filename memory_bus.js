@@ -3,7 +3,7 @@
 <DESCRIPTION>
 This script decodes memory bus transactions, showing address, data and control lines.
 </DESCRIPTION>
-<VERSION> 0.0 </VERSION>
+<VERSION> 0.1 </VERSION>
 <AUTHOR_NAME> Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
