@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Highly configurable SPI bus decoder
 </DESCRIPTION>
-<VERSION> 1.81 </VERSION>
+<VERSION> 1.82 </VERSION>
 <AUTHOR_NAME>  Vladislav Kosinov, Ibrahim Kamal </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/SPI-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v1.82: Fix a bug in "trigger on specific word".
 v1.81: Fix a problem that caused error in decoding with CPHA = 1 (introduced by V1.80)
 v1.80: Script now uses the much faster "sync_decode" function (2 to 3 times faster decoding).
 v1.79: Fixed a bug that force unused channels to clear their name.
@@ -639,8 +640,8 @@ function on_build_trigger()
 {
   //ScanaStudio.console_info_msg("on_build_trigger");
   // read trigger GUI values
-  var alt_any_byte = ScanaStudio.gui_get_value("alt_any_byte");
-  var alt_specific_byte = ScanaStudio.gui_get_value("alt_specific_byte");
+  var alt_any_byte = (ScanaStudio.gui_get_value("trig_alternative") == 0);
+  var alt_specific_byte = (ScanaStudio.gui_get_value("trig_alternative") == 1);
   var trig_channel = ScanaStudio.gui_get_value("trig_channel");
   var trig_byte = ScanaStudio.gui_get_value("trig_byte");
   var byte_pos = ScanaStudio.gui_get_value("byte_pos") ;
