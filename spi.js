@@ -342,6 +342,7 @@ function on_decode_signals(resume) {
                 if (ignore_cs) {
                     //search for an idle spot on the CLK signal
                     trs_clk = ScanaStudio.trs_get_next(ch_clk);
+                    trs_cs = trs_clk; //just to avoid "undefined" errors
                     if (last_clk_edge != -1) {
                         if ((trs_clk.sample_index - last_clk_edge) > clk_timeout_samples) {
                             // ScanaStudio.console_info_msg("cs1" /* string */, last_clk_edge /* int [default = -1] */);
