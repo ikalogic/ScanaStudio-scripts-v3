@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Highly configurable SPI bus decoder
 </DESCRIPTION>
-<VERSION> 1.82 </VERSION>
+<VERSION> 1.83 </VERSION>
 <AUTHOR_NAME>  Vladislav Kosinov, Ibrahim Kamal </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/SPI-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v1.83: Add option to decode without CS (Slave Select) line.
 v1.82: Fix a bug in "trigger on specific word".
 v1.81: Fix a problem that caused error in decoding with CPHA = 1 (introduced by V1.80)
 v1.80: Script now uses the much faster "sync_decode" function (2 to 3 times faster decoding).
@@ -121,6 +122,20 @@ function on_draw_gui_decoder() {
     ScanaStudio.gui_add_item_to_combo_box("Ignore MISO line");
     ScanaStudio.gui_end_tab();
 
+    ScanaStudio.gui_add_new_tab("Ignore Chip Select / Slave select", false);
+    ScanaStudio.gui_add_info_label("If CS line is not available, the decoder\n"
+        + "can use a timeout in the clock line instead to detect new packet.\n"
+    );
+    ScanaStudio.gui_add_check_box("ignore_cs", "Ignore CS and rely on timeout below", false);
+    ScanaStudio.gui_add
+    ScanaStudio.gui_add_engineering_form_input_box("clk_timeout" /* string */,
+        "Max idle clock time (timeout)" /* string */,
+        1e-6 /* float */,
+        100 /* float */,
+        5e-6 /* float */,
+        "s" /* string */);
+    ScanaStudio.gui_end_tab();
+
     if (ScanaStudio.get_device_channels_count() > 4) {
         ScanaStudio.gui_add_new_tab("Dual/Quad IO", false);
     }
@@ -202,7 +217,7 @@ var sampling_rate;
 var state_machine
 var trs_cs, trs_mosi, trs_miso, trs_clk;
 var trs_io2, trs_io3;
-var cs_start_sample, cs_end_sample;
+var cs_start_sample, cs_end_sample, next_cs_start_sample;
 var data_mosi, data_miso;
 var data_dual, data_quad; //decoded data word
 var miso_bit, mosi_bit; //bit value
@@ -219,10 +234,13 @@ var data_channels = [];
 var quad_channels = [];
 var word_start_sample;
 var spi_simple, spi_dual, spi_quad;
+var last_clk_edge;
+var clk_timeout_samples;
 // Gui variables
 var ch_mosi, ch_miso, ch_clk, ch_cs, bit_order;
 var format_hex, format_ascii, format_dec, format_bin;
 var cpol, cpha, nbits, cspol, opt, ch_io2, ch_io3;
+var ignore_cs, clk_timeout;
 
 function on_decode_signals(resume) {
     var margin;
@@ -237,6 +255,8 @@ function on_decode_signals(resume) {
         state_machine = 0;
         frame_counter = 0;
         cs_start_sample = 0;
+        cs_end_sample = 0;
+        next_cs_start_sample = 0;
         sampling_rate = ScanaStudio.get_capture_sample_rate();
         // read GUI values using
         ch_mosi = ScanaStudio.gui_get_value("ch_mosi");
@@ -257,6 +277,8 @@ function on_decode_signals(resume) {
         opt = ScanaStudio.gui_get_value("opt");
         dual_io = ScanaStudio.gui_get_value("dual_io");
         quad_io = ScanaStudio.gui_get_value("quad_io");
+        ignore_cs = ScanaStudio.gui_get_value("ignore_cs");
+        clk_timeout = ScanaStudio.gui_get_value("clk_timeout");
 
         //set clock active edge
         if ((cpol == 0) && (cpha == 0)) clk_active_edge = 1;
@@ -297,6 +319,9 @@ function on_decode_signals(resume) {
             quad_channels.push(ch_io2);
             quad_channels.push(ch_io3);
         }
+
+        last_clk_edge = -1;
+        clk_timeout_samples = sampling_rate * clk_timeout;
     }
 
     while (ScanaStudio.abort_is_requested() == false) {
@@ -312,35 +337,57 @@ function on_decode_signals(resume) {
         }*/
         if (!ScanaStudio.trs_is_not_last(ch_clk)) break;
 
-
         switch (state_machine) {
             case 0: //search for CS leading edge
-                trs_cs = ScanaStudio.trs_get_next(ch_cs);
-                if ((trs_cs.value == cspol) && (trs_cs.sample_index > 0)) //leading edge found!
-                {
-                    cs_start_sample = trs_cs.sample_index;
-                    //goto next state
-                    state_machine++;
+                if (ignore_cs) {
+                    //search for an idle spot on the CLK signal
+                    trs_clk = ScanaStudio.trs_get_next(ch_clk);
+                    if (last_clk_edge != -1) {
+                        if ((trs_clk.sample_index - last_clk_edge) > clk_timeout_samples) {
+                            // ScanaStudio.console_info_msg("cs1" /* string */, last_clk_edge /* int [default = -1] */);
+                            // ScanaStudio.console_info_msg("cs2" /* string */, trs_clk.sample_index /* int [default = -1] */);
+                            cs_end_sample = last_clk_edge;
+                            cs_start_sample = next_cs_start_sample;
+                            next_cs_start_sample = trs_clk.sample_index - 1;
+                            state_machine++;
+                            // ScanaStudio.console_info_msg("cs_start_sample" /* string */, cs_start_sample /* int [default = -1] */);
+                            // ScanaStudio.console_info_msg("cs_end_sample" /* string */, cs_end_sample /* int [default = -1] */);
+                        }
+                    }
+                    last_clk_edge = trs_clk.sample_index;
+                }
+                else {
+                    trs_cs = ScanaStudio.trs_get_next(ch_cs);
+                    if ((trs_cs.value == cspol) && (trs_cs.sample_index > 0)) //leading edge found!
+                    {
+                        cs_start_sample = trs_cs.sample_index;
+                        //goto next state
+                        state_machine++;
+                    }
                 }
                 break;
             case 1: //wait for end of CS transition
-                trs_cs = ScanaStudio.trs_get_next(ch_cs);
-                if (trs_cs.value != cspol) //Lagging edge found!
+                if (ignore_cs == false)
+                    trs_cs = ScanaStudio.trs_get_next(ch_cs);
+                if ((trs_cs.value != cspol) || (ignore_cs == true)) //Lagging edge found!
                 {
-                    cs_end_sample = trs_cs.sample_index;
+                    if (ignore_cs == false)
+                        cs_end_sample = trs_cs.sample_index;
                     // ScanaStudio.console_info_msg("cs_start_sample=" + cs_start_sample);
                     // ScanaStudio.console_info_msg("cs_end_sample=" + cs_end_sample);
 
-                    if (!ScanaStudio.is_pre_decoding()) {
-                        if (cs_start_sample == 0) {
-                            //ScanaStudio.console_info_msg("CS warning");
-                            ScanaStudio.dec_item_new(ch_cs, cs_start_sample, cs_end_sample);
-                            ScanaStudio.dec_item_emphasize_warning(); //Display this item as a warning
-                            ScanaStudio.dec_item_add_content("Warning: CS leading edge is missing!");
-                            ScanaStudio.dec_item_add_content("Warning: CS!");
-                            ScanaStudio.dec_item_add_content("!CS!");
-                            ScanaStudio.dec_item_add_content("!");
-                            ScanaStudio.dec_item_end();
+                    if (ignore_cs == false) {
+                        if (!ScanaStudio.is_pre_decoding()) {
+                            if (cs_start_sample == 0) {
+                                //ScanaStudio.console_info_msg("CS warning");
+                                ScanaStudio.dec_item_new(ch_cs, cs_start_sample, cs_end_sample);
+                                ScanaStudio.dec_item_emphasize_warning(); //Display this item as a warning
+                                ScanaStudio.dec_item_add_content("Warning: CS leading edge is missing!");
+                                ScanaStudio.dec_item_add_content("Warning: CS!");
+                                ScanaStudio.dec_item_add_content("!CS!");
+                                ScanaStudio.dec_item_add_content("!");
+                                ScanaStudio.dec_item_end();
+                            }
                         }
                     }
 
