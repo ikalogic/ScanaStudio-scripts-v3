@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Highly configurable SPI bus decoder
 </DESCRIPTION>
-<VERSION> 1.84 </VERSION>
+<VERSION> 1.85 </VERSION>
 <AUTHOR_NAME>  Vladislav Kosinov, Ibrahim Kamal </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/SPI-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v1.85: Fix bug related to decode without CS (Slave Select) line.
 v1.84: Fix bug related to decode without CS (Slave Select) line.
 v1.83: Add option to decode without CS (Slave Select) line.
 v1.82: Fix a bug in "trigger on specific word".
@@ -352,7 +353,7 @@ function on_decode_signals(resume) {
                         if ((trs_clk.sample_index - last_clk_edge) > clk_timeout_samples) {
                             // ScanaStudio.console_info_msg("cs1" /* string */, last_clk_edge /* int [default = -1] */);
                             // ScanaStudio.console_info_msg("cs2" /* string */, trs_clk.sample_index /* int [default = -1] */);
-                            cs_end_sample = last_clk_edge;
+                            cs_end_sample = last_clk_edge + 1;
                             cs_start_sample = next_cs_start_sample;
                             next_cs_start_sample = trs_clk.sample_index - 1;
                             state_machine++;
