@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Highly configurable SPI bus decoder
 </DESCRIPTION>
-<VERSION> 1.83 </VERSION>
+<VERSION> 1.84 </VERSION>
 <AUTHOR_NAME>  Vladislav Kosinov, Ibrahim Kamal </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/SPI-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v1.84: Fix bug related to decode without CS (Slave Select) line.
 v1.83: Add option to decode without CS (Slave Select) line.
 v1.82: Fix a bug in "trigger on specific word".
 v1.81: Fix a problem that caused error in decoding with CPHA = 1 (introduced by V1.80)
@@ -322,11 +323,15 @@ function on_decode_signals(resume) {
 
         last_clk_edge = -1;
         clk_timeout_samples = sampling_rate * clk_timeout;
+        // ScanaStudio.console_info_msg("clk_timeout_samples " + clk_timeout_samples /* string */);
+        // ScanaStudio.console_info_msg("Ignore_cs = " + ignore_cs);
     }
 
     while (ScanaStudio.abort_is_requested() == false) {
         //Ensure there are still transitions to be fetched
-        if (!ScanaStudio.trs_is_not_last(ch_cs)) break;
+        if (ignore_cs == false) {
+            if (!ScanaStudio.trs_is_not_last(ch_cs)) break;
+        }
         /*if (opt != 1)
         {
             if (!ScanaStudio.trs_is_not_last(ch_miso)) break;
