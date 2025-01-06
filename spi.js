@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Highly configurable SPI bus decoder
 </DESCRIPTION>
-<VERSION> 1.85 </VERSION>
+<VERSION> 1.86 </VERSION>
 <AUTHOR_NAME>  Vladislav Kosinov, Ibrahim Kamal </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/SPI-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v1.86: Fix bug related to trigger with various CPOL/CPHA options.
 v1.85: Fix bug related to decode without CS (Slave Select) line.
 v1.84: Fix bug related to decode without CS (Slave Select) line.
 v1.83: Add option to decode without CS (Slave Select) line.
@@ -688,6 +689,9 @@ function on_build_trigger() {
         spi_step.cs = "1"; //High level
     }
 
+    spi_step.mosi = "X";
+    spi_step.miso = "X";
+
     if (cpol == 0)				// cpol: 0 -  clk inactive low, 1 - clk inactive high
     {
         if (cpha == 0)			// cpha: 0 - data samples on leading edge, 1 - data samples on trailing edge
@@ -695,14 +699,20 @@ function on_build_trigger() {
             spi_step.clk = "R";
         }
         else {
+            //Create a push initial step
+            spi_step.clk = "R";
+            spi_trig_steps.push(new SpiTrigStep(spi_step.mosi, spi_step.miso, spi_step.clk, spi_step.cs));
             spi_step.clk = "F";
         }
     }
-    else {
+    else {                  //cpol == 1 = inactive high
         if (cpha == 0) {
             spi_step.clk = "F";
         }
         else {
+            //Create a push initial step
+            spi_step.clk = "F";
+            spi_trig_steps.push(new SpiTrigStep(spi_step.mosi, spi_step.miso, spi_step.clk, spi_step.cs));
             spi_step.clk = "R";
         }
     }
@@ -710,9 +720,7 @@ function on_build_trigger() {
     //ScanaStudio.console_info_msg("alt_any_byte=" + alt_any_byte);
     //ScanaStudio.console_info_msg("alt_specific_byte=" + alt_specific_byte);
     //ScanaStudio.console_warning_msg("trig_channel=" + trig_channel);
-    if (alt_any_byte) {
-        spi_step.mosi = "X";
-        spi_step.miso = "X";
+    if (alt_any_byte) {        
         for (k = 0; k <= (byte_pos); k++) {
             for (i = 0; i < nbits; i++)	// nbits: 1 - 128 bits in data byte
             {
