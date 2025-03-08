@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Modbus enables communication among many devices connected to the same network, for example, a system that measures temperature and humidity and communicates the results to a computer. Modbus is often used to connect a supervisory computer with a remote terminal unit (RTU) in supervisory control and data acquisition (SCADA) systems. Many of the data types are named from industry usage of Ladder logic and its use in driving relays: a single-bit physical output is called a coil, and a single-bit physical input is called a discrete input or a contact.
 </DESCRIPTION>
-<VERSION> 0.31 </VERSION>
+<VERSION> 0.32 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.32: Fix compatibility issue with UART decoder.
 V0.31: Updated description.
 V0.3: Updated packet view color palette
 V0.2: Added dec_item_end() for each dec_item_new().
@@ -19,7 +20,8 @@ V0.1: Initial release.
 */
 
 
-function on_draw_gui_decoder()
+
+function on_draw_gui_decoder()
 {
     ScanaStudio.gui_add_ch_selector("ch","Channel to decode","MODBUS");
 
@@ -52,12 +54,14 @@ V0.1: Initial release.
     ScanaStudio.gui_end_tab();
 
     //Add hidden elements for the UART decoder
-    ScanaStudio.gui_add_hidden_field("nbits",3);
+    ScanaStudio.gui_add_hidden_field("nbits","3");
     ScanaStudio.gui_add_hidden_field("format_hex","false");
     ScanaStudio.gui_add_hidden_field("format_ascii","false");
     ScanaStudio.gui_add_hidden_field("format_dec","false");
     ScanaStudio.gui_add_hidden_field("format_bin","false");
-}
+    ScanaStudio.gui_add_hidden_field("hexview_endianness" ,0);
+
+}
 
 var channel,baud,mode,parity,stop,invert,order;
 var state_machine;

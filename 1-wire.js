@@ -3,15 +3,16 @@
 <DESCRIPTION>
 1-Wire protocol analyzer. Decodes Reset, presence and byte fields.
 </DESCRIPTION>
-<VERSION> 0.14 </VERSION>
+<VERSION> 0.15 </VERSION>
 <AUTHOR_NAME> Vladislav Kosinov, Alexander Goomenyuk </AUTHOR_NAME>
 <AUTHOR_URL> v.kosinov@ikalogic.com, emerg.reanimator@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.15: Change display options.
 v0.14: Builder fixed.
-v0.13: Fixed undefined variable error in case of missing reset pulse. Relaxed reset timing..
+v0.13: Fixed undefined variable error in case of missing reset pulse. Relaxed reset timing.
 v0.12: Fixed incomplete parsing while capturing.
 v0.11: UI parameters are respected. Fixed FSM loop in case of reset after data.
 v0.10: Backport of 1-wire decoder.
@@ -256,6 +257,7 @@ var g_ch;
 var g_speed;
 var g_num_of_objects_needed;
 var g_format;
+var g_ascii;
 var g_suffix;
 var g_sampling_rate;
 var g_state;
@@ -268,14 +270,16 @@ function on_draw_gui_decoder()
 	//Define decoder configuration GUI
 	ScanaStudio.gui_add_ch_selector("g_ch","Channel to decode","1-Wire");
 
-	ScanaStudio.gui_add_combo_box("g_speed","1-Wire Speed")
+	ScanaStudio.gui_add_combo_box("g_speed","1-Wire Speed");
 	ScanaStudio.gui_add_item_to_combo_box("Regular speed",true);
 	ScanaStudio.gui_add_item_to_combo_box("Overdrive speed",false);
 
-	ScanaStudio.gui_add_combo_box("g_format","Display format")
+	ScanaStudio.gui_add_combo_box("g_format","Display format");
 	ScanaStudio.gui_add_item_to_combo_box("Decimal",false);
 	ScanaStudio.gui_add_item_to_combo_box("HEX",true);
 	ScanaStudio.gui_add_item_to_combo_box("Binary",false);
+
+	ScanaStudio.gui_add_check_box("g_ascii", "Display decoded data in ASCII format when possible", false);
 }
 
 
@@ -292,6 +296,7 @@ function reload_dec_gui_values()
 	g_ch =  Number(ScanaStudio.gui_get_value("g_ch"));
 	g_speed =  Number(ScanaStudio.gui_get_value("g_speed"));
 	g_format =  Number(ScanaStudio.gui_get_value("g_format"));
+	g_ascii =  ScanaStudio.gui_get_value("g_ascii");
 	g_suffix = "";
 
 	switch (g_format)
@@ -910,7 +915,7 @@ function decode_sequence_DATA(owObject)
 			ScanaStudio.dec_item_new(g_ch, owByte.start, owByte.end);
 			display_byte(g_byte_sample_points);
 
-			if (isASCII(owByte.value) == true)
+			if ((isASCII(owByte.value) == true) && g_ascii)
 			{
 				ScanaStudio.dec_item_add_content(String.fromCharCode(owByte.value));
 			}

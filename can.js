@@ -1,7 +1,7 @@
 /* Protocol meta info:
 <NAME> CAN Bus </NAME>
 <DESCRIPTION>
-CAN bus protocol analyzer
+CAN bus protocol analyzer (supporting CAN FD)
 </DESCRIPTION>
 <VERSION> 1.0 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Nicolas Bastit </AUTHOR_NAME>
