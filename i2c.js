@@ -883,7 +883,6 @@ function on_decode_signals (resume)
                     /** @todo Implement 10-bit address support */
                 } else if (state === 'DATA') {
                     if (('SCL_FALLING' === edgeType) && ('ACK' === prevState)) {
-                        i2c_sample_points = []; // Clear sample points
                         process_ackbit(ackBit, start_index, sample_index, add_10b);
                     }
                     else if ('SCL_RISING' === edgeType) {
