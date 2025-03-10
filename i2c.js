@@ -137,7 +137,13 @@ function display_item_centered(ch, long_name, short_name, start_sample, end_samp
         end_sample += duration/2;
     }
 
-    last_dec_item_end_sample = end_sample;
+    /** 
+     * @note A quirk for restart condition.
+     * @todo Rework the frame decoration. 
+     * */
+    if (left)   last_dec_item_end_sample = end_sample;
+    else        last_dec_item_end_sample = end_sample + 3*duration;
+    
     if (debug & DEBUG.DECOR) ScanaStudio.console_info_msg("display_item_centered() : last_dec_item_end_sample = " + last_dec_item_end_sample, last_dec_item_end_sample);
 
     display_item(ch, long_name, short_name, start_sample, end_sample);
@@ -822,17 +828,18 @@ function on_decode_signals (resume)
                         if (debug & DEBUG.STATE) ScanaStudio.console_info_msg("on_decode_signals() : state = " + state + ", nextState = " + end_sample, end_sample);
 
                         process_start_condition(ch_sda, start_sample, end_sample);
-    
                         if (addressBits.length === 0) {
                             start_index = sample_index;
                         }
 
                         addrBit = last_trs_sda.value;
+                        
                         if (addressBits.length < addressSize) {
                             if (debug & DEBUG.STATE) ScanaStudio.console_info_msg("on_decode_signals() : state = " + state + ', addressBit[' + (addressSize - addressBits.length - 1) + '] = ' + addrBit, sample_index);
                             i2c_sample_points.push(sample_index);
                             addressBits.push(addrBit);
                         } 
+
                         nextState = 'ADDRESS';
                         if (debug & DEBUG.STATE) ScanaStudio.console_info_msg("on_decode_signals() : state = " + state + ", nextState = " + nextState, sample_index);
                     }
@@ -920,16 +927,22 @@ function on_decode_signals (resume)
 
                         nextState = 'IDLE';
                     } else if ('SDA_FALLING' === edgeType && (last_trs_scl.value === 1)) {
-                        if (debug & DEBUG.STATE) ScanaStudio.console_info_msg("on_decode_signals() : state = " + state, sample_index);
                         dataBits = [];
+                        if (debug & DEBUG.STATE) ScanaStudio.console_info_msg("on_decode_signals() : state = " + state, sample_index);
+
+                        startBit = false;
+                        restartBit = true;
 
                         start_sample = last_trs_sda.sample_index;
                         end_sample = sample_index;
     
                         process_restart_condition(ch_sda, start_sample, end_sample);
                         update_packet_view();
+                        
+                        if (debug & DEBUG.STATE) ScanaStudio.console_info_msg("on_decode_signals() : state = " + state + ', restart condition start = ' + start_sample, start_sample);
+                        if (debug & DEBUG.STATE) ScanaStudio.console_info_msg("on_decode_signals() : state = " + state + ', restart condition end = ' + end_sample, end_sample);
 
-                        nextState = 'DATA';
+                        nextState = 'ADDRESS';
                     }
                 } else if (false && (state === 'STOP_BIT')) { // STOP_BIT is handled in DATA state
                     addressBits = [];
