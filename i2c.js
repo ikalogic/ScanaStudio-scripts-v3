@@ -431,7 +431,6 @@ function process_address_and_readbit(addressBits, readBit, start_sample, end_sam
 
     ScanaStudio.dec_item_end();
     
-    
     var addr = format_content(byte >> add_shift, address_format, add_len)
     i2c_packet_arr.push(new I2C_PacketObject(false, item_st_sample, item_end_sample, "Address",
                                             operation_str + " " + addr,
@@ -828,6 +827,7 @@ function on_decode_signals (resume)
                         if (debug & DEBUG.STATE) ScanaStudio.console_info_msg("on_decode_signals() : state = " + state + ", nextState = " + end_sample, end_sample);
 
                         process_start_condition(ch_sda, start_sample, end_sample);
+                        
                         if (addressBits.length === 0) {
                             start_index = sample_index;
                         }
@@ -937,7 +937,6 @@ function on_decode_signals (resume)
                         end_sample = sample_index;
     
                         process_restart_condition(ch_sda, start_sample, end_sample);
-                        update_packet_view();
                         
                         if (debug & DEBUG.STATE) ScanaStudio.console_info_msg("on_decode_signals() : state = " + state + ', restart condition start = ' + start_sample, start_sample);
                         if (debug & DEBUG.STATE) ScanaStudio.console_info_msg("on_decode_signals() : state = " + state + ', restart condition end = ' + end_sample, end_sample);
