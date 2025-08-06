@@ -3,13 +3,14 @@
 <DESCRIPTION>
 I2C support for ScanaStudio.
 </DESCRIPTION>
-<VERSION> 0.15 </VERSION>
+<VERSION> 0.16 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.16: Fixed a bug that caused STOP item to be displayed with wrong width.
 v0.15: better handling of start/stop condition detection, code cleanup/refactoring.
 V0.14: Revert back modifications made by v0.13, which caused decoding issues.
 v0.12: Added option to filter high-frequency noise
@@ -81,7 +82,7 @@ var ch_scl;
 var address_opt;
 var address_format;
 var data_format;
-var dbg = false;
+var dbg = true;
 /*
   Get GUI values
 */
@@ -97,7 +98,7 @@ function reload_dec_gui_values() {
 
 var sda_level = 1;
 var scl_level = 1;
-
+var prev_scl_edge = 0;
 
 function build_condition_item(ch, sample_point, width, content, content_short, content_shorter) {
 
@@ -114,7 +115,10 @@ function build_condition_item(ch, sample_point, width, content, content_short, c
 function processSDA(tr) {
     const old = sda_level;
     sda_level = tr.value;
+    
     var i2c_condition_width = Math.abs(tr.sample_index - trs_scl.sample_index) * 0.75; // 75% of total width
+    var i2c_stop_condition_width = Math.abs(last_trs_scl.sample_index - prev_scl_edge) * 0.85; // 50% of total width
+    prev_scl_edge = last_trs_scl.sample_index;
     // START: SDA 1→0 while SCL is high
     if (old === 1 && tr.value === 0 && scl_level === 1) {
         if (packet_started) {
@@ -141,7 +145,7 @@ function processSDA(tr) {
     else if (old === 0 && tr.value === 1 && scl_level === 1) {
         packet_started = false;
         if (dbg) ScanaStudio.console_info_msg("STOP  @", tr.sample_index);
-        build_condition_item(ch_sda, tr.sample_index, i2c_condition_width, "STOP", "SP", "P");
+        build_condition_item(ch_sda, tr.sample_index, i2c_stop_condition_width, "STOP", "SP", "P");
         update_packet_view();
         hs_mode = false;
         packet_started = false;
