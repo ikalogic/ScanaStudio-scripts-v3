@@ -3,13 +3,14 @@
 <DESCRIPTION>
 I2C support for ScanaStudio.
 </DESCRIPTION>
-<VERSION> 0.16 </VERSION>
+<VERSION> 0.17 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.17: Fixed a bug when first SDA transition occures before SCL transition.
 v0.16: Fixed a bug that caused STOP item to be displayed with wrong width.
 v0.15: better handling of start/stop condition detection, code cleanup/refactoring.
 V0.14: Revert back modifications made by v0.13, which caused decoding issues.
@@ -173,6 +174,8 @@ function on_decode_signals(resume) {
         ScanaStudio.trs_reset(ch_scl);
         trs_scl = ScanaStudio.trs_get_next(ch_scl);
         trs_sda = ScanaStudio.trs_get_next(ch_sda);
+        last_trs_scl = trs_scl;
+        last_trs_sda = trs_sda;
         sda_level = trs_sda.value;
         scl_level = trs_scl.value;
         ScanaStudio.trs_get_previous(ch_scl);
