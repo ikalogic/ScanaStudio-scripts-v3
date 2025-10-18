@@ -4,13 +4,14 @@
 IEEE 802.3 MDIO (Management Data Input/Output) decoder with Clause 22 and Clause 45 support.
 (Clause 45 is untested, please report any issues you may find)
 </DESCRIPTION>
-<VERSION> 1.0 </VERSION>
+<VERSION> 1.1 </VERSION>
 <AUTHOR_NAME> Ibrahim KAMAL </AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v1.1: Fixed read timing to comply with IEEE 802.3 specification - PHY-driven data now sampled on falling edge of MDC.
 v1.0: Initial release with Clause 22 decoding, Packet View, demo builder and trigger helper.
 </RELEASE_NOTES>
 */
@@ -186,19 +187,52 @@ function mdio_fetch_frame() {
         return null;
     }
 
-    var required_bits = 30; // Fields after start bits
     var bit_infos = start_info.start_bits.slice(0);
 
-    while (bit_infos.length < (2 + required_bits)) {
-        var info = mdio_fetch_next_bit();
+    // Fetch the first 14 bits after start (op + phy + dev/reg + TA) on rising edge
+    // These are always STA-driven
+    var control_bits_needed = 14; // 2 op + 5 phy + 5 dev/reg + 2 TA
+    for (var i = 0; i < control_bits_needed; i++) {
+        var info = mdio_fetch_next_bit(false); // Rising edge
         if (info == null) {
             return null;
         }
         bit_infos.push(info);
     }
 
+    // Now we have enough information to determine the operation type
+    // Parse the operation field to decide data sampling strategy
+    var op_bits = [];
+    for (var j = 2; j < 4; j++) { // bits 2-3 are the operation
+        op_bits.push(bit_infos[j].bit);
+    }
+    var op = (op_bits[0] << 1) | op_bits[1];
+    
+    // Determine if data should be sampled on falling edge (PHY-driven)
+    // This is the correct behavior per IEEE 802.3 specification
+    var use_falling_edge_for_data = false;
+    
+    if (start_info.clause === CLAUSE_22) {
+        // Clause 22: Read operations (op == 0x2) have PHY-driven data
+        use_falling_edge_for_data = (op === 0x2);
+    } else if (start_info.clause === CLAUSE_45) {
+        // Clause 45: Read operations (op == 0x2 or 0x3) have PHY-driven data
+        use_falling_edge_for_data = (op === 0x2 || op === 0x3);
+    }
+
+    // Fetch the 16-bit data field using appropriate sampling edge
+    var data_infos = mdio_try_fetch_bits(16, use_falling_edge_for_data);
+    if (data_infos != null) {
+        for (var d = 0; d < data_infos.length; d++) {
+            bit_infos.push(data_infos[d]);
+        }
+    } else {
+        return null;
+    }
+
+    // Handle optional CRC field (always use same edge as data)
     if (expect_crc_field) {
-        var crc_infos = mdio_try_fetch_bits(16);
+        var crc_infos = mdio_try_fetch_bits(16, use_falling_edge_for_data);
         if (crc_infos != null) {
             for (var c = 0; c < crc_infos.length; c++) {
                 bit_infos.push(crc_infos[c]);
@@ -216,7 +250,7 @@ function mdio_find_start() {
     var last_run = null;
 
     while (ScanaStudio.abort_is_requested() == false) {
-        var info = mdio_fetch_next_bit();
+        var info = mdio_fetch_next_bit(false); // Always use rising edge for start detection
         if (info == null) {
             return null;
         }
@@ -280,10 +314,13 @@ function mdio_find_start() {
     return null;
 }
 
-function mdio_fetch_next_bit() {
+function mdio_fetch_next_bit(use_falling_edge) {
     if ((mdio_bits_buffer != null) && (mdio_bits_buffer.length > 0)) {
         return mdio_bits_buffer.shift();
     }
+
+    // Default to rising edge if not specified (for backward compatibility)
+    var target_edge = (use_falling_edge === true) ? 0 : 1;
 
     while (ScanaStudio.trs_is_not_last(ch_mdc)) {
         var trs_clk = ScanaStudio.trs_get_next(ch_mdc);
@@ -291,7 +328,7 @@ function mdio_fetch_next_bit() {
             return null;
         }
 
-        if (trs_clk.value == 1) {
+        if (trs_clk.value == target_edge) {
             var data_transition = ScanaStudio.trs_get_before(ch_mdio, trs_clk.sample_index);
             var bit_val = data_transition ? data_transition.value : 1;
             return {
@@ -304,11 +341,11 @@ function mdio_fetch_next_bit() {
     return null;
 }
 
-function mdio_try_fetch_bits(count) {
+function mdio_try_fetch_bits(count, use_falling_edge) {
     var infos = [];
 
     for (var i = 0; i < count; i++) {
-        var info = mdio_fetch_next_bit();
+        var info = mdio_fetch_next_bit(use_falling_edge);
         if (info == null) {
             mdio_pushback_bits(infos);
             return null;
