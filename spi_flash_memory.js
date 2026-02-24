@@ -3,13 +3,14 @@
 <DESCRIPTION>
  SPI Flash memory transactions analyzer
 </DESCRIPTION>
-<VERSION> 0.3 </VERSION>
+<VERSION> 0.4 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Chris HEMINGWAY </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/SPI-Flash-memory-instructions-analyzer </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.4: Fix compatibility issue with latest version of SPI.JS script
 V0.3: Add selectable flash types, NAND flash, and option to enumerate data bytes
 V0.2: Added dec_item_end() for each dec_item_new().
 V0.1: Initial release.
@@ -77,6 +78,8 @@ function on_draw_gui_decoder()
   ScanaStudio.gui_add_hidden_field("cspol",0);
   ScanaStudio.gui_add_hidden_field("opt",0);
   ScanaStudio.gui_add_hidden_field("dual_io",1); //Dual IO enabled by default
+  ScanaStudio.gui_add_hidden_field("clk_timeout",0);
+  ScanaStudio.gui_add_hidden_field("ignore_cs",0);
 }
 
 //GUI helper
