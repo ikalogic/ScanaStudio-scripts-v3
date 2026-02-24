@@ -3,14 +3,15 @@
 <DESCRIPTION>
  SPI Flash memory transactions analyzer
 </DESCRIPTION>
-<VERSION> 0.4 </VERSION>
+<VERSION> 0.5 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Chris HEMINGWAY </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/SPI-Flash-memory-instructions-analyzer </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
-v0.4: Fix compatibility issue with latest version of SPI.JS script
+V0.5: Add support for packet view
+V0.4: Support for newer SPI.Js script version.
 V0.3: Add selectable flash types, NAND flash, and option to enumerate data bytes
 V0.2: Added dec_item_end() for each dec_item_new().
 V0.1: Initial release.
@@ -78,8 +79,8 @@ function on_draw_gui_decoder()
   ScanaStudio.gui_add_hidden_field("cspol",0);
   ScanaStudio.gui_add_hidden_field("opt",0);
   ScanaStudio.gui_add_hidden_field("dual_io",1); //Dual IO enabled by default
-  ScanaStudio.gui_add_hidden_field("clk_timeout",0);
   ScanaStudio.gui_add_hidden_field("ignore_cs",0);
+  ScanaStudio.gui_add_hidden_field("clk_timeout",5e-6);
 }
 
 //GUI helper
@@ -131,6 +132,7 @@ var commands = [];
 var frame_counter;
 var frame,frames;
 var payload_counter;
+var pkt_start_sample;
 
 function on_decode_signals(resume)
 {
@@ -205,11 +207,22 @@ function parse_spi_items(item)
         cmd_par_counter = 1;
         word_counter = 0;
         parameter_data = 0;
+        pkt_start_sample = item.start_sample_index;
         ScanaStudio.dec_item_new(item.channel_index,item.start_sample_index,item.end_sample_index);
         ScanaStudio.dec_item_add_content(cmd_descriptor[0].long_caption+" ("+ data_to_str(item.content,cmd_descriptor[0].format,8)+")");
         ScanaStudio.dec_item_add_content(cmd_descriptor[0].short_caption+" ("+data_to_str(item.content,cmd_descriptor[0].format,8)+")");
         ScanaStudio.dec_item_add_content(data_to_str(item.content,cmd_descriptor[0].format,8));
         ScanaStudio.dec_item_end();
+
+        // Packet view: root packet for the transaction
+        ScanaStudio.packet_view_add_packet(true, ch_mosi, item.start_sample_index, -1,
+          "SPI Flash", cmd_descriptor[0].long_caption + " (" + data_to_str(item.content, cmd_descriptor[0].format, 8) + ")",
+          ScanaStudio.PacketColors.Wrap.Title, ScanaStudio.PacketColors.Wrap.Content);
+        // Packet view: command child
+        ScanaStudio.packet_view_add_packet(false, ch_mosi, item.start_sample_index, item.end_sample_index,
+          "Command", cmd_descriptor[0].short_caption + " (" + data_to_str(item.content, cmd_descriptor[0].format, 8) + ")",
+          ScanaStudio.PacketColors.Head.Title, ScanaStudio.PacketColors.Head.Content);
+
         if (cmd_descriptor.length > 1) //If there is at least one parameter
         {
             state_machine++;
@@ -243,6 +256,23 @@ function parse_spi_items(item)
               ScanaStudio.dec_item_add_content(cmd_descriptor[cmd_par_counter].short_caption  + ": "  + data_to_str(parameter_data,cmd_descriptor[cmd_par_counter].format,cmd_descriptor[cmd_par_counter].len*8));
               ScanaStudio.dec_item_add_content(data_to_str(parameter_data,cmd_descriptor[cmd_par_counter].format,cmd_descriptor[cmd_par_counter].len*8));
               ScanaStudio.dec_item_end();
+
+              // Packet view: parameter child (skip dummy bytes)
+              if (cmd_descriptor[cmd_par_counter].short_caption !== "Dummy")
+              {
+                var pkt_par_title = cmd_descriptor[cmd_par_counter].short_caption;
+                var pkt_par_content = data_to_str(parameter_data, cmd_descriptor[cmd_par_counter].format, cmd_descriptor[cmd_par_counter].len * 8);
+                var pkt_title_color = ScanaStudio.PacketColors.Preamble.Title;
+                var pkt_content_color = ScanaStudio.PacketColors.Preamble.Content;
+                // Use specific colors for address parameters
+                if (pkt_par_title === "A")
+                {
+                  pkt_title_color = ScanaStudio.PacketColors.Head.Title;
+                  pkt_content_color = ScanaStudio.PacketColors.Head.Content;
+                }
+                ScanaStudio.packet_view_add_packet(false, ch_mosi, parameter_start_sample_index, item.end_sample_index,
+                  pkt_par_title, pkt_par_content, pkt_title_color, pkt_content_color);
+              }
               cmd_par_counter++;
               if (cmd_par_counter >= cmd_descriptor.length)
               {
@@ -279,6 +309,12 @@ function parse_spi_items(item)
             }
             ScanaStudio.dec_item_add_content(formatted_data);
             ScanaStudio.dec_item_end();
+
+            // Packet view: data payload child
+            ScanaStudio.packet_view_add_packet(false, ch_mosi, item.start_sample_index, item.end_sample_index,
+              "Data[" + payload_counter + "]", data_to_str(item.content, flash_format_data, 8),
+              ScanaStudio.PacketColors.Data.Title, ScanaStudio.PacketColors.Data.Content);
+
             payload_counter++;
             // ScanaStudio.console_info_msg("Payload:"+ formatted_data);
           }
