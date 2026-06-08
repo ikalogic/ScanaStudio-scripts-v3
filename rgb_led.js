@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Adressable RGB LED chipsets
 </DESCRIPTION>
-<VERSION> 0.4 </VERSION>
+<VERSION> 0.5 </VERSION>
 <AUTHOR_NAME>  Vladislav Kosinov </AUTHOR_NAME>
 <AUTHOR_URL> v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright 2019 Ikalogic SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.5: Improved last bit handling.
 v0.4: Fix users gui settings refresh. Add RGB display format choice
 V0.3: Updated packet view color palette
 V0.2: Added dec_item_end() for each dec_item_new().
@@ -264,7 +265,7 @@ function on_decode_signals (resume)
         trs = ScanaStudio.trs_get_next(ch);
     }
 
-    while (ScanaStudio.trs_is_not_last(ch))
+    do
     {
         if (ScanaStudio.abort_is_requested())
         {
@@ -284,7 +285,16 @@ function on_decode_signals (resume)
         }
 
         trs_last = trs;
-        trs = ScanaStudio.trs_get_next(ch);
+        if(ScanaStudio.trs_is_not_last(ch))
+            trs = ScanaStudio.trs_get_next(ch);
+        else if(ScanaStudio.get_available_samples() - trs.sample_index > chip.rst_time * sample_rate)
+        {
+            trs = ScanaStudio.trs_get_next(ch);
+        }
+        else
+        {
+            return;
+        }
         var t = (trs.sample_index - trs_last.sample_index) / sample_rate;
 
         if (trs_last.value > 0)
@@ -426,15 +436,71 @@ function on_decode_signals (resume)
             }
             else
             {
-                ScanaStudio.dec_item_new(ch, trs_last.sample_index, trs.sample_index);
-                ScanaStudio.dec_item_add_content("WRONG T1L/T0L DURATION");
-                ScanaStudio.dec_item_add_content("WRONG");
-                ScanaStudio.dec_item_add_content("!");
-                ScanaStudio.dec_item_emphasize_error();
-                ScanaStudio.dec_item_end();
+                if(!ScanaStudio.trs_is_not_last(ch))
+                {
+                    if (t1h)
+                    {
+                        bit_object.end_sample = trs.sample_index;
+                        bit_object.value = 1;
+                        t1h = false;
+                        bit_cnt++;
+
+                        if (chip.bit_time > 0)
+                        {
+                            if ((bit_object.end_sample - bit_object.st_sample) > (bit_time_max * sample_rate))
+                            {
+                                ScanaStudio.dec_item_new(ch, bit_object.st_sample, bit_object.end_sample);
+                                ScanaStudio.dec_item_emphasize_warning();
+                                ScanaStudio.dec_item_end();
+                            }
+                            else if ((bit_object.end_sample - bit_object.st_sample) < (bit_time_min * sample_rate))
+                            {
+                                ScanaStudio.dec_item_new(ch, bit_object.st_sample, bit_object.end_sample);
+                                ScanaStudio.dec_item_emphasize_warning();
+                                ScanaStudio.dec_item_end();
+                            }
+                        }
+
+                        decode_word(bit_object);
+                    }
+                    else if (t0h)
+                    {
+                        bit_object.end_sample = trs.sample_index;
+                        bit_object.value = 0;
+                        t0h = false;
+                        bit_cnt++;
+
+                        if (chip.bit_time > 0)
+                        {
+                            if ((bit_object.end_sample - bit_object.st_sample) > (bit_time_max * sample_rate))
+                            {
+                                ScanaStudio.dec_item_new(ch, bit_object.st_sample, bit_object.end_sample);
+                                ScanaStudio.dec_item_emphasize_warning();
+                                ScanaStudio.dec_item_end();
+                            }
+                            else if ((bit_object.end_sample - bit_object.st_sample) < (bit_time_min * sample_rate))
+                            {
+                                ScanaStudio.dec_item_new(ch, bit_object.st_sample, bit_object.end_sample);
+                                ScanaStudio.dec_item_emphasize_warning();
+                                ScanaStudio.dec_item_end();
+                            }
+                        }
+
+                        decode_word(bit_object);
+                    }
+                }
+                else
+                {
+                    ScanaStudio.dec_item_new(ch, trs_last.sample_index, trs.sample_index);
+                    ScanaStudio.dec_item_add_content("WRONG T1L/T0L DURATION");
+                    ScanaStudio.dec_item_add_content("WRONG");
+                    ScanaStudio.dec_item_add_content("!");
+                    ScanaStudio.dec_item_emphasize_error();
+                    ScanaStudio.dec_item_end();
+                }
             }
         }
-    }
+    }while (ScanaStudio.trs_is_not_last(ch))
 }
 
 function decode_word (bit_object)
