@@ -5,13 +5,14 @@ DMX512 (Digital Multiplex) is a standard for digital communication networks that
 Signals are based on UART.
 DMX512-A include RDM improvement that allow bidirectional communication between slaves devices and the master.
 </DESCRIPTION>
-<VERSION> 0.74 </VERSION>
+<VERSION> 0.75 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.75: Improved decoding speed.
 V0.74: Improved builder and decoder.
 V0.73: Fixed bug : error during live-mode.
 V0.72: Added discovery response decoding.
@@ -202,17 +203,21 @@ function on_decode_signals (resume)
     uart_items = ScanaStudio.pre_decode("uart.js",resume);
     var sample_rate = ScanaStudio.get_capture_sample_rate();
 
-    for (var j = uart_items.length - 1; j >= 0; j--)
+    // One pass: UART emits 3 items per byte, and splicing them out one by one
+    // shifts the whole tail every time.
+    var data_items = [];
+    for (var j = 0; j < uart_items.length; j++)
     {
-        if( (uart_items[j].content == "Start") ||
-            (uart_items[j].content == "Parity OK") ||
-            (uart_items[j].content == "Parity ERROR") ||
-            (uart_items[j].content == "Stop") ||
-            (uart_items[j].content == "Stop bit Missing!") )
+        if( (uart_items[j].content != "Start") &&
+            (uart_items[j].content != "Parity OK") &&
+            (uart_items[j].content != "Parity ERROR") &&
+            (uart_items[j].content != "Stop") &&
+            (uart_items[j].content != "Stop bit Missing!") )
         {
-            uart_items.splice(j,1);
+            data_items.push(uart_items[j]);
         }
     }
+    uart_items = data_items;
 
     ScanaStudio.trs_reset(channel);
     trs = ScanaStudio.trs_get_next(channel);

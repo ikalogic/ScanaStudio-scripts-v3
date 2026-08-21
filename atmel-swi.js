@@ -3,13 +3,14 @@
 <DESCRIPTION>
 The Atmel Single Wire Interface (SWI) is a special purpose interface primarily used to communicate with Atmel Crypto-Authentication products. The protocol is designed to be compatible with standard microcontroller UART peripherals.
 </DESCRIPTION>
-<VERSION> 0.10 </VERSION>
+<VERSION> 0.11 </VERSION>
 <AUTHOR_NAME> Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.11:  Improved decoding speed.
 V0.10:  Updated description.
 V0.1:  Initial release.
 </RELEASE_NOTES>
@@ -113,17 +114,21 @@ function on_decode_signals(resume)
 
     // Remove any element that do not contain data, e.g.: Start, Stop, parity
     var j=0;
-    for (j = uart_items.length - 1; j >= 0; j--)
+    // One pass: UART emits 3 items per byte, and splicing them out one by one
+    // shifts the whole tail every time.
+    var data_items = [];
+    for (j = 0; j < uart_items.length; j++)
     {
-        if( (uart_items[j].content == "Start") ||
-            (uart_items[j].content == "Parity OK") ||
-            (uart_items[j].content == "Parity ERROR") ||
-            (uart_items[j].content == "Stop") ||
-            (uart_items[j].content == "Stop bit Missing!") )
+        if( (uart_items[j].content != "Start") &&
+            (uart_items[j].content != "Parity OK") &&
+            (uart_items[j].content != "Parity ERROR") &&
+            (uart_items[j].content != "Stop") &&
+            (uart_items[j].content != "Stop bit Missing!") )
         {
-            uart_items.splice(j,1);
+            data_items.push(uart_items[j]);
         }
     }
+    uart_items = data_items;
 
     for (j = 0; j<uart_items.length; j++)
     {
