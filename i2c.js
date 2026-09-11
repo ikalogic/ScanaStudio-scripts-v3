@@ -10,6 +10,7 @@ I2C support for ScanaStudio.
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.18: Improved live performance.
 v0.17: Fixed a bug when first SDA transition occures before SCL transition.
 v0.16: Fixed a bug that caused STOP item to be displayed with wrong width.
 v0.15: better handling of start/stop condition detection, code cleanup/refactoring.
@@ -74,6 +75,9 @@ function I2cPacketObject(root, st_sample, end_sample, title, content, title_colo
 };
 
 var sampling_rate;
+var is_pre_dec = false;
+/** Transitions between two abort checks. */
+var ABORT_CHECK_PERIOD = 512;
 var frame_state, last_frame_state;
 var i2c_sample_points = [];
 var i2c_packet_arr = [];
@@ -201,11 +205,23 @@ function on_decode_signals(resume) {
     }
 
     trs_backlog = 0;
+    // Read ONCE a pass: neither the caller nor the end of the capture can change
+    // under us, and both were being asked on every byte and every transition.
+    is_pre_dec = ScanaStudio.is_pre_decoding();
+    scl_available = ScanaStudio.trs_is_not_last(ch_scl);
+    sda_available = ScanaStudio.trs_is_not_last(ch_sda);
+    var abort_countdown = ABORT_CHECK_PERIOD;
 
-    while (ScanaStudio.abort_is_requested() == false) {
+    while (true) {
 
-        scl_available = ScanaStudio.trs_is_not_last(ch_scl);
-        sda_available = ScanaStudio.trs_is_not_last(ch_sda);
+        // An abort is a user action: checking a few hundred transitions late is
+        // imperceptible, and the call was costing more than the work between two.
+        if (--abort_countdown <= 0) {
+            abort_countdown = ABORT_CHECK_PERIOD;
+            if (ScanaStudio.abort_is_requested()) {
+                break;
+            }
+        }
 
         if (!scl_available || !sda_available) {
             if (dbg) ScanaStudio.console_warning_msg("End of capture reached, decoding stopped.", trs_scl.sample_index);
@@ -226,6 +242,8 @@ function on_decode_signals(resume) {
                 }
                 while (check_signal_noise(trs_scl, last_trs_scl));
                 scl_to_process = true;
+                // only this channel moved, so only its end-of-data can have
+                scl_available = ScanaStudio.trs_is_not_last(ch_scl);
             }
         }
         else {
@@ -237,6 +255,7 @@ function on_decode_signals(resume) {
                     trs_sda = ScanaStudio.trs_get_next(ch_sda);
                 }
                 while (check_signal_noise(trs_sda, last_trs_sda));
+                sda_available = ScanaStudio.trs_is_not_last(ch_sda);
             }
         }
     }
@@ -294,6 +313,16 @@ function process_i2c_bit(value, sample_index) {
 
             if (value == 1) {
                 ScanaStudio.dec_item_add_content("NACK");
+                // Under pre_decode the caller reads the FIRST content and nothing
+                // else: the short form, the packet and the sample points are all
+                // dropped on the floor. ACKs are half the items of an I2C stream.
+                if (is_pre_dec) {
+                    ScanaStudio.dec_item_end();
+                    last_frame_state = frame_state;
+                    frame_state = next_state_after_ack();
+                    bit_counter = 0;
+                    break;
+                }
                 ScanaStudio.dec_item_add_content("N");
 
                 var title = "Nack";
@@ -310,6 +339,13 @@ function process_i2c_bit(value, sample_index) {
             }
             else {
                 ScanaStudio.dec_item_add_content("ACK");
+                if (is_pre_dec) {
+                    ScanaStudio.dec_item_end();
+                    last_frame_state = frame_state;
+                    frame_state = next_state_after_ack();
+                    bit_counter = 0;
+                    break;
+                }
                 ScanaStudio.dec_item_add_content("A");
 
                 var title = "Ack";
@@ -325,19 +361,7 @@ function process_i2c_bit(value, sample_index) {
             add_sample_points();
             ScanaStudio.dec_item_end();
             last_frame_state = frame_state;
-
-            if (hs_mode) {
-                frame_state = I2C.ADDRESS;
-                hs_mode = false;
-            }
-            else if (add_10b == true) {
-                add_10b = false;
-                frame_state = I2C.ADDRESS_EXT;
-            }
-            else {
-                frame_state = I2C.DATA;
-            }
-
+            frame_state = next_state_after_ack();
             bit_counter = 0;
             break;
 
@@ -358,7 +382,7 @@ function process_i2c_bit(value, sample_index) {
 
                 ScanaStudio.dec_item_new(ch_sda, item_st_sample, item_end_sample);
 
-                if (ScanaStudio.is_pre_decoding() == true) {
+                if (is_pre_dec) {
                     ScanaStudio.dec_item_add_content("0x" + byte.toString(16));
                     bit_counter = 0;
                     last_frame_state = frame_state;
@@ -498,7 +522,7 @@ function process_i2c_bit(value, sample_index) {
 
                 ScanaStudio.dec_item_new(ch_sda, item_st_sample, item_end_sample);
 
-                if (ScanaStudio.is_pre_decoding() == true) {
+                if (is_pre_dec) {
                     ScanaStudio.dec_item_add_content("0x" + byte.toString(16));
                 }
                 else {
@@ -520,6 +544,20 @@ function process_i2c_bit(value, sample_index) {
 
         default: break;
     }
+}
+
+/** What follows an ACK: the HS-mode master code and the 10-bit address both
+ *  send the bus back to an address byte, anything else to data. */
+function next_state_after_ack() {
+    if (hs_mode) {
+        hs_mode = false;
+        return I2C.ADDRESS;
+    }
+    if (add_10b == true) {
+        add_10b = false;
+        return I2C.ADDRESS_EXT;
+    }
+    return I2C.DATA;
 }
 
 function add_sample_points() {
