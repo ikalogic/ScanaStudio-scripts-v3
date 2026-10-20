@@ -3,13 +3,14 @@
 <DESCRIPTION>
 1-Wire protocol analyzer. Decodes Reset, presence and byte fields.
 </DESCRIPTION>
-<VERSION> 0.15 </VERSION>
+<VERSION> 0.16 </VERSION>
 <AUTHOR_NAME> Vladislav Kosinov, Alexander Goomenyuk </AUTHOR_NAME>
 <AUTHOR_URL> v.kosinov@ikalogic.com, emerg.reanimator@ikalogic.com </AUTHOR_URL>
-<HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
+<HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/1-Wire-bus-analyzer-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.16: Trigger on specific word: fixed bit order (LSB first) and ASCII character input.
 v0.15: Change display options.
 v0.14: Builder fixed.
 v0.13: Fixed undefined variable error in case of missing reset pulse. Relaxed reset timing.
@@ -1813,6 +1814,14 @@ function on_build_trigger()
 	}
 	else if(trig_alt == 1) //Trig on one byte
 	{
+		if (trig_byte.charAt(0) == "'")
+		{
+			trig_byte = trig_byte.charCodeAt(1);
+		}
+		else
+		{
+			trig_byte = Number(trig_byte);
+		}
 		build_octet(trig_byte);
 	}
 	else //trig on phrase
@@ -2003,7 +2012,7 @@ function build_octet(octet)
 
 	for(var i=0; i<8; i++)
 	{
-		return_nbr_step += build_bit((octet>>(7-i))&0x1);
+		return_nbr_step += build_bit((octet>>i)&0x1); //1-Wire sends LSB first
 	}
 
 	return return_nbr_step;

@@ -3,13 +3,14 @@
 <DESCRIPTION>
  Frequency modulation logic signal generator
  </DESCRIPTION>
-<VERSION> 0.4 </VERSION>
+<VERSION> 0.5 </VERSION>
 <AUTHOR_NAME> Camille Perrin </AUTHOR_NAME>
 <AUTHOR_URL> Your mail </AUTHOR_URL>
-<HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
+<HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/Frequency-modulation-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.5:  Fixed pattern generation on case-sensitive file systems.
 V0.4:  Improved vac.
 V0.3:  Now can be used by SP1000G series (Pattern generator).
 V0.2:  Fixed mistakes in error messages.
@@ -457,7 +458,7 @@ function on_pattern_generate()
 
 function get_builder_object()
 {
-  var builder = ScanaStudio.load_builder_object("Frequency_modulation.js");
+  var builder = ScanaStudio.load_builder_object("frequency_modulation.js");
   return builder;
 }
 
