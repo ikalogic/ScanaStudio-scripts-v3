@@ -4,7 +4,7 @@
 Reduced Media Independent Interface (RMII) Ethernet frame decoder.
 Decodes RX (CRS_DV, RXD[1:0]) and/or TX (TX_EN, TXD[1:0]) frames sampled on REF_CLK,
 at 100 Mbps or 10 Mbps, in timing mode (REF_CLK captured on a channel) or state mode
-(REF_CLK used as the analyzer's external clock). Displays preamble, SFD, MAC addresses, 802.1Q tag, EtherType,
+(REF_CLK used as the external sampling clock). Displays preamble, SFD, MAC addresses, 802.1Q tag, EtherType,
 payload (with IPv4/ARP summary) and verifies the Ethernet FCS (CRC32).
 Frames are counted per direction, with FCS and framing error statistics.
 </DESCRIPTION>
