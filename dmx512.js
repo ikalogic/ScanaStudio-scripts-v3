@@ -5,13 +5,14 @@ DMX512 (Digital Multiplex) is a standard for digital communication networks that
 Signals are based on UART.
 DMX512-A include RDM improvement that allow bidirectional communication between slaves devices and the master.
 </DESCRIPTION>
-<VERSION> 0.75 </VERSION>
+<VERSION> 0.76 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.76: Fixed an endless loop when a BREAK cut an RDM or Discovery frame short.
 V0.75: Improved decoding speed.
 V0.74: Improved builder and decoder.
 V0.73: Fixed bug : error during live-mode.
@@ -95,6 +96,8 @@ var trame = [];
 var ignore_item = false;
 var trame_started;
 var trame_ended;
+// the frame was ended by a BREAK, which ends it whatever its state machine expected
+var ended_by_break = false;
 var trame_type = 0;
 var rdm_state;
 var rdm_cnt_i;
@@ -190,6 +193,7 @@ function on_decode_signals (resume)
         trame = [];
         trame_started = false;
         trame_ended = false;
+        ended_by_break = false;
         trame_type = TRAME_DMX;
         rdm_state = RDM_STATE_START;
         ScanaStudio.trs_reset(channel);
@@ -243,6 +247,7 @@ function on_decode_signals (resume)
                 if(trame_started)//searching for end condition
                 {
                     trame_ended = true;
+                    ended_by_break = true;
                     ignore_item = true;
                     j--;
                     break;
@@ -1241,6 +1246,16 @@ function on_decode_signals (resume)
                     }//end data bytes
                 }//end for each item in trame
                 last_i = i;
+                // a BREAK ends the frame whatever its state machine expected:
+                // kept open, the same BREAK would end it again for ever
+                if (ended_by_break)
+                {
+                    ended_by_break = false;
+                    trame_started = false;
+                    trame = [];
+                    last_i = 0;
+                    rdm_state = RDM_STATE_START;
+                }
             }//end if trame ended
         }//end if trame started
     }//end for each uart item
