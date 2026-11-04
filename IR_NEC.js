@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Decode the IR NEC protocol.
 </DESCRIPTION>
-<VERSION> 1.0 </VERSION>
-<AUTHOR_NAME> Corentin Maravat </AUTHOR_NAME>
+<VERSION> 1.1 </VERSION>
+<AUTHOR_NAME> Corentin Maravat, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ikalogic SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V1.1:  Decodes while the capture is running. Repeat codes end with their last burst.
 V1.0:  Initial release.
 </RELEASE_NOTES>
 */
@@ -81,6 +82,7 @@ function on_eval_gui_decoder()
 //Global variables
 var sampling_rate;
 var state_machine;
+var trs_nec;
 var ch_nec;
 var nbits;
 var item_display = [];
@@ -145,6 +147,83 @@ const   CONST_t_bit_high            = 2.25e-3,
         CONST_t_leading_space       = 4.5e-3,
         CONST_t_leading_pulse_burst = 9e-3;
 
+// A step cut by the end of the data is replayed at the next call; its output
+// is held until then, minus what was already published.
+var step_start = 0;
+var step_state = ENUM_STATE_START;
+var step_output = [];
+var step_published = 0;
+var step_replayed = 0;
+var held_at_stop = 0;
+var repeat_closed_at = -1;
+var init_done = false;
+
+function nec_more()
+{
+    if (ScanaStudio.trs_is_not_last(ch_nec))
+    {
+        return true;
+    }
+    if (stop_decode == false)
+    {
+        held_at_stop = step_output.length;
+    }
+    stop_decode = true;
+    return false;
+}
+
+function nec_hold(name, args)
+{
+    if (step_replayed < step_published)
+    {
+        step_replayed++;
+        return;
+    }
+    step_output.push([name, Array.prototype.slice.call(args)]);
+}
+
+function nec_item_new() { nec_hold("dec_item_new", arguments); }
+function nec_item_content() { nec_hold("dec_item_add_content", arguments); }
+function nec_item_point() { nec_hold("dec_item_add_sample_point", arguments); }
+function nec_item_end() { nec_hold("dec_item_end", arguments); }
+function nec_packet() { nec_hold("packet_view_add_packet", arguments); }
+function nec_item_error() { nec_hold("dec_item_emphasize_error", arguments); }
+
+function nec_publish(count)
+{
+    for (var k = 0; k < count; k++)
+    {
+        ScanaStudio[step_output[k][0]].apply(ScanaStudio, step_output[k][1]);
+    }
+    step_output = [];
+}
+
+function nec_release_step()
+{
+    nec_publish(step_output.length);
+    step_published = 0;
+    step_replayed = 0;
+}
+
+function nec_release_before_stop()
+{
+    nec_publish(held_at_stop);
+    step_published += held_at_stop;
+    step_replayed = 0;
+}
+
+// Only trs_reset and trs_get_next: they move alike in ScanaStudio 3 and 6
+function nec_rewind_to(sample)
+{
+    ScanaStudio.trs_reset(ch_nec);
+    var t = ScanaStudio.trs_get_next(ch_nec);
+    while ((t.sample_index < sample) && ScanaStudio.trs_is_not_last(ch_nec))
+    {
+        t = ScanaStudio.trs_get_next(ch_nec);
+    }
+    return t;
+}
+
 
 function on_decode_signals(resume)
 {
@@ -153,26 +232,61 @@ function on_decode_signals(resume)
       //initialization code goes here, ex:
       sampling_rate = ScanaStudio.get_capture_sample_rate();
       reload_dec_gui_values();
+      stop_decode = false;
+      step_output = [];
+      step_published = 0;
+      step_replayed = 0;
+      repeat_closed_at = -1;
+      init_done = false;
+  }//end if !resume
+  if (!init_done)
+  {
+      // redone whole until the first edge after the start is there
+      stop_decode = false;
       trs_nec = ScanaStudio.trs_reset(ch_nec);
-      var trs_nec = ScanaStudio.trs_get_next(ch_nec);
+      trs_nec = ScanaStudio.trs_get_next(ch_nec);
       tmp_trs_sample_index = trs_nec.sample_index;
-      while( (tmp_trs_sample_index == trs_nec.sample_index) && (ScanaStudio.trs_is_not_last(ch_nec) == true) )
+      while( (tmp_trs_sample_index == trs_nec.sample_index) && (nec_more() == true) )
       {
           trs_nec = ScanaStudio.trs_get_next(ch_nec);
       }
+      if (stop_decode == true)
+      {
+          return;
+      }
+      init_done = true;
       //init global variables
       state_machine = ENUM_STATE_START;
-  }//end if !resume
-  else
+      step_start = trs_nec.sample_index;
+      step_state = state_machine;
+  }
+  else if (stop_decode == true)
   {
-      //ScanaStudio.console_info_msg("Decoding resumed");
+      stop_decode = false;
+      step_output = [];
+      step_replayed = 0;
+      state_machine = step_state;
+      trs_nec = nec_rewind_to(step_start);
   }
 
 
+    var step_done = false;
     while (ScanaStudio.abort_is_requested() == false)
     {
+        if (stop_decode == true)
+        {
+            nec_release_before_stop();
+            break;
+        }
+        if (step_done)
+        {
+            nec_release_step();
+        }
+        step_done = true;
+        step_start = trs_nec.sample_index;
+        step_state = state_machine;
         // ScanaStudio.console_info_msg(".");
-        if (!ScanaStudio.trs_is_not_last(ch_nec))
+        if (!nec_more())
         {
             break;
         }
@@ -195,7 +309,7 @@ function on_decode_signals(resume)
                                 last_trs_sample = trs_nec.sample_index;
                                 trs_nec = ScanaStudio.trs_get_next(ch_nec);
                                 n++;
-                                if (!ScanaStudio.trs_is_not_last(ch_nec))
+                                if (!nec_more())
                                 {
                                     stop_decode = true;
                                     break;
@@ -209,7 +323,7 @@ function on_decode_signals(resume)
                             if (trs_nec.sample_index == start_lead_burst)
                             {
                                 tmp_trs_sample_index = trs_nec.sample_index;
-                                while( (tmp_trs_sample_index == trs_nec.sample_index) && (ScanaStudio.trs_is_not_last(ch_nec) == true) )
+                                while( (tmp_trs_sample_index == trs_nec.sample_index) && (nec_more() == true) )
                                 {
                                     trs_nec = ScanaStudio.trs_get_next(ch_nec);
                                 }
@@ -219,30 +333,30 @@ function on_decode_signals(resume)
                         {
                             start_lead_burst = trs_nec.sample_index;
                             tmp_trs_sample_index = trs_nec.sample_index;
-                            while( (tmp_trs_sample_index == trs_nec.sample_index) && (ScanaStudio.trs_is_not_last(ch_nec) == true) )
+                            while( (tmp_trs_sample_index == trs_nec.sample_index) && (nec_more() == true) )
                             {
                                 trs_nec = ScanaStudio.trs_get_next(ch_nec);
                             }
                         }
                         end_lead_burst = trs_nec.sample_index;
                         time = (end_lead_burst - start_lead_burst)/sampling_rate*1000;
-                        ScanaStudio.dec_item_new(ch_nec,start_lead_burst + 1,end_lead_burst - 1);
-                        ScanaStudio.dec_item_add_content("Leading pulse (" + time.toFixed(2) + "ms)");
-                        ScanaStudio.dec_item_add_content("Leading pulse");
-                        ScanaStudio.dec_item_end();
+                        nec_item_new(ch_nec,start_lead_burst + 1,end_lead_burst - 1);
+                        nec_item_content("Leading pulse (" + time.toFixed(2) + "ms)");
+                        nec_item_content("Leading pulse");
+                        nec_item_end();
                         // Leading space
                         start_lead_space = end_lead_burst;
                         tmp_trs_sample_index = trs_nec.sample_index;
-                        while( (tmp_trs_sample_index == trs_nec.sample_index) && (ScanaStudio.trs_is_not_last(ch_nec) == true) )
+                        while( (tmp_trs_sample_index == trs_nec.sample_index) && (nec_more() == true) )
                         {
                             trs_nec = ScanaStudio.trs_get_next(ch_nec);
                         }
                         end_lead_space = trs_nec.sample_index; // Should be a rising edge
                         time = (end_lead_space - start_lead_space)/sampling_rate*1000;
-                        ScanaStudio.dec_item_new(ch_nec,start_lead_space + 1,end_lead_space - 1);
-                        ScanaStudio.dec_item_add_content("Leading Space (" + time.toFixed(2) + "ms)");
-                        ScanaStudio.dec_item_add_content("Space (" + time.toFixed(2) + "ms)");
-                        ScanaStudio.dec_item_end();
+                        nec_item_new(ch_nec,start_lead_space + 1,end_lead_space - 1);
+                        nec_item_content("Leading Space (" + time.toFixed(2) + "ms)");
+                        nec_item_content("Space (" + time.toFixed(2) + "ms)");
+                        nec_item_end();
                     }
                     else
                     {
@@ -264,7 +378,7 @@ function on_decode_signals(resume)
                                 last_trs_sample = trs_nec.sample_index;
                                 trs_nec = ScanaStudio.trs_get_next(ch_nec);
                                 n++;
-                                if (!ScanaStudio.trs_is_not_last(ch_nec))
+                                if (!nec_more())
                                 {
                                     stop_decode = true;
                                     break;
@@ -278,7 +392,7 @@ function on_decode_signals(resume)
                             if (trs_nec.sample_index == start_lead_burst)
                             {
                                 tmp_trs_sample_index = trs_nec.sample_index;
-                                while( (tmp_trs_sample_index == trs_nec.sample_index) && (ScanaStudio.trs_is_not_last(ch_nec) == true) )
+                                while( (tmp_trs_sample_index == trs_nec.sample_index) && (nec_more() == true) )
                                 {
                                     trs_nec = ScanaStudio.trs_get_next(ch_nec);
                                 }
@@ -287,29 +401,29 @@ function on_decode_signals(resume)
                         else // Normal Pulse
                         {
                             tmp_trs_sample_index = trs_nec.sample_index;
-                            while( (tmp_trs_sample_index == trs_nec.sample_index) && (ScanaStudio.trs_is_not_last(ch_nec) == true) )
+                            while( (tmp_trs_sample_index == trs_nec.sample_index) && (nec_more() == true) )
                             {
                                 trs_nec = ScanaStudio.trs_get_next(ch_nec);
                             }
                         }
                         end_lead_burst = trs_nec.sample_index; // Should be a falling edge
                         time = (end_lead_burst - start_lead_burst)/sampling_rate*1000;
-                        ScanaStudio.dec_item_new(ch_nec,start_lead_burst + 1,end_lead_burst - 1);
-                        ScanaStudio.dec_item_add_content("Leading pulse (" + time.toFixed(2) + "ms)");
-                        ScanaStudio.dec_item_add_content("Leading pulse");
-                        ScanaStudio.dec_item_end();
+                        nec_item_new(ch_nec,start_lead_burst + 1,end_lead_burst - 1);
+                        nec_item_content("Leading pulse (" + time.toFixed(2) + "ms)");
+                        nec_item_content("Leading pulse");
+                        nec_item_end();
                         // Leading space
                         start_lead_space = end_lead_burst;
                         tmp_trs_sample_index = trs_nec.sample_index;
-                        while( (tmp_trs_sample_index == trs_nec.sample_index) && (ScanaStudio.trs_is_not_last(ch_nec) == true) )
+                        while( (tmp_trs_sample_index == trs_nec.sample_index) && (nec_more() == true) )
                         {
                             trs_nec = ScanaStudio.trs_get_next(ch_nec);
                         }
                         end_lead_space = trs_nec.sample_index; // Should be a rising edge
                         time = (end_lead_space - start_lead_space)/sampling_rate*1000;
-                        ScanaStudio.dec_item_new(ch_nec,start_lead_space + 1,end_lead_space - 1);
-                        ScanaStudio.dec_item_add_content("Space (" + time.toFixed(2) + "ms)");
-                        ScanaStudio.dec_item_end();
+                        nec_item_new(ch_nec,start_lead_space + 1,end_lead_space - 1);
+                        nec_item_content("Space (" + time.toFixed(2) + "ms)");
+                        nec_item_end();
                     }
                     else
                     {
@@ -340,7 +454,7 @@ function on_decode_signals(resume)
                             last_trs_sample = trs_nec.sample_index;
                             trs_nec = ScanaStudio.trs_get_next(ch_nec);
                             n++;
-                            if (!ScanaStudio.trs_is_not_last(ch_nec))
+                            if (!nec_more())
                             {
                                 stop_decode = true;
                                 break;
@@ -372,15 +486,15 @@ function on_decode_signals(resume)
                     end_adress = trs_nec.sample_index;
                     Adress = bin2dec(bit_value_array);
                     time = (end_adress - start_adress)/sampling_rate*1000;
-                    ScanaStudio.dec_item_new(ch_nec,start_adress,end_adress);
-                    ScanaStudio.dec_item_add_content("Adress : 0x" + pad(Adress.toString(16),4) + " (" + time.toFixed(2) + "ms)");
-                    ScanaStudio.dec_item_add_content("Adress : 0x" + pad(Adress.toString(16),2));
-                    ScanaStudio.dec_item_add_content("0x" + pad(Adress.toString(16),2));
+                    nec_item_new(ch_nec,start_adress,end_adress);
+                    nec_item_content("Adress : 0x" + pad(Adress.toString(16),4) + " (" + time.toFixed(2) + "ms)");
+                    nec_item_content("Adress : 0x" + pad(Adress.toString(16),2));
+                    nec_item_content("0x" + pad(Adress.toString(16),2));
                     for (i=0; i<16; i++)
                     {
-                        ScanaStudio.dec_item_add_sample_point(bit_sample_array[i],bit_value_array[i].toString(2));
+                        nec_item_point(bit_sample_array[i],bit_value_array[i].toString(2));
                     }
-                    ScanaStudio.dec_item_end();
+                    nec_item_end();
                     state_machine = ENUM_STATE_COMMAND;
                     break;
                 }//end (extend_adress == true)
@@ -394,7 +508,7 @@ function on_decode_signals(resume)
                             last_trs_sample = trs_nec.sample_index;
                             trs_nec = ScanaStudio.trs_get_next(ch_nec);
                             n++;
-                            if (!ScanaStudio.trs_is_not_last(ch_nec))
+                            if (!nec_more())
                             {
                                 stop_decode = true;
                                 break;
@@ -426,18 +540,18 @@ function on_decode_signals(resume)
                     end_adress = trs_nec.sample_index;
                     Adress = bin2dec(bit_value_array);
                     time = (end_adress - start_adress)/sampling_rate*1000;
-                    ScanaStudio.dec_item_new(ch_nec,start_adress,end_adress);
-                    ScanaStudio.dec_item_add_content("Adress : 0x" + pad(Adress.toString(16),2) + " (" + time.toFixed(2) + "ms)");
-                    ScanaStudio.dec_item_add_content("Adress : 0x" + pad(Adress.toString(16),2));
-                    ScanaStudio.dec_item_add_content("0x" + pad(Adress.toString(16),2));
+                    nec_item_new(ch_nec,start_adress,end_adress);
+                    nec_item_content("Adress : 0x" + pad(Adress.toString(16),2) + " (" + time.toFixed(2) + "ms)");
+                    nec_item_content("Adress : 0x" + pad(Adress.toString(16),2));
+                    nec_item_content("0x" + pad(Adress.toString(16),2));
                     for (i=0; i<8; i++)
                     {
-                        ScanaStudio.dec_item_add_sample_point(bit_sample_array[i],bit_value_array[i].toString(2));
+                        nec_item_point(bit_sample_array[i],bit_value_array[i].toString(2));
                     }
-                    ScanaStudio.dec_item_end();
+                    nec_item_end();
                     // Start of Complement of Adress
                     tmp_trs_sample_index = trs_nec.sample_index;
-                    while( (tmp_trs_sample_index == trs_nec.sample_index) && (ScanaStudio.trs_is_not_last(ch_nec) == true) )
+                    while( (tmp_trs_sample_index == trs_nec.sample_index) && (nec_more() == true) )
                     {
                         trs_nec = ScanaStudio.trs_get_next(ch_nec);
                     }
@@ -456,7 +570,7 @@ function on_decode_signals(resume)
                             last_trs_sample = trs_nec.sample_index;
                             trs_nec = ScanaStudio.trs_get_next(ch_nec);
                             n++;
-                            if (!ScanaStudio.trs_is_not_last(ch_nec))
+                            if (!nec_more())
                             {
                                 stop_decode = true;
                                 break;
@@ -488,11 +602,11 @@ function on_decode_signals(resume)
                     end_adress_2 = trs_nec.sample_index;
                     time = (end_adress_2 - start_adress_2)/sampling_rate*1000;
                     Adress_complement = bin2dec(bit_value_array_2);
-                    ScanaStudio.dec_item_new(ch_nec,start_adress_2,end_adress_2);
+                    nec_item_new(ch_nec,start_adress_2,end_adress_2);
                     var test = 0;
                     for (i=0; i<8; i++)
                     {
-                        ScanaStudio.dec_item_add_sample_point(bit_sample_array_2[i], bit_value_array_2[i].toString(2));
+                        nec_item_point(bit_sample_array_2[i], bit_value_array_2[i].toString(2));
                         if (bit_value_array_2[i] == bit_value_array[i])
                         {
                             test = 1;
@@ -500,22 +614,22 @@ function on_decode_signals(resume)
                     }
                     if (test == 1)
                     {
-                        ScanaStudio.dec_item_emphasize_error();
-                        ScanaStudio.dec_item_add_content("Complement of Adress is incorrect, 0x" + pad(Adress_complement.toString(16),2) + " (" + time.toFixed(2) + "ms)");
-                        ScanaStudio.dec_item_add_content("Complement of Adress is incorrect, 0x" + pad(Adress_complement.toString(16),2));
-                        ScanaStudio.dec_item_add_content("0x" + pad(Adress_complement.toString(16),2));
+                        nec_item_error();
+                        nec_item_content("Complement of Adress is incorrect, 0x" + pad(Adress_complement.toString(16),2) + " (" + time.toFixed(2) + "ms)");
+                        nec_item_content("Complement of Adress is incorrect, 0x" + pad(Adress_complement.toString(16),2));
+                        nec_item_content("0x" + pad(Adress_complement.toString(16),2));
                         types = ScanaStudio.PacketColors.Error.Title;
                         types_2 = ScanaStudio.PacketColors.Error.Content;
                     }
                     else
                     {
-                        ScanaStudio.dec_item_add_content("Complement of Adress : 0x" + pad(Adress_complement.toString(16),2) + " (" + time.toFixed(2) + "ms)");
-                        ScanaStudio.dec_item_add_content("Complement of Adress : 0x" + pad(Adress_complement.toString(16),2));
-                        ScanaStudio.dec_item_add_content("0x" + pad(Adress_complement.toString(16),2));
+                        nec_item_content("Complement of Adress : 0x" + pad(Adress_complement.toString(16),2) + " (" + time.toFixed(2) + "ms)");
+                        nec_item_content("Complement of Adress : 0x" + pad(Adress_complement.toString(16),2));
+                        nec_item_content("0x" + pad(Adress_complement.toString(16),2));
                         types = ScanaStudio.PacketColors.Check.Title;
                         types_2 = ScanaStudio.PacketColors.Check.Content;
                     }
-                    ScanaStudio.dec_item_end();
+                    nec_item_end();
                     state_machine = ENUM_STATE_COMMAND;
                     break;
                 }//end (extend_adress == false)
@@ -529,7 +643,7 @@ function on_decode_signals(resume)
                 bit_sample_array_2 = [];
                 bit_value_array_2 = [];
                 tmp_trs_sample_index = trs_nec.sample_index;
-                while( (tmp_trs_sample_index == trs_nec.sample_index) && (ScanaStudio.trs_is_not_last(ch_nec) == true) )
+                while( (tmp_trs_sample_index == trs_nec.sample_index) && (nec_more() == true) )
                 {
                     trs_nec = ScanaStudio.trs_get_next(ch_nec);
                 }
@@ -554,7 +668,7 @@ function on_decode_signals(resume)
                     {
                         last_trs_sample = trs_nec.sample_index;
                         trs_nec = ScanaStudio.trs_get_next(ch_nec);
-                        if (!ScanaStudio.trs_is_not_last(ch_nec))
+                        if (!nec_more())
                         {
                             stop_decode = true;
                             break;
@@ -587,18 +701,18 @@ function on_decode_signals(resume)
                 end_command = trs_nec.sample_index;
                 Command = bin2dec(bit_value_array);
                 time = (end_command - start_command)/sampling_rate*1000;
-                ScanaStudio.dec_item_new(ch_nec,start_command,end_command);
-                ScanaStudio.dec_item_add_content("Command : 0x" + pad(Command.toString(16),2) + " (" + time.toFixed(2) + "ms)");
-                ScanaStudio.dec_item_add_content("Command : 0x" + pad(Command.toString(16),2));
-                ScanaStudio.dec_item_add_content("0x" + pad(Command.toString(16),2));
+                nec_item_new(ch_nec,start_command,end_command);
+                nec_item_content("Command : 0x" + pad(Command.toString(16),2) + " (" + time.toFixed(2) + "ms)");
+                nec_item_content("Command : 0x" + pad(Command.toString(16),2));
+                nec_item_content("0x" + pad(Command.toString(16),2));
                 for (i=0; i<8; i++)
                 {
-                    ScanaStudio.dec_item_add_sample_point(bit_sample_array[i],bit_value_array[i].toString(2));
+                    nec_item_point(bit_sample_array[i],bit_value_array[i].toString(2));
                 }
-                ScanaStudio.dec_item_end();
+                nec_item_end();
                 // Start of Complement of Adress
                 tmp_trs_sample_index = trs_nec.sample_index;
-                while( (tmp_trs_sample_index == trs_nec.sample_index) && (ScanaStudio.trs_is_not_last(ch_nec) == true) )
+                while( (tmp_trs_sample_index == trs_nec.sample_index) && (nec_more() == true) )
                 {
                     trs_nec = ScanaStudio.trs_get_next(ch_nec);
                 }
@@ -617,7 +731,7 @@ function on_decode_signals(resume)
                         last_trs_sample = trs_nec.sample_index;
                         trs_nec = ScanaStudio.trs_get_next(ch_nec);
                         n++;
-                        if (!ScanaStudio.trs_is_not_last(ch_nec))
+                        if (!nec_more())
                         {
                             stop_decode = true;
                             break;
@@ -649,11 +763,11 @@ function on_decode_signals(resume)
                 end_command_2 = trs_nec.sample_index;
                 Command_complement = bin2dec(bit_value_array_2);
                 time = (end_command_2 - start_command_2)/sampling_rate*1000;
-                ScanaStudio.dec_item_new(ch_nec,start_command_2 + 1,end_command_2 - 1);
+                nec_item_new(ch_nec,start_command_2 + 1,end_command_2 - 1);
                 test = 0;
                 for (i=0; i<8; i++)
                 {
-                    ScanaStudio.dec_item_add_sample_point(bit_sample_array_2[i], bit_value_array_2[i].toString(2));
+                    nec_item_point(bit_sample_array_2[i], bit_value_array_2[i].toString(2));
                     if (bit_value_array_2[i] == bit_value_array[i])
                     {
                         test = 1;
@@ -661,22 +775,22 @@ function on_decode_signals(resume)
                 }
                 if (test == 1)
                 {
-                    ScanaStudio.dec_item_emphasize_error();
-                    ScanaStudio.dec_item_add_content("Complement of Command is incorrect, 0x" + pad(Command_complement.toString(16),2) + " (" + time.toFixed(2) + "ms)");
-                    ScanaStudio.dec_item_add_content("Complement of Command is incorrect, 0x" + pad(Command_complement.toString(16),2));
-                    ScanaStudio.dec_item_add_content("0x" + pad(Command_complement.toString(16),2));
+                    nec_item_error();
+                    nec_item_content("Complement of Command is incorrect, 0x" + pad(Command_complement.toString(16),2) + " (" + time.toFixed(2) + "ms)");
+                    nec_item_content("Complement of Command is incorrect, 0x" + pad(Command_complement.toString(16),2));
+                    nec_item_content("0x" + pad(Command_complement.toString(16),2));
                     types = ScanaStudio.PacketColors.Error.Title;
                     types_2 = ScanaStudio.PacketColors.Error.Content;
                 }
                 else
                 {
-                    ScanaStudio.dec_item_add_content("Complement of Command : 0x" + pad(Command_complement.toString(16),2) + " (" + time.toFixed(2) + "ms)");
-                    ScanaStudio.dec_item_add_content("Complement of Command : 0x" + pad(Command_complement.toString(16),2));
-                    ScanaStudio.dec_item_add_content("0x" + pad(Command_complement.toString(16),2));
+                    nec_item_content("Complement of Command : 0x" + pad(Command_complement.toString(16),2) + " (" + time.toFixed(2) + "ms)");
+                    nec_item_content("Complement of Command : 0x" + pad(Command_complement.toString(16),2));
+                    nec_item_content("0x" + pad(Command_complement.toString(16),2));
                     types = ScanaStudio.PacketColors.Check.Title;
                     types_2 = ScanaStudio.PacketColors.Check.Content;
                 }
-                ScanaStudio.dec_item_end();
+                nec_item_end();
                 state_machine = ENUM_STATE_END;
                 break;
             }//end ENUM_STATE_COMMAND
@@ -689,7 +803,7 @@ function on_decode_signals(resume)
                 {
                     last_trs_sample = trs_nec.sample_index;
                     trs_nec = ScanaStudio.trs_get_next(ch_nec);
-                    if (!ScanaStudio.trs_is_not_last(ch_nec))
+                    if (!nec_more())
                     {
                         stop_decode = true;
                         break;
@@ -703,7 +817,7 @@ function on_decode_signals(resume)
                 if (trs_nec.sample_index == start_end)
                 {
                     tmp_trs_sample_index = trs_nec.sample_index;
-                    while( (tmp_trs_sample_index == trs_nec.sample_index) && (ScanaStudio.trs_is_not_last(ch_nec) == true) )
+                    while( (tmp_trs_sample_index == trs_nec.sample_index) && (nec_more() == true) )
                     {
                         trs_nec = ScanaStudio.trs_get_next(ch_nec);
                     }
@@ -711,19 +825,19 @@ function on_decode_signals(resume)
                 end_end = trs_nec.sample_index; // Should be a falling edge
                 end_transmission = trs_nec.sample_index;
                 time = (end_end - start_end)/sampling_rate*1000;
-                ScanaStudio.dec_item_new(ch_nec,start_end + 1,end_end - 1);
-                ScanaStudio.dec_item_add_content("End (" + time.toFixed(2) + "ms)");
-                ScanaStudio.dec_item_add_content("End");
-                ScanaStudio.dec_item_add_content("E");
-                ScanaStudio.dec_item_end();
+                nec_item_new(ch_nec,start_end + 1,end_end - 1);
+                nec_item_content("End (" + time.toFixed(2) + "ms)");
+                nec_item_content("End");
+                nec_item_content("E");
+                nec_item_end();
                 tmp_trs_sample_index = trs_nec.sample_index;
-                while( (tmp_trs_sample_index == trs_nec.sample_index) && (ScanaStudio.trs_is_not_last(ch_nec) == true) )
+                while( (tmp_trs_sample_index == trs_nec.sample_index) && (nec_more() == true) )
                 {
                     trs_nec = ScanaStudio.trs_get_next(ch_nec);
                 }
                 // Create all the packet_view
                 var transmission_time = ((end_transmission-start_transmission)/sampling_rate*1000).toFixed(2);
-                ScanaStudio.packet_view_add_packet( true,
+                nec_packet( true,
                     ch_nec,
                     start_transmission,
                     end_transmission,
@@ -731,7 +845,7 @@ function on_decode_signals(resume)
                     "Transmission (" + transmission_time + "ms)",
                     ScanaStudio.PacketColors.Head.Title,
                     ScanaStudio.PacketColors.Head.Content);
-                ScanaStudio.packet_view_add_packet( false,
+                nec_packet( false,
                     ch_nec,
                     start_lead_burst,
                     end_lead_burst,
@@ -739,7 +853,7 @@ function on_decode_signals(resume)
                     "Leading pulse burst",
                     ScanaStudio.PacketColors.Misc.Title,
                     ScanaStudio.PacketColors.Misc.Content);
-                ScanaStudio.packet_view_add_packet( false,
+                nec_packet( false,
                     ch_nec,
                     start_lead_space,
                     end_lead_space,
@@ -750,7 +864,7 @@ function on_decode_signals(resume)
                 if (extended_adress == true)
                 {
                     packet_string = "0x" + pad(Adress.toString(16),4);
-                    ScanaStudio.packet_view_add_packet( false,
+                    nec_packet( false,
                         ch_nec,
                         start_adress,
                         end_adress,
@@ -762,7 +876,7 @@ function on_decode_signals(resume)
                 else
                 {
                     packet_string = "0x" + pad(Adress.toString(16),2);
-                    ScanaStudio.packet_view_add_packet( false,
+                    nec_packet( false,
                         ch_nec,
                         start_adress,
                         end_adress,
@@ -771,7 +885,7 @@ function on_decode_signals(resume)
                         ScanaStudio.PacketColors.Data.Title,
                         ScanaStudio.PacketColors.Data.Content);
                     packet_string = "0x" + pad(Adress_complement.toString(16),2);
-                    ScanaStudio.packet_view_add_packet( false,
+                    nec_packet( false,
                         ch_nec,
                         start_adress_2,
                         end_adress_2,
@@ -781,7 +895,7 @@ function on_decode_signals(resume)
                         types_2);
                 }
                 packet_string = "0x" + pad(Command.toString(16),2);
-                ScanaStudio.packet_view_add_packet( false,
+                nec_packet( false,
                     ch_nec,
                     start_command,
                     end_command,
@@ -790,7 +904,7 @@ function on_decode_signals(resume)
                     ScanaStudio.PacketColors.Data.Title,
                     ScanaStudio.PacketColors.Data.Content);
                 packet_string = "0x" + pad(Command_complement.toString(16),2);
-                ScanaStudio.packet_view_add_packet( false,
+                nec_packet( false,
                     ch_nec,
                     start_command_2,
                     end_command_2,
@@ -798,7 +912,7 @@ function on_decode_signals(resume)
                     packet_string,
                     types,
                     types_2);
-                ScanaStudio.packet_view_add_packet( false,
+                nec_packet( false,
                     ch_nec,
                     start_end,
                     end_end,
@@ -812,6 +926,20 @@ function on_decode_signals(resume)
 
             case ENUM_STATE_REPEAT :
             {
+                if (trs_nec.sample_index == repeat_closed_at)
+                {
+                    // skip the last edge of a repeat code closed by silence
+                    tmp_trs_sample_index = trs_nec.sample_index;
+                    while( (tmp_trs_sample_index == trs_nec.sample_index) && (nec_more() == true) )
+                    {
+                        trs_nec = ScanaStudio.trs_get_next(ch_nec);
+                    }
+                    if (stop_decode == true)
+                    {
+                        break;
+                    }
+                }
+                var closed_by_silence = false;
                 // Check if there is a Repeat Code
                 start_item = trs_nec.sample_index;
                 last_trs_sample = trs_nec.sample_index;
@@ -822,7 +950,7 @@ function on_decode_signals(resume)
                     {
                         last_trs_sample = trs_nec.sample_index;
                         trs_nec = ScanaStudio.trs_get_next(ch_nec);
-                        if (!ScanaStudio.trs_is_not_last(ch_nec))
+                        if (!nec_more())
                         {
                             stop_decode = true;
                             break;
@@ -834,7 +962,7 @@ function on_decode_signals(resume)
                     }
                     trs_nec = ScanaStudio.trs_get_previous(ch_nec);
                     tmp_trs_sample_index = trs_nec.sample_index;
-                    while( (tmp_trs_sample_index == trs_nec.sample_index) && (ScanaStudio.trs_is_not_last(ch_nec) == true) )
+                    while( (tmp_trs_sample_index == trs_nec.sample_index) && (nec_more() == true) )
                     {
                         trs_nec = ScanaStudio.trs_get_next(ch_nec);
                     }
@@ -843,46 +971,57 @@ function on_decode_signals(resume)
                     {
                         last_trs_sample = trs_nec.sample_index;
                         trs_nec = ScanaStudio.trs_get_next(ch_nec);
+                        if (!nec_more())
+                        {
+                            // silence up to the end of the data closes it too
+                            if ((ScanaStudio.get_available_samples(ch_nec) - start_bit)/sampling_rate >= CONST_t_bit_high*1.5)
+                            {
+                                stop_decode = false;
+                                closed_by_silence = true;
+                                repeat_closed_at = trs_nec.sample_index;
+                            }
+                            break;
+                        }
                     }
                 }
                 else // Normal Pulse Mode
                 {
                     // Leading Pulse
                     tmp_trs_sample_index = trs_nec.sample_index;
-                    while( (tmp_trs_sample_index == trs_nec.sample_index) && (ScanaStudio.trs_is_not_last(ch_nec) == true) )
+                    while( (tmp_trs_sample_index == trs_nec.sample_index) && (nec_more() == true) )
                     {
                         trs_nec = ScanaStudio.trs_get_next(ch_nec);
                     }
                     // Leading Space
                     last_trs_sample = trs_nec.sample_index;
                     tmp_trs_sample_index = trs_nec.sample_index;
-                    while( (tmp_trs_sample_index == trs_nec.sample_index) && (ScanaStudio.trs_is_not_last(ch_nec) == true) )
+                    while( (tmp_trs_sample_index == trs_nec.sample_index) && (nec_more() == true) )
                     {
                         trs_nec = ScanaStudio.trs_get_next(ch_nec);
                     }
                     // Burst
                     start_bit = trs_nec.sample_index;
                     tmp_trs_sample_index = trs_nec.sample_index;
-                    while( (tmp_trs_sample_index == trs_nec.sample_index) && (ScanaStudio.trs_is_not_last(ch_nec) == true) )
+                    while( (tmp_trs_sample_index == trs_nec.sample_index) && (nec_more() == true) )
                     {
                         trs_nec = ScanaStudio.trs_get_next(ch_nec);
                     }
                     tmp_trs_sample_index = trs_nec.sample_index;
-                    while( (tmp_trs_sample_index == trs_nec.sample_index) && (ScanaStudio.trs_is_not_last(ch_nec) == true) )
+                    while( (tmp_trs_sample_index == trs_nec.sample_index) && (nec_more() == true) )
                     {
                         trs_nec = ScanaStudio.trs_get_next(ch_nec);
                     }
                 }
-                if ((trs_nec.sample_index - start_bit)/(sampling_rate) >= CONST_t_bit_high*1.5)
+                if (closed_by_silence || ((trs_nec.sample_index - start_bit)/(sampling_rate) >= CONST_t_bit_high*1.5))
                 {
-                    end_item = trs_nec.sample_index;
+                    end_item = (burst == true && !closed_by_silence) ? last_trs_sample : trs_nec.sample_index;
                     time = (end_item - start_item)/sampling_rate*1000;
-                    ScanaStudio.dec_item_new(ch_nec,start_item,end_item);
-                    ScanaStudio.dec_item_add_content("Repeat Code (" + time.toFixed(2) + "ms)");
-                    ScanaStudio.dec_item_add_content("Repeat Code");
-                    ScanaStudio.dec_item_end();
+                    nec_item_new(ch_nec,start_item,end_item);
+                    nec_item_content("Repeat Code (" + time.toFixed(2) + "ms)");
+                    nec_item_content("Repeat Code");
+                    nec_item_end();
                     // Packet view
-                    ScanaStudio.packet_view_add_packet( false,
+                    nec_packet( false,
                                                         ch_nec,
                                                         start_item,
                                                         end_item,
