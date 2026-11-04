@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Decode most of NMEA 2000 PGN.
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
+<VERSION> 0.2 </VERSION>
 <AUTHOR_NAME> Corentin MARAVAT </AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ikalogic SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.2:  Decodes while the capture is running, not only the data present at the first call.
 V0.1:  Initial release.
 </RELEASE_NOTES>
 */
@@ -106,6 +107,11 @@ var fast_packet_total_byte = -1;
 var fast_packet_byte = 0;
 // Date variable
 var system_time = new Date(1);
+// Frame decoding state: global so that a frame whose CAN items arrive over
+// two calls of on_decode_signals carries on where it stopped
+var end_reserved, end_data_page, first_byte_value, next_sequence_number, size_total;
+var pgn_request, pgn_request_low, pgn_request_high, pgn_request_dp;
+var TP_GPN_total, TP_GPN_low, TP_GPN_high, TP_GPN_data_page;
 
 
 function on_decode_signals(resume)
@@ -120,7 +126,9 @@ function on_decode_signals(resume)
       data_format = ScanaStudio.gui_get_value("data_format");
       crc_format = ScanaStudio.gui_get_value("crc_format");
       samples_per_bit_std =  Math.floor(sampling_rate / rate);
+  }//end if (!resume)
 
+      // CAN keeps decoding on every call, each time handing its new items
       var can_items = ScanaStudio.pre_decode("can.js", resume);
 
       for (i=0; i < can_items.length; i++)
@@ -191,7 +199,7 @@ function on_decode_signals(resume)
                   priority_bits_value,
                   ScanaStudio.PacketColors.Data.Title,
                   ScanaStudio.PacketColors.Data.Content);
-              var end_reserved = end_priority_item + (can_items[i].end_sample_index - can_items[i].start_sample_index)/11;
+              end_reserved = end_priority_item + (can_items[i].end_sample_index - can_items[i].start_sample_index)/11;
               ScanaStudio.dec_item_new(can_items[i].channel_index,end_priority_item + 1,end_reserved);
               ScanaStudio.dec_item_add_content("Reserved");
               ScanaStudio.dec_item_add_content("R");
@@ -205,7 +213,7 @@ function on_decode_signals(resume)
                   "Reserved",
                   ScanaStudio.PacketColors.Data.Title,
                   ScanaStudio.PacketColors.Data.Content);
-              var end_data_page = end_reserved + (can_items[i].end_sample_index - can_items[i].start_sample_index)/11;
+              end_data_page = end_reserved + (can_items[i].end_sample_index - can_items[i].start_sample_index)/11;
               ScanaStudio.dec_item_new(can_items[i].channel_index,end_reserved + 1,end_data_page );
               ScanaStudio.dec_item_add_content("Data Page : " + data_page);
               ScanaStudio.dec_item_add_content(data_page);
@@ -568,7 +576,7 @@ function on_decode_signals(resume)
                               packet_title = "TP_CM";
                               item_content = hex_value + "(Unknown Group Function Code)";
                           }
-                          var first_byte_value = hex_value; //Used to know if it's a RTS/CTS/BAM Message
+                          first_byte_value = hex_value; //Used to know if it's a RTS/CTS/BAM Message
                           packet_string = item_content;
                           break;
                       }
@@ -600,13 +608,13 @@ function on_decode_signals(resume)
                           if (first_byte_value == 16 || first_byte_value == 19 || first_byte_value == 32)
                           {
                               can_items[i].start_sample_index = start_item;
-                              var size_total = size_low + (hex_value<<8);
+                              size_total = size_low + (hex_value<<8);
                               hex_value = size_total;
                               item_content = "Message size : " + size_total + " bytes";
                           }
                           else if (first_byte_value == 17)
                           {
-                              var next_sequence_number = hex_value;
+                              next_sequence_number = hex_value;
                               item_content = "Next sequence number : " + hex_value;
                           }
                           else if (first_byte_value == 255)
@@ -693,27 +701,27 @@ function on_decode_signals(resume)
                       {
                           start_item = can_items[i].start_sample_index;
                           skip_item = true;
-                          var TP_GPN_low = hex_value;
+                          TP_GPN_low = hex_value;
                           packet_string = item_content;
                           break;
                       }
                       case 6 : // Seventh byte
                       {
                           skip_item = true;
-                          var TP_GPN_high = hex_value;
+                          TP_GPN_high = hex_value;
                           packet_string = item_content;
                           break;
                       }
                       case 7 : // Eighth byte
                       {
-                          var TP_GPN_data_page = hex_value;
+                          TP_GPN_data_page = hex_value;
                           if (TP_GPN_high >= 240)
                           {
-                              var TP_GPN_total = TP_GPN_low + (TP_GPN_high<<8) + (TP_GPN_data_page<<16);
+                              TP_GPN_total = TP_GPN_low + (TP_GPN_high<<8) + (TP_GPN_data_page<<16);
                           }
                           else
                           {
-                              var TP_GPN_total = (TP_GPN_high<<8) + (TP_GPN_data_page<<16);
+                              TP_GPN_total = (TP_GPN_high<<8) + (TP_GPN_data_page<<16);
                           }
                           item_content = "GPN : " + TP_GPN_total + " or 0x" + pad(TP_GPN_total.toString(16),5);
                           hex_value = TP_GPN_total;
@@ -767,21 +775,21 @@ function on_decode_signals(resume)
                   {
                       case 0 : // First data byte of the frame
                       {
-                          var pgn_request_low = hex_value;
+                          pgn_request_low = hex_value;
                           start_item = can_items[i].start_sample_index;
                           skip_item = true;
                           break;
                       }
                       case 1 : // Second data byte of the frame
                       {
-                          var pgn_request_high = hex_value;
+                          pgn_request_high = hex_value;
                           skip_item = true;
                           break;
                       }
                       case 2 : // Third data byte of the frame
                       {
-                          var pgn_request_dp = hex_value;
-                          var pgn_request = pgn_request_low + (pgn_request_high<<8) + (pgn_request_dp<<16);
+                          pgn_request_dp = hex_value;
+                          pgn_request = pgn_request_low + (pgn_request_high<<8) + (pgn_request_dp<<16);
                           can_items[i].start_sample_index = start_item;
                           hex_value = pgn_request;
                           packet_title = "REQUEST PGN";
@@ -1542,7 +1550,6 @@ function on_decode_signals(resume)
               ScanaStudio.dec_item_end();
           }//end other CAN items
       }//end for (i=0; i < can_items.length; i++)
-  }//end if (!resume)
 }//end on_decode_signals
 
 
