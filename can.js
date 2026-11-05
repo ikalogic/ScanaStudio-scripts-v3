@@ -3,13 +3,14 @@
 <DESCRIPTION>
 CAN bus protocol analyzer (supporting CAN FD)
 </DESCRIPTION>
-<VERSION> 1.0 </VERSION>
-<AUTHOR_NAME>  Ibrahim KAMAL, Nicolas Bastit </AUTHOR_NAME>
+<VERSION> 1.1 </VERSION>
+<AUTHOR_NAME>  Ibrahim KAMAL, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com, n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v1.1: Classic CAN decodes whatever the FD bit rate; a FD data phase too fast for the sampling rate is reported.
 v1.0: Added support for CAN-FD ISO CRC (ISO 11898-1:2015)
 v0.991: Fix bug in trigger: doesn't trig on the first frame
 v0.99: Fix bug in trigger.
@@ -75,13 +76,8 @@ function on_eval_gui_decoder()
             + "(Maximum allowable bit rate is " + ScanaStudio.engineering_notation(max_rate,5) + "Hz"
           );
   }
-  if (rate_fd > max_rate)
-  {
-    return ("Selected FD bit rate of " + ScanaStudio.engineering_notation(rate_fd,5) + "Hz"
-            + " is too high compared to device sampling rate of " + ScanaStudio.engineering_notation(sampling_rate,5) + "Hz\n"
-            + "(Maximum allowable bit rate is " + ScanaStudio.engineering_notation(max_rate,5) + "Hz"
-          );
-  }
+  //A FD bit rate too high is not refused: classic frames still decode, and the
+  //data phase of each FD frame is reported as unreadable
   return "" //All good.
 }
 
@@ -96,6 +92,8 @@ var stuff_mode = 0; //0: off, 1: std bit stuffing, 2: FD CRC bit stuffing
 var samples_per_bit,samples_per_bit_std,samples_per_bit_fd,sample_point_offset;
 var sample_point_offset_std,sample_point_offset_fd;
 var fd_mode = false;
+var MIN_SAMPLES_PER_BIT = 8;
+var fd_rate_readable = true;
 var bit_to_process,current_bit_value,dominant_bits_counter,same_bit_value_counter;
 var switch_to_high_baud_rate = false;
 var switch_to_std_baud_rate = false;
@@ -137,6 +135,7 @@ function on_decode_signals(resume)
       //Pinpoint exact sampling point (CAN Spec page 28)
       sample_point_offset_std = Math.floor(samples_per_bit_std *11 / 15);
       samples_per_bit_fd =  Math.floor(sampling_rate / rate_fd);
+      fd_rate_readable = (sampling_rate / rate_fd >= MIN_SAMPLES_PER_BIT);
       samples_per_brs_bit = (samples_per_bit_std*11/15) + (samples_per_bit_fd*4/10);
       samples_per_fd_crc_del_bit = (samples_per_bit_fd*6/10) + (samples_per_bit_std*4/15);
       sample_point_offset_fd = Math.floor(samples_per_bit_fd *6 / 10);
@@ -292,6 +291,7 @@ function on_decode_signals(resume)
 var CAN =
 {
   SEEK_IDLE        : 0,
+  SKIP_FRAME       : 200, //above SEEK_CRC: the 7 same bits rule does not apply
   SEEK_SOF         : 10,
   SEEK_BASE_ID     : 20,
   SEEK_FD_R0_BRS   : 30,
@@ -615,6 +615,14 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         can_state_machine = CAN.SEEK_SOF;
       }
       break;
+    case CAN.SKIP_FRAME:
+      //A FD data phase changes level at least every 6 fast bits (stuffing):
+      //10 slow bits without any edge can only be the bus idle after the frame
+      if ((b == 1) && (same_bit_value_counter >= 10))
+      {
+        can_state_machine = CAN.SEEK_SOF;
+      }
+      break;
     case CAN.SEEK_SOF: //Seek SOF
       if (b == 0)
       {
@@ -905,6 +913,26 @@ function can_process_bit(b,sample_point,is_stuffed_bit)
         ScanaStudio.dec_item_end();
         ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "R0", "",
                                            ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
+        if ((can_brs.value == 1) && !fd_rate_readable)
+        {
+          start_sample = can_brs.start - sample_point_offset_std + dec_item_margin;
+          end_sample = can_brs.end - sample_point_offset_std + samples_per_bit_std - dec_item_margin;
+          var max_fd_rate = ScanaStudio.engineering_notation(sampling_rate / MIN_SAMPLES_PER_BIT, 3) + "bit/s";
+          ScanaStudio.dec_item_new( ch, start_sample, end_sample);
+          ScanaStudio.dec_item_add_content("BRS = 1, FD bit rate too high for this sampling rate (max " + max_fd_rate + ")");
+          ScanaStudio.dec_item_add_content("FD rate too high");
+          ScanaStudio.dec_item_add_content("BRS!");
+          ScanaStudio.dec_item_emphasize_error();
+          add_can_bits_sampling_points(can_bits,1,1);
+          ScanaStudio.dec_item_end();
+          ScanaStudio.packet_view_add_packet(false, ch, start_sample, end_sample, "BRS",
+                                             "FD bit rate too high for this sampling rate (max " + max_fd_rate + ")",
+                                             ScanaStudio.PacketColors.Error.Title, ScanaStudio.PacketColors.Error.Content);
+          can_bits = [];
+          stuff_mode = 0; //the skipped bits are not checked; the next SOF sets it back
+          can_state_machine = CAN.SKIP_FRAME; //until the bus is idle again
+          break;
+        }
         if (can_brs.value == 1)
         {
           start_sample = can_brs.start - sample_point_offset_std + (samples_per_brs_bit/50);
@@ -1361,6 +1389,10 @@ function on_build_demo_signals()
   while (ScanaStudio.builder_get_samples_acc(ch) < samples_to_build)
   {
     random_frame_type = Math.floor(Math.random()*3.9);
+    if ((random_frame_type >= 2) && (sampling_rate / rate_fd < MIN_SAMPLES_PER_BIT))
+    {
+      random_frame_type -= 2; //a FD frame the decoder could not read at this sampling rate
+    }
     switch (random_frame_type)
     {
       case 0:
