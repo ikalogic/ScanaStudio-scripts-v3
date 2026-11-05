@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Decode servomotor command signal.
 </DESCRIPTION>
-<VERSION> 2.0 </VERSION>
-<AUTHOR_NAME> Corentin Maravat </AUTHOR_NAME>
+<VERSION> 2.1 </VERSION>
+<AUTHOR_NAME> Corentin Maravat, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ikalogic SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V2.1: Fixed a syntax error that prevented the script from loading.
 V2.0: Added VAC
 V1.0:  Initial release.
 </RELEASE_NOTES>
@@ -634,7 +635,7 @@ function on_build_signals()
     mod_type = ScanaStudio.gui_get_value("mod_type");
     var min_pulse = ScanaStudio.gui_get_value("min_pulse");
     var max_pulse = ScanaStudio.gui_get_value("max_pulse");
-    var freq_carrier = ScanaStudio.gui_get_value("freq_carrier"), //carrier_f
+    var freq_carrier = ScanaStudio.gui_get_value("freq_carrier"); //carrier_f
     if (gen_type_group == 0) //Simple fixed frequency & fixed pwm.
     {
         freq_carrier = ScanaStudio.gui_get_value("simple_freq_val");
