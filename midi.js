@@ -3,13 +3,14 @@
 <DESCRIPTION>
 MIDI 1.0 protocol
 </DESCRIPTION>
-<VERSION> 0.5 </VERSION>
-<AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
+<VERSION> 0.6 </VERSION>
+<AUTHOR_NAME>  Ibrahim KAMAL, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.6: Declares every UART setting it relies on.
 V0.5: Added packet view
 V0.2: Added dec_item_end() for each dec_item_new()
 V0.1: Initial release
@@ -48,6 +49,7 @@ function on_draw_gui_decoder()
     ScanaStudio.gui_add_hidden_field("parity",0);
     ScanaStudio.gui_add_hidden_field("stop",1);
     ScanaStudio.gui_add_hidden_field("order",0); //LSB first
+    ScanaStudio.gui_add_hidden_field("hexview_endianness",0);
 }
 
 //Evaluate decoder GUI
