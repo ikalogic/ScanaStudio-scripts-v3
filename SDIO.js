@@ -3,13 +3,14 @@
 <DESCRIPTION>
 SDIO Bus Decoder
 </DESCRIPTION>
-<VERSION> 1.00 </VERSION>
-<AUTHOR_NAME> Corentin Maravat </AUTHOR_NAME>
+<VERSION> 2.00 </VERSION>
+<AUTHOR_NAME> Corentin Maravat, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ikalogic SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V2.00:  Decodes while the capture is running. Demo signals over the whole capture.
 V1.00:  Initial release.
 </RELEASE_NOTES>
 */
@@ -283,30 +284,191 @@ const   SDSC = 0,
         SDUC = 3;
 
 
-function on_decode_signals(resume)
+
+//Variables a decoding pass keeps from one call to the next
+var AU_SIZE_and_SU_SIZE, CMD53_Block_count, CMD6_mode, CSD_version, FILE_FORMAT_GRP, MW, Month_array, NSAC, PRV_1, PRV_1_array, PRV_2, PRV_2_array, Year_array, au_size, busy, content, item_content, item_end, item_start, item_start_stop_array, month, nbytes_total, power_consumption, sampling_point, start_and_stop_item, str_array, string_content, test, time_unit_array, time_value, time_value_array, tmp_trs_sample_index, transfer_rate_unit, transfer_rate_unit_array, trs_clk, trs_cmd, trs_dat1, trs_dat2, trs_dat3, year, trs_dat0, sdio_simple, stop_cmd;
+var PASS_VARIABLES = ["AU_SIZE_and_SU_SIZE", "CMD53_Block_count", "CMD6_mode", "CSD_version", "FILE_FORMAT_GRP", "MW", "Month_array", "NSAC", "PRV_1", "PRV_1_array", "PRV_2", "PRV_2_array", "Year_array", "au_size", "busy", "content", "item_content", "item_end", "item_start", "item_start_stop_array", "month", "nbytes_total", "power_consumption", "sampling_point", "start_and_stop_item", "str_array", "string_content", "test", "time_unit_array", "time_value", "time_value_array", "tmp_trs_sample_index", "transfer_rate_unit", "transfer_rate_unit_array", "trs_clk", "trs_cmd", "trs_dat1", "trs_dat2", "trs_dat3", "year", "trs_dat0", "sdio_simple", "stop_cmd"];
+
+function reset_pass_variables()
 {
-  if (!resume) //If resume == false, it's the first call to this function.
-  {
-    //initialization code goes here, ex:
-    sampling_rate = ScanaStudio.get_capture_sample_rate();
-    reload_dec_gui_values();
-    initialize_CMD53_size_block(block_size);
-    if (ddr == true)
+    for (var i = 0; i < PASS_VARIABLES.length; i++)
     {
-        dat_clock_polarity = -1; //Dual Edge
+        GLOBAL_SCOPE[PASS_VARIABLES[i]] = undefined;
     }
-    cmd_channel.push(ch_cmd);
-    data_channels.push(ch_dat0);
+    held_output = [];
+    wait_available = -1;
+}
+
+/*
+ * Decoding while the capture runs: one pass of the main loop is a transaction.
+ * Its items are held; when the data runs out halfway, the pass is undone and done
+ * again at the next call, with more data. Only ScanaStudio 3 and 6 trs_* calls are used.
+*/
+var GLOBAL_SCOPE = (function () { return this; })();
+var held_output = [];
+var pass_snapshot = null;
+var wait_available = -1; //samples there when a pass last waited
+var PASS_EXCLUDED = ["PASS_WAIT", "wait_available", "held_output", "pass_snapshot", "GLOBAL_SCOPE", "PASS_EXCLUDED", "PASS_VARIABLES", "HELD_CALLS", "held"];
+var HELD_CALLS = ["dec_item_new", "dec_item_add_content", "dec_item_add_sample_point", "dec_item_emphasize_error",
+    "dec_item_emphasize_warning", "dec_item_emphasize_success", "dec_item_end", "packet_view_add_packet", "hex_view_add_byte"];
+var held = {};
+for (var held_i = 0; held_i < HELD_CALLS.length; held_i++)
+{
+    held[HELD_CALLS[held_i]] = make_held_call(HELD_CALLS[held_i]);
+}
+
+function make_held_call(name)
+{
+    return function ()
+    {
+        held_output.push([name, Array.prototype.slice.call(arguments)]);
+        return 1;
+    };
+}
+
+//Data only: the API objects and the functions are not part of the decoder's state
+function is_plain_data(value)
+{
+    if (typeof value == "function")
+    {
+        return false;
+    }
+    if ((typeof value == "object") && (value !== null))
+    {
+        for (var key in value)
+        {
+            if (typeof value[key] == "function")
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+function pass_begin()
+{
+    held_output = [];
+    pass_snapshot = {};
+    for (var name in GLOBAL_SCOPE)
+    {
+        if (PASS_EXCLUDED.indexOf(name) >= 0)
+        {
+            continue;
+        }
+        var value = GLOBAL_SCOPE[name];
+        if (!is_plain_data(value))
+        {
+            continue;
+        }
+        pass_snapshot[name] = ((typeof value == "object") && (value !== null)) ? JSON.parse(JSON.stringify(value)) : value;
+    }
+}
+
+function pass_commit()
+{
+    for (var i = 0; i < held_output.length; i++)
+    {
+        var name = held_output[i][0];
+        var a = held_output[i][1];
+        switch (a.length)
+        {
+            case 0: ScanaStudio[name](); break;
+            case 1: ScanaStudio[name](a[0]); break;
+            case 2: ScanaStudio[name](a[0], a[1]); break;
+            case 3: ScanaStudio[name](a[0], a[1], a[2]); break;
+            case 4: ScanaStudio[name](a[0], a[1], a[2], a[3]); break;
+            case 5: ScanaStudio[name](a[0], a[1], a[2], a[3], a[4]); break;
+            case 6: ScanaStudio[name](a[0], a[1], a[2], a[3], a[4], a[5]); break;
+            case 7: ScanaStudio[name](a[0], a[1], a[2], a[3], a[4], a[5], a[6]); break;
+            default: ScanaStudio[name](a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]); break;
+        }
+    }
+    held_output = [];
+}
+
+var PASS_WAIT = "SDIO pass waiting for more data";
+
+//ScanaStudio.trs_is_not_last within a pass: while the capture runs, no next transition
+//means none received yet, so the pass waits; at the end of the capture it is the answer
+function is_not_last(channel)
+{
+    if (ScanaStudio.trs_is_not_last(channel))
+    {
+        return true;
+    }
+    if ((channel == undefined) || (channel < 0))
+    {
+        return false; //not a channel of this decoder
+    }
+    if (wait_for_more_data())
+    {
+        throw PASS_WAIT;
+    }
+    return false;
+}
+
+//The pass needs samples that are not there yet: back to where it started, and true.
+//ScanaStudio calls once more when the samples stop. With no new sample since the last
+//wait AND no clock edge left to come, this is the end of the capture: the pass keeps
+//what it decoded, and false.
+function wait_for_more_data()
+{
+    var available = ScanaStudio.get_available_samples(ch_clk);
+    if ((available == wait_available) && !clock_edge_to_come(available))
+    {
+        pass_commit();
+        return false;
+    }
+    wait_available = available;
+    held_output = [];
+    for (var name in pass_snapshot)
+    {
+        GLOBAL_SCOPE[name] = pass_snapshot[name];
+    }
+    last_trans = false;
+    //the iterators back on the transitions the pass started from
+    put_iterator_on(ch_cmd, trs_cmd);
+    put_iterator_on(ch_dat0, trs_dat0);
+    if (speed_mode == 1)
+    {
+        put_iterator_on(ch_dat1, trs_dat1);
+        put_iterator_on(ch_dat2, trs_dat2);
+        put_iterator_on(ch_dat3, trs_dat3);
+    }
+    return true;
+}
+
+//While the capture runs, the clock goes on after the last edge received
+function clock_edge_to_come(available)
+{
+    ScanaStudio.trs_get_before(ch_clk, available);
+    return ScanaStudio.trs_is_not_last(ch_clk);
+}
+
+function put_iterator_on(channel, trs)
+{
+    if ((trs != undefined) && (trs.sample_index != undefined))
+    {
+        ScanaStudio.trs_get_before(channel, trs.sample_index);
+    }
+}
+
+var iterators_started = false;
+
+//Each channel's cursor on its first edge, past the start-of-capture marker at sample 0
+function start_iterators()
+{
     trs_clk = ScanaStudio.trs_reset(ch_clk);
-    var trs_clk = ScanaStudio.trs_get_next(ch_clk);
-    var tmp_trs_sample_index;
+    trs_clk = ScanaStudio.trs_get_next(ch_clk);
+    tmp_trs_sample_index;
     tmp_trs_sample_index = trs_clk.sample_index;
     while( (tmp_trs_sample_index == trs_clk.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
     {
         trs_clk = ScanaStudio.trs_get_next(ch_clk);
     }
     trs_cmd = ScanaStudio.trs_reset(ch_cmd);
-    var trs_cmd = ScanaStudio.trs_get_next(ch_cmd);
+    trs_cmd = ScanaStudio.trs_get_next(ch_cmd);
     tmp_trs_sample_index = trs_cmd.sample_index;
     while( (tmp_trs_sample_index == trs_cmd.sample_index) && (ScanaStudio.trs_is_not_last(ch_cmd) == true) )
     {
@@ -328,21 +490,21 @@ function on_decode_signals(resume)
         data_channels.push(ch_dat1);
         data_channels.push(ch_dat0);
         trs_dat1 = ScanaStudio.trs_reset(ch_dat1);
-        var trs_dat1 = ScanaStudio.trs_get_next(ch_dat1);
+        trs_dat1 = ScanaStudio.trs_get_next(ch_dat1);
         tmp_trs_sample_index = trs_dat1.sample_index;
         while( (tmp_trs_sample_index == trs_dat1.sample_index) && (ScanaStudio.trs_is_not_last(ch_dat1) == true) )
         {
             trs_dat1 = ScanaStudio.trs_get_next(ch_dat1);
         }
         trs_dat2 = ScanaStudio.trs_reset(ch_dat2);
-        var trs_dat2 = ScanaStudio.trs_get_next(ch_dat2);
+        trs_dat2 = ScanaStudio.trs_get_next(ch_dat2);
         tmp_trs_sample_index = trs_dat2.sample_index;
         while( (tmp_trs_sample_index == trs_dat2.sample_index) && (ScanaStudio.trs_is_not_last(ch_dat2) == true) )
         {
             trs_dat2 = ScanaStudio.trs_get_next(ch_dat2);
         }
         trs_dat3 = ScanaStudio.trs_reset(ch_dat3);
-        var trs_dat3 = ScanaStudio.trs_get_next(ch_dat3);
+        trs_dat3 = ScanaStudio.trs_get_next(ch_dat3);
         tmp_trs_sample_index = trs_dat3.sample_index;
         while( (tmp_trs_sample_index == trs_dat3.sample_index) && (ScanaStudio.trs_is_not_last(ch_dat3) == true) )
         {
@@ -354,12 +516,40 @@ function on_decode_signals(resume)
         trs_data.push(trs_dat1);
         trs_data.push(trs_dat0);
     }
+}
+
+function on_decode_signals(resume)
+{
+  if (!resume) //If resume == false, it's the first call to this function.
+  {
+    reset_pass_variables();
+    //initialization code goes here, ex:
+    sampling_rate = ScanaStudio.get_capture_sample_rate();
+    reload_dec_gui_values();
+    initialize_CMD53_size_block(block_size);
+    if (ddr == true)
+    {
+        dat_clock_polarity = -1; //Dual Edge
+    }
+    cmd_channel.push(ch_cmd);
+    data_channels.push(ch_dat0);
+    iterators_started = false;
     //init global variables
     state_machine = ENUM_STATE_CMD_START;
   }//end if (!resume)
   else
   {
       //ScanaStudio.console_info_msg("Decoding resumed");
+  }
+
+  if (!iterators_started)
+  {
+      if (ScanaStudio.get_available_samples(ch_clk) <= 0)
+      {
+          return; //no sample yet: the start-of-capture marker could not be skipped
+      }
+      start_iterators();
+      iterators_started = true;
   }
 
   while (ScanaStudio.abort_is_requested() == false)
@@ -369,6 +559,9 @@ function on_decode_signals(resume)
         {
             break;
         }
+        pass_begin();
+        try
+        {
         switch (state_machine)
         {
             case ENUM_STATE_CMD_START: //Looking for a starting bit
@@ -379,7 +572,7 @@ function on_decode_signals(resume)
                     sdio_simple = sync_decode_v2(cmd_channel,trs_cmd.sample_index,nbits);
                     if (last_trans == true) //if sync_decode overpassed the last sample
                     {
-                        go_to_last_trans_cmd();
+                        if (wait_for_more_data()) return; go_to_last_trans_cmd();
                         break;
                     }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
@@ -387,39 +580,39 @@ function on_decode_signals(resume)
                         if (item_display[0] == 1) //Start bit = 1
                         {
                             dec_item_new_v2 (ch_cmd, sdio_simple);
-                            ScanaStudio.dec_item_add_content("Start");
-                            ScanaStudio.dec_item_add_content("S");
-                            ScanaStudio.dec_item_add_sample_point(sdio_simple.start_sample,"P")
-                            ScanaStudio.dec_item_emphasize_error();
+                            held.dec_item_add_content("Start");
+                            held.dec_item_add_content("S");
+                            held.dec_item_add_sample_point(sdio_simple.start_sample,"P")
+                            held.dec_item_emphasize_error();
                             state_machine = ENUM_STATE_CMD_START;
                             trs_cmd.value = -1;
                             item_display = [];
                             crc_calcul = [];
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
-                            ScanaStudio.packet_view_add_packet(true,ch_cmd,sdio_simple.start_sample,sdio_simple.end_sample,"SDIO","CH_CMD",ScanaStudio.get_channel_color(ch_cmd),ScanaStudio.get_channel_color(ch_cmd));
+                            held.packet_view_add_packet(true,ch_cmd,sdio_simple.start_sample,sdio_simple.end_sample,"SDIO","CH_CMD",ScanaStudio.get_channel_color(ch_cmd),ScanaStudio.get_channel_color(ch_cmd));
                             break;
                         }
                         //Packet View
-                        ScanaStudio.packet_view_add_packet(true,ch_cmd,sdio_simple.start_sample,sdio_simple.end_sample,"SDIO","CH_CMD",ScanaStudio.get_channel_color(ch_cmd),ScanaStudio.get_channel_color(ch_cmd));
+                        held.packet_view_add_packet(true,ch_cmd,sdio_simple.start_sample,sdio_simple.end_sample,"SDIO","CH_CMD",ScanaStudio.get_channel_color(ch_cmd),ScanaStudio.get_channel_color(ch_cmd));
                         if (item_display[1] == 1) //Transmission bit = 1
                         {
                             dec_item_new_v2 (ch_cmd, sdio_simple);
                             if (R_type == "Undefined")
                             {
-                                ScanaStudio.dec_item_add_content("Host to Card");
-                                ScanaStudio.dec_item_add_content("Host");
-                                ScanaStudio.dec_item_add_content("H");
+                                held.dec_item_add_content("Host to Card");
+                                held.dec_item_add_content("Host");
+                                held.dec_item_add_content("H");
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"Start","Host to Card","Wrap");
                                 T_bit = sdio_simple.unsigned_words;
                             }
                             else
                             {
-                                ScanaStudio.dec_item_add_content("Error, Transmission bit should be 0");
-                                ScanaStudio.dec_item_add_content("Error");
-                                ScanaStudio.dec_item_emphasize_error();
+                                held.dec_item_add_content("Error, Transmission bit should be 0");
+                                held.dec_item_add_content("Error");
+                                held.dec_item_emphasize_error();
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"Start","Host to Card","Error");
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 trs_cmd.value = -1;
                                 item_display = [];
                                 crc_calcul = [];
@@ -428,17 +621,17 @@ function on_decode_signals(resume)
                                 T_bit = 0; //To force the decoder to decode the signal as a RSP
                             }
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
 
                         }
                         else
                         {
                             dec_item_new_v2 (ch_cmd, sdio_simple);
-                            ScanaStudio.dec_item_add_content("Card to Host");
-                            ScanaStudio.dec_item_add_content("Card");
-                            ScanaStudio.dec_item_add_content("C");
+                            held.dec_item_add_content("Card to Host");
+                            held.dec_item_add_content("Card");
+                            held.dec_item_add_content("C");
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"Start","Card to Host","Wrap");
                             T_bit = sdio_simple.unsigned_words;
                         }
@@ -449,6 +642,12 @@ function on_decode_signals(resume)
                     }
                     else
                     {
+                        if (!ScanaStudio.trs_is_not_last(ch_cmd)) //no edge to move on to (yet)
+                        {
+                            if (wait_for_more_data()) return;
+                            go_to_last_trans_cmd();
+                            break;
+                        }
                         trs_cmd = ScanaStudio.trs_get_next(ch_cmd);
                         break;
                     }
@@ -464,37 +663,43 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v3(data_channels,trs_dat0.sample_index,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_data();
+                            if (wait_for_more_data()) return; go_to_last_trans_data();
                             break;
                         }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             //Dec Item
-                            var item_start_stop_array = dec_item_new_v2 (ch_dat0, sdio_simple);
-                            ScanaStudio.dec_item_add_content("Start");
-                            ScanaStudio.dec_item_add_content("S");
-                            ScanaStudio.dec_item_add_sample_point(sdio_simple.start_sample,"P")
+                            item_start_stop_array = dec_item_new_v2 (ch_dat0, sdio_simple);
+                            held.dec_item_add_content("Start");
+                            held.dec_item_add_content("S");
+                            held.dec_item_add_sample_point(sdio_simple.start_sample,"P")
                             if (item_display[0] == 1) //Start bit = 1
                             {
-                                ScanaStudio.dec_item_emphasize_error();
+                                held.dec_item_emphasize_error();
                                 state_machine = ENUM_STATE_DATA_START;
                                 trs_dat0.value = -1;
                                 item_display = [];
                                 crc_calcul = [];
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 break;
                             }
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             trs_dat0.value = -1;
                             data_transfer = false;
                             item_display = [];
                             crc_calcul = [];
                         //Packet View
-                        ScanaStudio.packet_view_add_packet(false,ch_dat0,item_start_stop_array[0],item_start_stop_array[1],"Start","Data",ScanaStudio.get_channel_color(ch_dat0),ScanaStudio.get_channel_color(ch_dat0));
+                        held.packet_view_add_packet(false,ch_dat0,item_start_stop_array[0],item_start_stop_array[1],"Start","Data",ScanaStudio.get_channel_color(ch_dat0),ScanaStudio.get_channel_color(ch_dat0));
                         state_machine = ENUM_STATE_DATA ;
                         break;
                     }
                     else
                     {
+                        if (!ScanaStudio.trs_is_not_last(ch_dat0)) //no edge to move on to (yet)
+                        {
+                            if (wait_for_more_data()) return;
+                            go_to_last_trans_data();
+                            break;
+                        }
                         trs_dat0 = ScanaStudio.trs_get_next(ch_dat0);
                         break;
                     }
@@ -508,7 +713,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v3(data_channels,trs_dat0.sample_index,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_data();
+                            if (wait_for_more_data()) return; go_to_last_trans_data();
                             break;
                         }
                         for (e=0; e<data_channels.length; e++)
@@ -516,20 +721,20 @@ function on_decode_signals(resume)
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words[e],nbits,crc_calcul);
                             //Dec Item
                             dec_item_new_v2 (data_channels[e], sdio_simple);
-                            ScanaStudio.dec_item_add_content("Start");
-                            ScanaStudio.dec_item_add_content("S");
-                            ScanaStudio.dec_item_add_sample_point(sdio_simple.start_sample,"P")
+                            held.dec_item_add_content("Start");
+                            held.dec_item_add_content("S");
+                            held.dec_item_add_sample_point(sdio_simple.start_sample,"P")
                             if (item_display[0] == 1) //Start bit = 1
                             {
-                                ScanaStudio.dec_item_emphasize_error();
+                                held.dec_item_emphasize_error();
                                 state_machine = ENUM_STATE_DATA_START;
                                 trs_data[e].value = -1;
                                 item_display = [];
                                 crc_calcul = [];
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 break;
                             }
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             trs_data[e].value = -1;
                             data_transfer = false;
                             item_display = [];
@@ -538,12 +743,18 @@ function on_decode_signals(resume)
                     }
                     else
                     {
+                        if (!ScanaStudio.trs_is_not_last(ch_dat0)) //no edge to move on to (yet)
+                        {
+                            if (wait_for_more_data()) return;
+                            go_to_last_trans_data();
+                            break;
+                        }
                         trs_dat0 = ScanaStudio.trs_get_next(ch_dat0);
                         break;
                     }
                     //Packet View
                     state_machine = ENUM_STATE_DATA ;
-                    ScanaStudio.packet_view_add_packet(false,ch_dat0,sdio_simple.start_sample,sdio_simple.start_sample,"Start","Data",ScanaStudio.get_channel_color(ch_dat0),ScanaStudio.get_channel_color(ch_dat0));
+                    held.packet_view_add_packet(false,ch_dat0,sdio_simple.start_sample,sdio_simple.start_sample,"Start","Data",ScanaStudio.get_channel_color(ch_dat0),ScanaStudio.get_channel_color(ch_dat0));
                 }
             }//end ENUM_STATE_DATA_START
 
@@ -557,22 +768,22 @@ function on_decode_signals(resume)
                         if (last_CMD_mode == 0)
                         {
                             nbits = 512;
-                            var nbytes_total = nbits/8;
+                            nbytes_total = nbits/8;
                             // Maximum Current/Power Consumption
                             nbytes = 2;
                             nbytes_total = nbytes_total - nbytes;
                             sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbytes*2*4/(data_channels.length)); // 1 byte
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_data();
+                                if (wait_for_more_data()) return; go_to_last_trans_data();
                                 break;
                             }
                             sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbytes*2*4/(data_channels.length), crc_calcul); // Create Dec Item, samples, content and packet_view
-                            var power_consumption = sdio_value * 3.6;
-                            ScanaStudio.dec_item_add_content("Maximum current : " + sdio_value + "mA" + " or Maximum Power Consumption : " + power_consumption + "mW");
-                            ScanaStudio.dec_item_add_content("Maximum current : " + sdio_value + "mA");
-                            ScanaStudio.dec_item_add_content(sdio_value + "mA");
-                            ScanaStudio.dec_item_end();
+                            power_consumption = sdio_value * 3.6;
+                            held.dec_item_add_content("Maximum current : " + sdio_value + "mA" + " or Maximum Power Consumption : " + power_consumption + "mW");
+                            held.dec_item_add_content("Maximum current : " + sdio_value + "mA");
+                            held.dec_item_add_content(sdio_value + "mA");
+                            held.dec_item_end();
                             //Packet View
                             packet_string = "Maximum current : " + sdio_value + "mA";
                             packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"Max Current",packet_string,"Data");
@@ -584,15 +795,15 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbytes*2*4/(data_channels.length)); // nbytes
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbytes*2*4/(data_channels.length), crc_calcul); // Create Dec Item and samples, return nbytes value
                                 string_content = CMD6_function_supported(sdio_value)
-                                ScanaStudio.dec_item_add_content(string_content + " of Function Group " + t + " are supported");
-                                ScanaStudio.dec_item_add_content(string_content + " of Function Group " + t);
-                                ScanaStudio.dec_item_add_content(string_content);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_add_content(string_content + " of Function Group " + t + " are supported");
+                                held.dec_item_add_content(string_content + " of Function Group " + t);
+                                held.dec_item_add_content(string_content);
+                                held.dec_item_end();
                                 //Packet View
                                 packet_title = "Group " + t + " supported";
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,packet_title,string_content,"Data");
@@ -605,23 +816,23 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbytes*2*4/(data_channels.length)); // nbytes
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbytes*2*4/(data_channels.length), crc_calcul); // Create Dec Item and samples, return nbytes value
                                 if (CMD6_mode == 0)
                                 {
                                     packet_string = "You can switch to Function " + sdio_value;
-                                    ScanaStudio.dec_item_add_content("You can switch to Function " + sdio_value + " of Group " + t);
-                                    ScanaStudio.dec_item_add_content("You can switch to Function " + sdio_value);
+                                    held.dec_item_add_content("You can switch to Function " + sdio_value + " of Group " + t);
+                                    held.dec_item_add_content("You can switch to Function " + sdio_value);
                                 }
                                 else
                                 {
                                     packet_string = "Switched to function " + sdio_value;
-                                    ScanaStudio.dec_item_add_content("Switched to function " + sdio_value + " of Group " + t);
-                                    ScanaStudio.dec_item_add_content("Switched to function " + sdio_value);
+                                    held.dec_item_add_content("Switched to function " + sdio_value + " of Group " + t);
+                                    held.dec_item_add_content("Switched to function " + sdio_value);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_title = "Group " + t + " selected";
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,packet_title,packet_string,"Data");
@@ -632,7 +843,7 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbytes*2*4/(data_channels.length)); // 1 byte
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_data();
+                                if (wait_for_more_data()) return; go_to_last_trans_data();
                                 break;
                             }
                             sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbytes*2*4/(data_channels.length), crc_calcul); // Create Dec Item, samples, content and packet_view
@@ -640,22 +851,22 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "Only Bits 511:376 are defined";
                                 types = "Data";
-                                ScanaStudio.dec_item_add_content("Only Bits 511:376 are defined, others are reserved");
-                                ScanaStudio.dec_item_add_content("Only Bits 511:376 are defined");
+                                held.dec_item_add_content("Only Bits 511:376 are defined, others are reserved");
+                                held.dec_item_add_content("Only Bits 511:376 are defined");
                             }
                             else if (sdio_value == 1)
                             {
                                 packet_string = "Bits 511:272 are defined";
                                 types = "Data";
-                                ScanaStudio.dec_item_add_content("Bits 511:376 are defined");
+                                held.dec_item_add_content("Bits 511:376 are defined");
                             }
                             else
                             {
                                 packet_string = "Reserved";
                                 types = "Error";
-                                ScanaStudio.dec_item_add_content("Data Structure : Reserved value");
+                                held.dec_item_add_content("Data Structure : Reserved value");
                             }
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"Data Structure",packet_string,types);
                             // if sdio_value egal 1 the busy status bit are defined
                             if (sdio_value == 1)
@@ -668,14 +879,14 @@ function on_decode_signals(resume)
                                     sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbytes*2*4/(data_channels.length)); // nbytes
                                     if (last_trans == true) //if sync_decode overpassed the last sample
                                     {
-                                        go_to_last_trans_data();
+                                        if (wait_for_more_data()) return; go_to_last_trans_data();
                                         break;
                                     }
                                     sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbytes*2*4/(data_channels.length), crc_calcul); // Create Dec Item and samples, return nbytes value
                                     string_content = CMD6_function_supported(sdio_value);
-                                    ScanaStudio.dec_item_add_content(string_content + "of Function Group " + t + " are ready");
-                                    ScanaStudio.dec_item_add_content(string_content + " are ready");
-                                    ScanaStudio.dec_item_end();
+                                    held.dec_item_add_content(string_content + "of Function Group " + t + " are ready");
+                                    held.dec_item_add_content(string_content + " are ready");
+                                    held.dec_item_end();
                                     //Packet View
                                     packet_title = "Busy bits of Group " + t;
                                     packet_view_add_wide_width_packet(ch_dat0,sdio_simple,packet_title,packet_string,"Data");
@@ -687,7 +898,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,8/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, 8/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
@@ -695,15 +906,15 @@ function on_decode_signals(resume)
                                 {
                                   packet_string = "Reserved bits";
                                   types = "Misc";
-                                  ScanaStudio.dec_item_add_content("Reserved bits");
+                                  held.dec_item_add_content("Reserved bits");
                                 }
                                 else
                                 {
                                   packet_string = "Reserved bits should be 0";
                                   types = "Error";
-                                  ScanaStudio.dec_item_add_content("Reserved bits should be 0");
+                                  held.dec_item_add_content("Reserved bits should be 0");
                                 }
-                              ScanaStudio.dec_item_end();
+                              held.dec_item_end();
                               //Packet view
                               packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"Reserved bit",packet_string,types);
                             }
@@ -727,12 +938,12 @@ function on_decode_signals(resume)
                                     sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,8/(data_channels.length)); // 1 byte
                                     if (last_trans == true) //if sync_decode overpassed the last sample
                                     {
-                                        go_to_last_trans_data();
+                                        if (wait_for_more_data()) return; go_to_last_trans_data();
                                         break;
                                     }
                                     sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, 8/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
-                                    ScanaStudio.dec_item_add_content("SD Status");
-                                    ScanaStudio.dec_item_end();
+                                    held.dec_item_add_content("SD Status");
+                                    held.dec_item_end();
                                     //Packet View
                                     packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"SD Status","","Data");
                                 }
@@ -744,7 +955,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
@@ -752,21 +963,21 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "1 DAT bus";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else if (sdio_value == 2)
                                 {
                                     packet_string = "4 DAT bus";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else
                                 {
                                     packet_string = "reserved";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"DAT_BUS_WIDTH",packet_string,types);
                                 // SECURED_MODE
@@ -774,21 +985,21 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 if (sdio_value == 0)
                                 {
                                     packet_string = "Not in the mode";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else
                                 {
                                     packet_string = "In Secured Mode";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"SECURED_MODE",packet_string,"Data");
                                 // Reserved bits
@@ -796,21 +1007,21 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 if (sdio_value == 0)
                                 {
                                     packet_string = "Reserved bits";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else
                                 {
                                     packet_string = "Reserved bits should be 0";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"Reserved bit",packet_string,"Misc");
                                 // SD_CARD_TYPE
@@ -818,31 +1029,31 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 if (sdio_value == 0)
                                 {
                                     packet_string = "Regular SD RD/WR Card";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else if (sdio_value == 1)
                                 {
                                     packet_string = "SD ROM Card";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else if (sdio_value == 2)
                                 {
                                     packet_string = "OTP";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else
                                 {
                                     packet_string = "Reserved bit";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"SD_CARD_TYPE",packet_string,"Data");
                                 // SIZE_OF_PROTECTED_AREA
@@ -850,14 +1061,14 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
-                                ScanaStudio.dec_item_add_content("SIZE_OF_PROTECTED_AREA : " + sdio_value + " or 0b" + pad(sdio_value.toString(16),nbits/4));
-                                ScanaStudio.dec_item_add_content("SIZE_OF_PROTECTED_AREA : " + sdio_value);
-                                ScanaStudio.dec_item_add_content(sdio_value);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_add_content("SIZE_OF_PROTECTED_AREA : " + sdio_value + " or 0b" + pad(sdio_value.toString(16),nbits/4));
+                                held.dec_item_add_content("SIZE_OF_PROTECTED_AREA : " + sdio_value);
+                                held.dec_item_add_content(sdio_value);
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = sdio_value + " or 0b" + pad(sdio_value.toString(16),nbits/4);
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"SIZE_OF_PROTECTED_AREA",packet_string,"Data");
@@ -866,13 +1077,13 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 string_content = CMD13_speed_class(sdio_value);
-                                ScanaStudio.dec_item_add_content("SPEED_CLASS : " + string_content);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_add_content("SPEED_CLASS : " + string_content);
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"SPEED_CLASS",string_content,"Data");
                                 // PERFORMANCE_MOVE
@@ -880,26 +1091,26 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 if (sdio_value == 0)
                                 {
                                     packet_string = "Sequential Write";
-                                    ScanaStudio.dec_item_add_content("PERFORMANCE_MOVE : Sequential Write");
+                                    held.dec_item_add_content("PERFORMANCE_MOVE : Sequential Write");
                                 }
                                 else if (sdio_value == 255)
                                 {
                                     packet_string = "Infinity";
-                                    ScanaStudio.dec_item_add_content("PERFORMANCE_MOVE : Infinity");
+                                    held.dec_item_add_content("PERFORMANCE_MOVE : Infinity");
                                 }
                                 else
                                 {
                                     packet_string = sdio_value + "MB/sec";
-                                    ScanaStudio.dec_item_add_content("PERFORMANCE_MOVE : " + packet_string);
+                                    held.dec_item_add_content("PERFORMANCE_MOVE : " + packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"SPEED_CLASS",packet_string,"Data");
                                 // AU_SIZE
@@ -907,13 +1118,13 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 packet_string = AU_SIZE(sdio_value);
-                                ScanaStudio.dec_item_add_content("AU_SIZE : " + packet_string);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_add_content("AU_SIZE : " + packet_string);
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"AU_SIZE",packet_string,"Data");
                                 // Reserved bits
@@ -921,21 +1132,21 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 if (sdio_value == 0)
                                 {
                                     packet_string = "Reserved bits";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else
                                 {
                                     packet_string = "Reserved bits should be 0";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"Reserved bit",packet_string,"Misc");
                                 // ERASE_SIZE
@@ -943,21 +1154,21 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 if (sdio_value == 0)
                                 {
                                     packet_string = "Erase Time-out Calculation not supported";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else
                                 {
                                     packet_string = sdio_value + " AU";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"ERASE_SIZE",packet_string,"Data");
                                 // ERASE_TIMEOUT
@@ -965,21 +1176,21 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 if (sdio_value == 0)
                                 {
                                     packet_string = "Erase Time-out Calculation not supported";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else
                                 {
                                     packet_string = sdio_value + "s";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"ERASE_TIMEOUT",packet_string,"Data");
                                 // ERASE_OFFSET
@@ -987,13 +1198,13 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 packet_string = sdio_value + "s";
-                                ScanaStudio.dec_item_add_content(packet_string);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_add_content(packet_string);
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"ERASE_OFFSET",packet_string,"Data");
                                 // UHS_SPEED_GRADE
@@ -1001,14 +1212,14 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 item_content = UHS_SPEED_GRADE(sdio_value);
-                                ScanaStudio.dec_item_add_content("UHS_SPEED_GRADE : " + item_content);
-                                ScanaStudio.dec_item_add_content(item_content);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_add_content("UHS_SPEED_GRADE : " + item_content);
+                                held.dec_item_add_content(item_content);
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"UHS_SPEED_GRADE",item_content,"Data");
                                 // UHS_AU_SIZE
@@ -1016,28 +1227,28 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 if (sdio_value == 0)
                                 {
                                     packet_string = "Not Defined";
-                                    ScanaStudio.dec_item_add_content("UHS_AU_SIZE : " + packet_string);
+                                    held.dec_item_add_content("UHS_AU_SIZE : " + packet_string);
                                 }
                                 else if (sdio_value < 7)
                                 {
                                     packet_string = "Not Used";
-                                    ScanaStudio.dec_item_add_content("UHS_AU_SIZE : " + packet_string);
+                                    held.dec_item_add_content("UHS_AU_SIZE : " + packet_string);
                                 }
                                 else
                                 {
-                                    var au_size = (sdio_value - 6)* Math.pow(2,sdio_value - 7);
+                                    au_size = (sdio_value - 6)* Math.pow(2,sdio_value - 7);
                                     packet_string = au_size + "MB";
-                                    ScanaStudio.dec_item_add_content("UHS_AU_SIZE : " + packet_string);
+                                    held.dec_item_add_content("UHS_AU_SIZE : " + packet_string);
                                 }
-                                ScanaStudio.dec_item_add_content(item_content);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_add_content(item_content);
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"UHS_AU_SIZE",item_content,"Data");
                                 // VIDEO_SPEED_CLASS
@@ -1045,7 +1256,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
@@ -1053,22 +1264,22 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = sdio_value;
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("VIDEO_SPEED_CLASS : " + sdio_value);
+                                    held.dec_item_add_content("VIDEO_SPEED_CLASS : " + sdio_value);
                                 }
                                 else if (sdio_value == 0)
                                 {
                                     packet_string = "Not Supported";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("VIDEO_SPEED_CLASS : Not Supported");
+                                    held.dec_item_add_content("VIDEO_SPEED_CLASS : Not Supported");
                                 }
                                 else
                                 {
                                     packet_string = "Reserved";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("VIDEO_SPEED_CLASS : Reserved");
+                                    held.dec_item_add_content("VIDEO_SPEED_CLASS : Reserved");
                                 }
-                                ScanaStudio.dec_item_add_content(item_content);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_add_content(item_content);
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"VIDEO_SPEED_CLASS",item_content,types);
                                 // Reserved bits
@@ -1076,21 +1287,21 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 if (sdio_value == 0)
                                 {
                                     packet_string = "Reserved bits";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else
                                 {
                                     packet_string = "Reserved bits should be 0";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"Reserved bit",packet_string,"Misc");
                                 // VSC_AU_SIZE
@@ -1098,30 +1309,30 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
-                                var AU_SIZE_and_SU_SIZE = VSC_AU_SIZE(sdio_value);
+                                AU_SIZE_and_SU_SIZE = VSC_AU_SIZE(sdio_value);
                                 if (sdio_value == 0)
                                 {
                                     packet_string = "Video Speed Class not supported";
-                                    ScanaStudio.dec_item_add_content("VSC_AU_SIZE : " + packet_string);
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content("VSC_AU_SIZE : " + packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else if (AU_SIZE_and_SU_SIZE[0] != "Error")
                                 {
                                     packet_string = "AU_SIZE : " + AU_SIZE_and_SU_SIZE[0] + "MB, SU_SIZE : " + AU_SIZE_and_SU_SIZE[1] + "MB";
-                                    ScanaStudio.dec_item_add_content("VSC_AU_SIZE : " + packet_string);
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content("VSC_AU_SIZE : " + packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else
                                 {
                                     packet_string = "Incorrect Value";
-                                    ScanaStudio.dec_item_add_content("VSC_AU_SIZE : " + packet_string);
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content("VSC_AU_SIZE : " + packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"VSC_AU_SIZE",item_content,types);
                                 // SUS_ADDR
@@ -1129,23 +1340,23 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 if (sdio_value == 0)
                                 {
                                     packet_string = "No valid suspension adress";
-                                    ScanaStudio.dec_item_add_content("SUS_ADDR : " + packet_string);
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content("SUS_ADDR : " + packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else
                                 {
                                     packet_string = "0h" + pad(sdio_value.toString(16),nbits/4);
-                                    ScanaStudio.dec_item_add_content("SUS_ADDR : 0h" + packet_string);
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content("SUS_ADDR : 0h" + packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"SUS_ADDR",packet_string,"Data");
                                 // Reserved bits
@@ -1153,21 +1364,21 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 if (sdio_value == 0)
                                 {
                                     packet_string = "Reserved bits";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else
                                 {
                                     packet_string = "Reserved bits should be 0";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"Reserved bit",packet_string,"Misc");
                                 // APP_PREF_CLASS
@@ -1175,23 +1386,23 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 if (sdio_value == 0)
                                 {
                                     packet_string = "No valid suspension adress";
-                                    ScanaStudio.dec_item_add_content("SUS_ADDR : " + packet_string);
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content("SUS_ADDR : " + packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else
                                 {
                                     packet_string = "0h" + pad(sdio_value.toString(16),nbits/4);
-                                    ScanaStudio.dec_item_add_content("SUS_ADDR : 0h" + packet_string);
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content("SUS_ADDR : 0h" + packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"SUS_ADDR",packet_string,"Data");
                                 // PERFORMANCE_ENHANCE
@@ -1199,14 +1410,14 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 item_content = PERFORMANCE_ENHANCE(sdio_value);
-                                ScanaStudio.dec_item_add_content("PERFORMANCE_ENHANCE : " + item_content);
-                                ScanaStudio.dec_item_add_content(item_content);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_add_content("PERFORMANCE_ENHANCE : " + item_content);
+                                held.dec_item_add_content(item_content);
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"PERFORMANCE_ENHANCE","Look Item","Data");
                                 // Reserved bits
@@ -1214,21 +1425,21 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 if (sdio_value == 0)
                                 {
                                     packet_string = "Reserved bits";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else
                                 {
                                     packet_string = "Reserved bits should be 0";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"Reserved bit",packet_string,"Misc");
                                 // DISCARD_SUPPORT
@@ -1236,21 +1447,21 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 if (sdio_value == 0)
                                 {
                                     packet_string = "Not Supported";
-                                    ScanaStudio.dec_item_add_content("DISCARD_SUPPORT : " + packet_string);
+                                    held.dec_item_add_content("DISCARD_SUPPORT : " + packet_string);
                                 }
                                 else
                                 {
                                     packet_string = "Supported";
-                                    ScanaStudio.dec_item_add_content("DISCARD_SUPPORT : " + packet_string);
+                                    held.dec_item_add_content("DISCARD_SUPPORT : " + packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"DISCARD_SUPPORT",packet_string,"Data");
                                 // FULE_SUPPORT
@@ -1258,21 +1469,21 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 if (sdio_value == 0)
                                 {
                                     packet_string = "Not Supported";
-                                    ScanaStudio.dec_item_add_content("FULE_SUPPORT : " + packet_string);
+                                    held.dec_item_add_content("FULE_SUPPORT : " + packet_string);
                                 }
                                 else
                                 {
                                     packet_string = "Supported";
-                                    ScanaStudio.dec_item_add_content("FULE_SUPPORT : " + packet_string);
+                                    held.dec_item_add_content("FULE_SUPPORT : " + packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"FULE_SUPPORT",packet_string,"Data");
                                 // Reserved bits
@@ -1282,21 +1493,21 @@ function on_decode_signals(resume)
                                     sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                     if (last_trans == true) //if sync_decode overpassed the last sample
                                     {
-                                        go_to_last_trans_data();
+                                        if (wait_for_more_data()) return; go_to_last_trans_data();
                                         break;
                                     }
                                     sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                     if (sdio_value == 0)
                                     {
                                         packet_string = "Reserved bits";
-                                        ScanaStudio.dec_item_add_content(packet_string);
+                                        held.dec_item_add_content(packet_string);
                                     }
                                     else
                                     {
                                         packet_string = "Reserved bits should be 0";
-                                        ScanaStudio.dec_item_add_content(packet_string);
+                                        held.dec_item_add_content(packet_string);
                                     }
-                                    ScanaStudio.dec_item_end();
+                                    held.dec_item_end();
                                     //Packet View
                                     packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"Reserved bit",packet_string,"Misc");
                                     trs_dat0.value = -1;
@@ -1331,7 +1542,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,8*16/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 add_CMD19_data(data_channels, sdio_simple, 8*16/(data_channels.length), crc_calcul); // Create Dec Item, samples, content
@@ -1342,7 +1553,7 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(data_channels,sdio_simple.end_sample+1,512/(data_channels.length));
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
@@ -1352,7 +1563,7 @@ function on_decode_signals(resume)
                             }
                             dec_item_new_v2(ch_dat0, sdio_simple);
                             display_sample_0_1(sdio_simple, crc_calcul); //crc is equivalent to item_display in this case
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                         }
                         usual_data = false;
                         break;
@@ -1366,11 +1577,11 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 4 byte
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_data();
+                                if (wait_for_more_data()) return; go_to_last_trans_data();
                                 break;
                             }
                             sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, content
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             // Packet view
                             packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"NUM_WR_BLOCKS",sdio_value,"Data");
                         }
@@ -1400,12 +1611,12 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,8/(data_channels.length)); // 1 byte
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_data();
+                                if (wait_for_more_data()) return; go_to_last_trans_data();
                                 break;
                             }
                             sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, 8/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
-                            ScanaStudio.dec_item_add_content("CSD Register");
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_add_content("CSD Register");
+                            held.dec_item_end();
                             // Packet view
                             packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"CSD Register","","Data");
                         }
@@ -1419,12 +1630,12 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_data();
+                            if (wait_for_more_data()) return; go_to_last_trans_data();
                             break;
                         }
                         sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
-                        ScanaStudio.dec_item_add_content("Write Protection Bits");
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_add_content("Write Protection Bits");
+                        held.dec_item_end();
                         // Packet view
                         packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"Write Protection Bit","","Data");
                         usual_data = false;
@@ -1457,12 +1668,12 @@ function on_decode_signals(resume)
                                     sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,8/(data_channels.length)); // 1 byte
                                     if (last_trans == true) //if sync_decode overpassed the last sample
                                     {
-                                        go_to_last_trans_data();
+                                        if (wait_for_more_data()) return; go_to_last_trans_data();
                                         break;
                                     }
                                     sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, 8/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
-                                    ScanaStudio.dec_item_add_content("SCR Register");
-                                    ScanaStudio.dec_item_end();
+                                    held.dec_item_add_content("SCR Register");
+                                    held.dec_item_end();
                                     //Packet View
                                     packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"SCR Register","","Data");
                                 }
@@ -1474,7 +1685,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
@@ -1482,18 +1693,18 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "Version 1.0";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("SCR_STRUCTURE : " + packet_string);
-                                    ScanaStudio.dec_item_add_content(packet_string);
-                                    ScanaStudio.dec_item_add_content("1.0");
+                                    held.dec_item_add_content("SCR_STRUCTURE : " + packet_string);
+                                    held.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content("1.0");
                                 }
                                 else
                                 {
                                     packet_string = "Reserved";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("SCR_STRUCTURE : " + packet_string);
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content("SCR_STRUCTURE : " + packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"SCR_STRUCTURE",packet_string,types);
                                 // SD_SPEC
@@ -1501,7 +1712,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 SD_SPEC = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
@@ -1509,17 +1720,17 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = SD_SPEC;
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("SD_SPEC : " + packet_string);
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content("SD_SPEC : " + packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else
                                 {
                                     packet_string = "Reserved";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("SD_SPEC : " + packet_string);
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content("SD_SPEC : " + packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"SD_SPEC",packet_string,types);
                                 // DATA_STAT_AFTER_ERASE
@@ -1527,13 +1738,13 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
-                                ScanaStudio.dec_item_add_content("DATA_STAT_AFTER_ERASE : " + packet_string);
-                                ScanaStudio.dec_item_add_content(packet_string);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_add_content("DATA_STAT_AFTER_ERASE : " + packet_string);
+                                held.dec_item_add_content(packet_string);
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"DATA_STAT_AFTER_ERASE",sdio_value,"Misc");
                                 // SD_SECURITY
@@ -1541,7 +1752,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
@@ -1549,48 +1760,48 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "No Security";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("SD_SECURITY : " + packet_string);
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content("SD_SECURITY : " + packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else if (sdio_value == 1)
                                 {
                                     packet_string = "Not Used";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("SD_SECURITY : " + packet_string);
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content("SD_SECURITY : " + packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else if (sdio_value == 2)
                                 {
                                     packet_string = "SDSC Card (Security 1.01)";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("SD_SECURITY : " + packet_string);
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content("SD_SECURITY : " + packet_string);
+                                    held.dec_item_add_content(packet_string);
                                     SD_CARD_TYPE = SDSC;
                                 }
                                 else if (sdio_value == 3)
                                 {
                                     packet_string = "SDHC Card (Security 2.00)";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("SD_SECURITY : " + packet_string);
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content("SD_SECURITY : " + packet_string);
+                                    held.dec_item_add_content(packet_string);
                                     SD_CARD_TYPE = SDHC;
                                 }
                                 else if (sdio_value == 4)
                                 {
                                     packet_string = "SDXC Card (Security 3.xx)";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("SD_SECURITY : " + packet_string);
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content("SD_SECURITY : " + packet_string);
+                                    held.dec_item_add_content(packet_string);
                                     SD_CARD_TYPE = SDXC;
                                 }
                                 else
                                 {
                                     packet_string = "Reserved";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("SD_SECURITY : " + packet_string);
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content("SD_SECURITY : " + packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"SD_SECURITY",packet_string,types);
                                 // SD_BUS_WIDTHS
@@ -1598,7 +1809,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
@@ -1619,10 +1830,10 @@ function on_decode_signals(resume)
                                 {
                                     types = "Error";
                                 }
-                                ScanaStudio.dec_item_add_content("SD_BUS_WIDTHS : " + sdio_value + " supported");
-                                ScanaStudio.dec_item_add_content("SD_BUS_WIDTHS : " + sdio_value);
-                                ScanaStudio.dec_item_add_content(sdio_value);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_add_content("SD_BUS_WIDTHS : " + sdio_value + " supported");
+                                held.dec_item_add_content("SD_BUS_WIDTHS : " + sdio_value);
+                                held.dec_item_add_content(sdio_value);
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = sdio_value + " or 0b" + pad(sdio_value.toString(16),nbits/4);
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"SD_BUS_WIDTHS",packet_string,types);
@@ -1631,13 +1842,13 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 SD_SPEC3 = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
-                                ScanaStudio.dec_item_add_content("SD_SPEC3 : " + SD_SPEC3);
-                                ScanaStudio.dec_item_add_content(SD_SPEC3);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_add_content("SD_SPEC3 : " + SD_SPEC3);
+                                held.dec_item_add_content(SD_SPEC3);
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"SD_SPEC3",SD_SPEC3,"Data");
                                 // EX_SECURITY
@@ -1645,23 +1856,23 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 if (sdio_value == 0)
                                 {
                                     packet_string = "Extended Security isn't supported";
-                                    ScanaStudio.dec_item_add_content("EX_SECURITY : " + packet_string);
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content("EX_SECURITY : " + packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else
                                 {
                                     packet_string = "Extended Security is supported";
-                                    ScanaStudio.dec_item_add_content("EX_SECURITY : " + packet_string);
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content("EX_SECURITY : " + packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"EX_SECURITY",packet_string,"Data");
                                 // SD_SPEC4
@@ -1669,13 +1880,13 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 SD_SPEC4 = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
-                                ScanaStudio.dec_item_add_content("SD_SPEC4 : " + SD_SPEC4);
-                                ScanaStudio.dec_item_add_content(SD_SPEC4);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_add_content("SD_SPEC4 : " + SD_SPEC4);
+                                held.dec_item_add_content(SD_SPEC4);
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"SD_SPEC4",packet_string,"Data");
                                 // SD_SPECX
@@ -1683,32 +1894,32 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 SD_SPECX = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 Physical_Specification_Version(SD_SPEC, SD_SPEC3, SD_SPEC4, SD_SPECX); // Add Item_content and packet_view
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 // Reserved bits
                                 nbits = 2;
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 if (sdio_value == 0)
                                 {
                                     packet_string = "Reserved bits";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else
                                 {
                                     packet_string = "Reserved bits should be 0";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"Reserved bit",packet_string,"Misc");
                                 // CMD_SUPPORT
@@ -1716,14 +1927,14 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 item_content = CMD_SUPPORT(sdio_value);
-                                ScanaStudio.dec_item_add_content("CMD_SUPPORT : " + item_content + " are supported");
-                                ScanaStudio.dec_item_add_content(item_content + " are supported");
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_add_content("CMD_SUPPORT : " + item_content + " are supported");
+                                held.dec_item_add_content(item_content + " are supported");
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"CMD_SUPPORT",item_content,"Data");
                                 // Reserved bits
@@ -1731,21 +1942,21 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,nbits/(data_channels.length)); // 1 byte
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_data();
+                                    if (wait_for_more_data()) return; go_to_last_trans_data();
                                     break;
                                 }
                                 sdio_value = add_sdio_wide_width_data_item(data_channels, sdio_simple, nbits/(data_channels.length), crc_calcul); // Create Dec Item, samples, return nbytes value
                                 if (sdio_value == 0)
                                 {
                                     packet_string = "Reserved bits";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
                                 else
                                 {
                                     packet_string = "Reserved bits should be 0";
-                                    ScanaStudio.dec_item_add_content(packet_string);
+                                    held.dec_item_add_content(packet_string);
                                 }
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"Reserved bit",packet_string,"Misc");
                             }
@@ -1849,7 +2060,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,8/(data_channels.length)); // 1 byte
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_data();
+                            if (wait_for_more_data()) return; go_to_last_trans_data();
                             break;
                         }
                         if (sdio_simple.sampling_points[1] - sdio_simple.sampling_points[0] < 20)
@@ -1875,10 +2086,10 @@ function on_decode_signals(resume)
                 }
                 if (sampling_rate_too_low == true)
                 {
-                    ScanaStudio.dec_item_new(ch_clk,start_usual_data_sample,sdio_simple.end_sample);
-                    ScanaStudio.dec_item_add_content("The sampling rate is too low to decode the signal");
-                    ScanaStudio.dec_item_emphasize_warning();
-                    ScanaStudio.dec_item_end();
+                    held.dec_item_new(ch_clk,start_usual_data_sample,sdio_simple.end_sample);
+                    held.dec_item_add_content("The sampling rate is too low to decode the signal");
+                    held.dec_item_emphasize_warning();
+                    held.dec_item_end();
                 }
                 // Stop the transfer instantly after we overpassed the end bit of CMD 12
                 if (STOP_TRANSMISSION == true) // CMD 12 detected
@@ -1886,9 +2097,9 @@ function on_decode_signals(resume)
                     state_machine = ENUM_STATE_CMD_START;
                     sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample+1,32);
                     dec_item_new_v2(ch_dat0,sdio_simple);
-                    ScanaStudio.dec_item_add_content("STOP CMD DETECTED, STOP TRANSMISSION");
-                    ScanaStudio.dec_item_end();
-                    ScanaStudio.packet_view_add_packet(false,ch_dat0,sdio_simple.start_sample,sdio_simple.end_sample,"STOP TRANSMISSION","CMD 12 DETECTED",ScanaStudio.PacketColors.Wrap.Title,ScanaStudio.PacketColors.Wrap.Content);
+                    held.dec_item_add_content("STOP CMD DETECTED, STOP TRANSMISSION");
+                    held.dec_item_end();
+                    held.packet_view_add_packet(false,ch_dat0,sdio_simple.start_sample,sdio_simple.end_sample,"STOP TRANSMISSION","CMD 12 DETECTED",ScanaStudio.PacketColors.Wrap.Title,ScanaStudio.PacketColors.Wrap.Content);
                     end_data_sample_index = ScanaStudio.get_available_samples(ch_clk);
                     STOP_TRANSMISSION = false;
                     break;
@@ -1903,13 +2114,13 @@ function on_decode_signals(resume)
                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                 if (last_trans == true) //if sync_decode overpassed the last sample
                 {
-                    go_to_last_trans_cmd();
+                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                     state_machine = ENUM_STATE_DATA_START;
                     break;
                 }
                 if (last_trans == true) //if sync_decode overpassed the last sample
                 {
-                    go_to_last_trans_cmd();
+                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                     state_machine = ENUM_STATE_DATA_START;
                     break;
                 }
@@ -1924,13 +2135,13 @@ function on_decode_signals(resume)
                     {
                         packet_string = "CMD"+CMD;
                         types = "Preamble";
-                        ScanaStudio.dec_item_add_content("CMD" + CMD);
+                        held.dec_item_add_content("CMD" + CMD);
                     }
                     else
                     {
                         packet_string = "ACMD" + CMD;
                         types = "Preamble";
-                        ScanaStudio.dec_item_add_content("ACMD" + CMD);
+                        held.dec_item_add_content("ACMD" + CMD);
                     }
                 }
                 else // Card
@@ -1944,8 +2155,8 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "R1 to ACMD" + CMD;
                                 types = "Preamble";
-                                ScanaStudio.dec_item_add_content("R1 to ACMD" + CMD);
-                                ScanaStudio.dec_item_add_content("R1");
+                                held.dec_item_add_content("R1 to ACMD" + CMD);
+                                held.dec_item_add_content("R1");
                                 // last_CMD_mode = 0;
                                 break;
                             }
@@ -1953,8 +2164,8 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "R1 to CMD" + last_CMD;
                                 types = "Preamble";
-                                ScanaStudio.dec_item_add_content("R1 to CMD" + CMD);
-                                ScanaStudio.dec_item_add_content("R1");
+                                held.dec_item_add_content("R1 to CMD" + CMD);
+                                held.dec_item_add_content("R1");
                                 break;
                             }
                         }
@@ -1962,8 +2173,8 @@ function on_decode_signals(resume)
                         {
                             packet_string = "R1b to CMD" + last_CMD;
                             types = "Preamble";
-                            ScanaStudio.dec_item_add_content("R1b to CMD" + CMD);
-                            ScanaStudio.dec_item_add_content("R1b");
+                            held.dec_item_add_content("R1b to CMD" + CMD);
+                            held.dec_item_add_content("R1b");
                             break;
                         }
                         case "R5" :
@@ -1972,15 +2183,15 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "R5 to CMD" + last_CMD;
                                 types = "Preamble";
-                                ScanaStudio.dec_item_add_content("R5 to CMD" + CMD);
-                                ScanaStudio.dec_item_add_content("R5");
+                                held.dec_item_add_content("R5 to CMD" + CMD);
+                                held.dec_item_add_content("R5");
                             }
                             else
                             {
                                 types = "Error";
                                 packet_string = "Should be a R5 to CMD52 or CMD53";
-                                ScanaStudio.dec_item_add_content("Should be a R5 to CMD52 or CMD53");
-                                ScanaStudio.dec_item_emphasize_error();
+                                held.dec_item_add_content("Should be a R5 to CMD52 or CMD53");
+                                held.dec_item_emphasize_error();
                             }
 
                             break;
@@ -1989,8 +2200,8 @@ function on_decode_signals(resume)
                         {
                             packet_string = "R6 to CMD" + CMD;
                             types = "Preamble";
-                            ScanaStudio.dec_item_add_content("R6 to CMD" + CMD);
-                            ScanaStudio.dec_item_add_content("R6");
+                            held.dec_item_add_content("R6 to CMD" + CMD);
+                            held.dec_item_add_content("R6");
                             break;
                         }
                         case "R2" :
@@ -2001,15 +2212,15 @@ function on_decode_signals(resume)
                             {
                                 packet_string = R_type + " to CMD" + last_CMD;
                                 types = "Preamble";
-                                ScanaStudio.dec_item_add_content("Reserved bits (111111)");
-                                ScanaStudio.dec_item_add_content("Reserved bits");
+                                held.dec_item_add_content("Reserved bits (111111)");
+                                held.dec_item_add_content("Reserved bits");
                             }
                             else
                             {
                                 types = "Error";
                                 packet_string = "Should be (111111)";
-                                ScanaStudio.dec_item_add_content("Should be (111111)");
-                                ScanaStudio.dec_item_emphasize_warning();
+                                held.dec_item_add_content("Should be (111111)");
+                                held.dec_item_emphasize_warning();
                             }
                             break;
                         }
@@ -2019,15 +2230,15 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "R7 to CMD8";
                                 types = "Preamble";
-                                ScanaStudio.dec_item_add_content("R7 to CMD8");
-                                ScanaStudio.dec_item_add_content("R7");
+                                held.dec_item_add_content("R7 to CMD8");
+                                held.dec_item_add_content("R7");
                             }
                             else
                             {
                                 types = "Error";
                                 packet_string = "Should be response to CMD 8 (001000)";
-                                ScanaStudio.dec_item_add_content("Should be response to CMD 8 (001000)");
-                                ScanaStudio.dec_item_emphasize_warning();
+                                held.dec_item_add_content("Should be response to CMD 8 (001000)");
+                                held.dec_item_emphasize_warning();
                             }
                             break;
                         }
@@ -2035,16 +2246,16 @@ function on_decode_signals(resume)
                         {
                             packet_string = "CMD" + last_CMD + " shouldn't have RSP";
                             types = "Error";
-                            ScanaStudio.dec_item_add_content("CMD" + last_CMD + " shouldn't have RSP");
-                            ScanaStudio.dec_item_add_content("Error");
-                            ScanaStudio.dec_item_emphasize_error();
+                            held.dec_item_add_content("CMD" + last_CMD + " shouldn't have RSP");
+                            held.dec_item_add_content("Error");
+                            held.dec_item_emphasize_error();
                             break;
                         }
                     }//end switch(R_type)
                 }
-                ScanaStudio.dec_item_add_content(packet_string);
+                held.dec_item_add_content(packet_string);
                 display_sample(sdio_simple);
-                ScanaStudio.dec_item_end();
+                held.dec_item_end();
                 //Packet View
                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"CMD INDEX",packet_string,types);
                 break;
@@ -2225,15 +2436,15 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            ScanaStudio.dec_item_add_content("The CID Register doesn't exist for SDIO only Card");
+                            held.dec_item_add_content("The CID Register doesn't exist for SDIO only Card");
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"CMD Argument","Unsupported command for SDIO card only","Error");
                             if (CMD_mode == 1)
@@ -2249,15 +2460,15 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            ScanaStudio.dec_item_add_content("Unsupported command for SDIO card only");
+                            held.dec_item_add_content("Unsupported command for SDIO card only");
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"CMD Argument","Unsupported command for SDIO card only","Error");
                             if (CMD_mode == 1)
@@ -2272,16 +2483,16 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Stuff bits (irrelevant)");
-                        ScanaStudio.dec_item_add_content("no care");
+                        held.dec_item_add_content("Stuff bits (irrelevant)");
+                        held.dec_item_add_content("no care");
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         CMD = -1;
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Reserved Bit","Stuff bits","Misc");
@@ -2298,15 +2509,15 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            ScanaStudio.dec_item_add_content("The DSR Register doesn't exist for SDIO only Card");
+                            held.dec_item_add_content("The DSR Register doesn't exist for SDIO only Card");
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"CMD Argument","Unsupported command for SDIO card only","Error");
                             if (CMD_mode == 1)
@@ -2321,30 +2532,30 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("DSR");
+                        held.dec_item_add_content("DSR");
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"DSR","DSR","Data");
                         // Read Stuff bits
                         nbits = 16;
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Stuff bits");
+                        held.dec_item_add_content("Stuff bits");
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Stuff Bit","Stuff bits","Misc");
                         CMD = -1;
                         state_machine = ENUM_STATE_CRC7;
@@ -2358,23 +2569,23 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Stuff bits (irrelevant)");
-                        ScanaStudio.dec_item_add_content("no care");
+                        held.dec_item_add_content("Stuff bits (irrelevant)");
+                        held.dec_item_add_content("no care");
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Stuff Bit","Stuff bits","Misc");
                         // Read S18R
                         nbits = 1;
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -2384,22 +2595,22 @@ function on_decode_signals(resume)
                         if (sdio_value == 1)
                         {
                             packet_string = "Switch Requested";
-                            ScanaStudio.dec_item_add_content("Switching to 1.8V Request");
+                            held.dec_item_add_content("Switching to 1.8V Request");
                         }
                         else
                         {
                             packet_string = "Switch Not Requested";
-                            ScanaStudio.dec_item_add_content("Switch to 1.8V not requested");
+                            held.dec_item_add_content("Switch to 1.8V not requested");
                         }
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"S18R",packet_string,"Data");
                         // Read I/O OCR Value
                         nbits = 24;
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -2408,7 +2619,7 @@ function on_decode_signals(resume)
                         CMD_VDD_value = sdio_simple.unsigned_words;
                         Voltage_window_24(item_display,sdio_simple,ch_cmd); //Display item content and packet view
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         item_display = [];
                         CMD = -1;
                         state_machine = ENUM_STATE_CRC7;
@@ -2425,15 +2636,15 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Unsupported command for SDIO only Card");
+                                held.dec_item_add_content("Unsupported command for SDIO only Card");
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"CMD Argument","Unsupported command for SDIO only Card","Error");
                                 if (CMD_mode == 1)
@@ -2448,16 +2659,16 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            ScanaStudio.dec_item_add_content("Stuff bits (irrelevant)");
-                            ScanaStudio.dec_item_add_content("no care");
+                            held.dec_item_add_content("Stuff bits (irrelevant)");
+                            held.dec_item_add_content("no care");
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"Stuff Bit","Stuff bits","Misc");
                             // Read bus Width
@@ -2465,7 +2676,7 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
@@ -2475,24 +2686,24 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "1-bit Memory Data Transfer Mode";
                                 types = "Data";
-                                var BUS_WIDTH = 1;
-                                ScanaStudio.dec_item_add_content("1-bit Data Transfer Mode");
+                                BUS_WIDTH = 1;
+                                held.dec_item_add_content("1-bit Data Transfer Mode");
                             }
                             else if  (sdio_simple.unsigned_words == 2)
                             {
                                 packet_string = "4-bit Memory Data Transfer Mode";
                                 types = "Data";
-                                var BUS_WIDTH = 4;
-                                ScanaStudio.dec_item_add_content("4-bit Data Transfer Mode");
+                                BUS_WIDTH = 4;
+                                held.dec_item_add_content("4-bit Data Transfer Mode");
                             }
                             else
                             {
                                 packet_string = sdio_simple.unsigned_words + "-bit Data Transfer Mode not exist";
                                 types = "Error";
-                                ScanaStudio.dec_item_add_content(sdio_simple.unsigned_words + "-bit Data Transfer Mode not exist");
+                                held.dec_item_add_content(sdio_simple.unsigned_words + "-bit Data Transfer Mode not exist");
                             }
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"BUS_WIDTH",packet_string,types);
                             item_display = [];
@@ -2505,25 +2716,25 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
-                            var CMD6_mode = Number(sdio_simple.unsigned_words);
+                            CMD6_mode = Number(sdio_simple.unsigned_words);
                             dec_item_new_v2(ch_cmd,sdio_simple);
                             if (sdio_value == 0)
                             {
                                 packet_string = "Check function";
-                                ScanaStudio.dec_item_add_content("Check function");
+                                held.dec_item_add_content("Check function");
                             }
                             else
                             {
                                 packet_string = "Switch function";
-                                ScanaStudio.dec_item_add_content("Switch function");
+                                held.dec_item_add_content("Switch function");
                             }
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"Mode",packet_string,"Data");
                             // Read Reserved bits
@@ -2531,7 +2742,7 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
@@ -2542,17 +2753,17 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "Reserved bits";
                                 types = "Misc";
-                                ScanaStudio.dec_item_add_content("Reserved bits");
+                                held.dec_item_add_content("Reserved bits");
                             }
                             else
                             {
                                 packet_string = "Reserved bits should be 0";
                                 types = "Error";
-                                ScanaStudio.dec_item_add_content("Reserved bits should be 0");
-                                ScanaStudio.dec_item_emphasize_error();
+                                held.dec_item_add_content("Reserved bits should be 0");
+                                held.dec_item_emphasize_error();
                             }
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"Reserved Bit",packet_string,types);
 
@@ -2561,7 +2772,7 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
@@ -2572,17 +2783,17 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "Default function group 6";
                                 types = "Misc";
-                                ScanaStudio.dec_item_add_content("Default function group 6");
+                                held.dec_item_add_content("Default function group 6");
                             }
                             else
                             {
                                 packet_string = "Reserved function group 6";
                                 types = "Error";
-                                ScanaStudio.dec_item_add_content("Reserved function group 6");
-                                ScanaStudio.dec_item_emphasize_warning();
+                                held.dec_item_add_content("Reserved function group 6");
+                                held.dec_item_emphasize_warning();
                             }
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"Function Group 6",packet_string,types);
                             // Read Reserved function group 5
@@ -2590,7 +2801,7 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
@@ -2601,17 +2812,17 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "Default function group 5";
                                 types = "Misc";
-                                ScanaStudio.dec_item_add_content("Default function group 5");
+                                held.dec_item_add_content("Default function group 5");
                             }
                             else
                             {
                                 packet_string = "Reserved function group 5";
                                 types = "Error";
-                                ScanaStudio.dec_item_add_content("Reserved function group 5");
-                                ScanaStudio.dec_item_emphasize_warning();
+                                held.dec_item_add_content("Reserved function group 5");
+                                held.dec_item_emphasize_warning();
                             }
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"Function Group 5",packet_string,types);
                             // Read Reserved function group 4
@@ -2619,18 +2830,18 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             sdio_value = Number(sdio_simple.unsigned_words);
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            var item_content = function_group_4(sdio_value, CMD6_mode);
-                            ScanaStudio.dec_item_add_content("Current limit : " + item_content);
-                            ScanaStudio.dec_item_add_content(item_content);
+                            item_content = function_group_4(sdio_value, CMD6_mode);
+                            held.dec_item_add_content("Current limit : " + item_content);
+                            held.dec_item_add_content(item_content);
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"Current limit",item_content,"Data");
                             // Read Reserved function group 3
@@ -2638,18 +2849,18 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             sdio_value = Number(sdio_simple.unsigned_words);
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            var item_content = function_group_3(sdio_value, CMD6_mode);
-                            ScanaStudio.dec_item_add_content("Driver Strength : " + item_content);
-                            ScanaStudio.dec_item_add_content(item_content);
+                            item_content = function_group_3(sdio_value, CMD6_mode);
+                            held.dec_item_add_content("Driver Strength : " + item_content);
+                            held.dec_item_add_content(item_content);
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"Driver Strengh",item_content,"Data");
                             // Read Reserved function group 2
@@ -2657,18 +2868,18 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             sdio_value = Number(sdio_simple.unsigned_words);
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            var item_content = function_group_2(sdio_value, CMD6_mode);
-                            ScanaStudio.dec_item_add_content("Command System : " + item_content);
-                            ScanaStudio.dec_item_add_content(item_content);
+                            item_content = function_group_2(sdio_value, CMD6_mode);
+                            held.dec_item_add_content("Command System : " + item_content);
+                            held.dec_item_add_content(item_content);
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"Command System",item_content,"Data");
                             // Read Reserved function group 1
@@ -2676,19 +2887,19 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             sdio_value = Number(sdio_simple.unsigned_words);
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            var item_content = function_group_1(sdio_value, CMD6_mode);
-                            ScanaStudio.dec_item_add_content("Bus Speed Mode : " + item_content + "(Function " + sdio_value + ")");
-                            ScanaStudio.dec_item_add_content("Access Mode : " + item_content);
-                            ScanaStudio.dec_item_add_content(item_content);
+                            item_content = function_group_1(sdio_value, CMD6_mode);
+                            held.dec_item_add_content("Bus Speed Mode : " + item_content + "(Function " + sdio_value + ")");
+                            held.dec_item_add_content("Access Mode : " + item_content);
+                            held.dec_item_add_content(item_content);
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"Bus Speed Mode",item_content,"Data");
                             // Read Argument (if Mode = 0, check if the function is supported, else switch to this function if this one is not busy or unsupported)
@@ -2707,16 +2918,16 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            ScanaStudio.dec_item_add_content("Stuff bits (irrelevant)");
-                            ScanaStudio.dec_item_add_content("no care");
+                            held.dec_item_add_content("Stuff bits (irrelevant)");
+                            held.dec_item_add_content("no care");
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             CMD = -1;
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"Stuff Bit","Stuff bits","Misc");
@@ -2729,7 +2940,7 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
@@ -2740,16 +2951,16 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             sdio_value = Number(sdio_simple.unsigned_words);
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            ScanaStudio.dec_item_add_content("Extended Adress : 0b" + pad(sdio_value.toString(2),6));
+                            held.dec_item_add_content("Extended Adress : 0b" + pad(sdio_value.toString(2),6));
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_string = pad(sdio_value.toString(2),6);
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"Extended Adress",packet_string,"Data");
@@ -2772,16 +2983,16 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         sdio_value = Number(sdio_simple.unsigned_words);
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Reserved for SD command system expansion");
+                        held.dec_item_add_content("Reserved for SD command system expansion");
                         display_sample_0_1(sdio_simple, item_display);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Reserved Bit","For SD command system expansion","Data");
                         CMD = -1;
@@ -2796,7 +3007,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -2804,7 +3015,7 @@ function on_decode_signals(resume)
                         dec_item_new_v2(ch_cmd,sdio_simple);
                         if (sdio_simple.unsigned_words == 0)
                         {
-                            ScanaStudio.dec_item_add_content("Reserved bits = 0");
+                            held.dec_item_add_content("Reserved bits = 0");
                             packet_string = "Reserved bits = 0";
                             types = "Misc";
                         }
@@ -2812,11 +3023,11 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Reserved bits should be 0";
                             types = "Error";
-                            ScanaStudio.dec_item_add_content("Reserved bits should be 0");
-                            ScanaStudio.dec_item_emphasize_warning();
+                            held.dec_item_add_content("Reserved bits should be 0");
+                            held.dec_item_emphasize_warning();
                         }
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Reserved Bit",packet_string,types);
                         // Read Supply Voltage Value (VHS)
@@ -2824,18 +3035,18 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         CMD8_Voltage = Number(sdio_simple.unsigned_words);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Host supply voltage information");
-                        ScanaStudio.dec_item_add_content("Host supply voltage");
-                        ScanaStudio.dec_item_add_content("Supply voltage");
+                        held.dec_item_add_content("Host supply voltage information");
+                        held.dec_item_add_content("Host supply voltage");
+                        held.dec_item_add_content("Supply voltage");
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"VHS","Host Supply Voltage","Data");
                         // Read Check pattern
@@ -2843,17 +3054,17 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         CMD8_check_pattern = Number(sdio_simple.unsigned_words);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Check Pattern");
-                        ScanaStudio.dec_item_add_content("Check");
+                        held.dec_item_add_content("Check Pattern");
+                        held.dec_item_add_content("Check");
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Check Pattern","Check Pattern","Check");
                         CMD = -1;
@@ -2873,15 +3084,15 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            ScanaStudio.dec_item_add_content("The CSD Register doesn't exist for SDIO only Card");
+                            held.dec_item_add_content("The CSD Register doesn't exist for SDIO only Card");
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"CMD Argument","Unsupported command for SDIO card only","Error");
                             if (CMD_mode == 1)
@@ -2896,19 +3107,19 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         sdio_value = Number(sdio_simple.unsigned_words);
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("RCA (Card Adress) : " + sdio_simple.unsigned_words + " or 0h" + pad(sdio_value.toString(16),4));
-                        ScanaStudio.dec_item_add_content("RCA (Card Adress) : 0h" + pad(sdio_value.toString(16),4));
-                        ScanaStudio.dec_item_add_content("RCA : 0h" + pad(sdio_value.toString(16),4));
-                        ScanaStudio.dec_item_add_content("0h" + pad(sdio_value.toString(16),4));
+                        held.dec_item_add_content("RCA (Card Adress) : " + sdio_simple.unsigned_words + " or 0h" + pad(sdio_value.toString(16),4));
+                        held.dec_item_add_content("RCA (Card Adress) : 0h" + pad(sdio_value.toString(16),4));
+                        held.dec_item_add_content("RCA : 0h" + pad(sdio_value.toString(16),4));
+                        held.dec_item_add_content("0h" + pad(sdio_value.toString(16),4));
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = sdio_simple.unsigned_words + " or 0h" + pad(sdio_value.toString(16),4);
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"RCA",packet_string,"Data");
@@ -2917,16 +3128,16 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("stuff bits (irrelevant)");
-                        ScanaStudio.dec_item_add_content("no care");
+                        held.dec_item_add_content("stuff bits (irrelevant)");
+                        held.dec_item_add_content("no care");
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Stuff Bit","Stuff Bits","Misc");
                         if (CMD == 55)
@@ -2947,16 +3158,16 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            ScanaStudio.dec_item_add_content("RCA (Card Adress) : " + sdio_simple.unsigned_words);
-                            ScanaStudio.dec_item_add_content("RCA");
+                            held.dec_item_add_content("RCA (Card Adress) : " + sdio_simple.unsigned_words);
+                            held.dec_item_add_content("RCA");
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_string = "Card Adress : " + sdio_simple.unsigned_words;
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"RCA",packet_string,"Data");
@@ -2965,7 +3176,7 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
@@ -2981,9 +3192,9 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "Send Status Register";
                             }
-                            ScanaStudio.dec_item_add_content(packet_string);
+                            held.dec_item_add_content(packet_string);
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"TSR/SR",packet_string,"Data");
                             // Read Stuff bits
@@ -2991,16 +3202,16 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            ScanaStudio.dec_item_add_content("stuff bits (irrelevant)");
-                            ScanaStudio.dec_item_add_content("no care");
+                            held.dec_item_add_content("stuff bits (irrelevant)");
+                            held.dec_item_add_content("no care");
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"Stuff Bit","Stuff Bits","Misc");
                         }
@@ -3012,15 +3223,15 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("SD Status Register doesn't exist for SDIO card only");
+                                held.dec_item_add_content("SD Status Register doesn't exist for SDIO card only");
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"CMD Argument","Unsupported command for SDIO card only","Error");
                                 if (CMD_mode == 1)
@@ -3035,16 +3246,16 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            ScanaStudio.dec_item_add_content("stuff bits (irrelevant)");
-                            ScanaStudio.dec_item_add_content("no care");
+                            held.dec_item_add_content("stuff bits (irrelevant)");
+                            held.dec_item_add_content("no care");
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"Stuff Bit","Stuff Bits","Misc");
                             CMD_mode = 0;
@@ -3066,15 +3277,15 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Unsupported command for SDIO card only");
+                                held.dec_item_add_content("Unsupported command for SDIO card only");
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"CMD Argument","Unsupported command for SDIO card only","Error");
                                 if (CMD_mode == 1)
@@ -3089,7 +3300,7 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
@@ -3099,17 +3310,17 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "Reserved bits";
                                 types = "Misc";
-                                ScanaStudio.dec_item_add_content("Reserved bits");
+                                held.dec_item_add_content("Reserved bits");
                             }
                             else
                             {
                                 packet_string = "Reserved bits should be 0";
                                 types = "Error";
-                                ScanaStudio.dec_item_add_content("Reserved bits should be 0");
-                                ScanaStudio.dec_item_emphasize_error();
+                                held.dec_item_add_content("Reserved bits should be 0");
+                                held.dec_item_emphasize_error();
                             }
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"Reserved Bit",packet_string,types);
                             // Read set_cd bit
@@ -3117,7 +3328,7 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
@@ -3126,15 +3337,15 @@ function on_decode_signals(resume)
                             if (sdio_simple.unsigned_words == 0)
                             {
                                 packet_string = "Disconnect the 50KOhms pull up on DAT3";
-                                ScanaStudio.dec_item_add_content("Disconnect the 50KOhms pull up on DAT3");
+                                held.dec_item_add_content("Disconnect the 50KOhms pull up on DAT3");
                             }
                             else
                             {
                                 packet_string = "Connect the 50KOhms pull up on DAT3";
-                                ScanaStudio.dec_item_add_content("Connect the 50KOhms pull up on DAT3");
+                                held.dec_item_add_content("Connect the 50KOhms pull up on DAT3");
                             }
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"set_cd",packet_string,"Data");
                             CMD_mode = 0;
@@ -3146,7 +3357,7 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
@@ -3156,17 +3367,17 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "Reserved bits";
                                 types = "Misc";
-                                ScanaStudio.dec_item_add_content("Reserved bits");
+                                held.dec_item_add_content("Reserved bits");
                             }
                             else
                             {
                                 packet_string = "Reserved bits should be 0";
                                 types = "Error";
-                                ScanaStudio.dec_item_add_content("Reserved bits should be 0");
-                                ScanaStudio.dec_item_emphasize_error();
+                                held.dec_item_add_content("Reserved bits should be 0");
+                                held.dec_item_emphasize_error();
                             }
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"Reserved Bit",packet_string,types);
                         }
@@ -3183,15 +3394,15 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            ScanaStudio.dec_item_add_content("Unsupported command for SDIO card only");
+                            held.dec_item_add_content("Unsupported command for SDIO card only");
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"CMD Argument","Unsupported command for SDIO card only","Error");
                             if (CMD_mode == 1)
@@ -3206,7 +3417,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -3216,13 +3427,13 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Too high block length";
                             types = "Error";
-                            ScanaStudio.dec_item_add_content("Too high block length");
+                            held.dec_item_add_content("Too high block length");
                         }
                         else
                         {
                             packet_string = "Block Length : "+ sdio_simple.unsigned_words;
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("Block Length : "+ sdio_simple.unsigned_words);
+                            held.dec_item_add_content("Block Length : "+ sdio_simple.unsigned_words);
                             if (SD_CARD_TYPE == SDSC)
                             {
                                 Block_length = sdio_simple.unsigned_words;
@@ -3234,9 +3445,9 @@ function on_decode_signals(resume)
                                 Lock_unlock_Block_length = sdio_simple.unsigned_words;
                             }
                         }
-                        ScanaStudio.dec_item_add_content("Block Length : "+ sdio_simple.unsigned_words);
+                        held.dec_item_add_content("Block Length : "+ sdio_simple.unsigned_words);
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"BLOCK_LENGTH",packet_string,types);
                         CMD = -1;
@@ -3259,15 +3470,15 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            ScanaStudio.dec_item_add_content("Unsupported command for SDIO card only");
+                            held.dec_item_add_content("Unsupported command for SDIO card only");
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"CMD Argument","Unsupported command for SDIO card only","Error");
                             if (CMD_mode == 1)
@@ -3282,16 +3493,16 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         sdio_value = Number(sdio_simple.unsigned_words);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Data adress : 0x"+ pad(sdio_value.toString(16),8));
+                        held.dec_item_add_content("Data adress : 0x"+ pad(sdio_value.toString(16),8));
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "0x"+ pad(sdio_value.toString(16),8);
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Data Adress",packet_string,"Data");
@@ -3311,15 +3522,15 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Data adress : "+ sdio_simple.unsigned_words);
+                        held.dec_item_add_content("Data adress : "+ sdio_simple.unsigned_words);
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Data adress : "+ sdio_simple.unsigned_words;
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"WR_PROTECT_DATA",packet_string,"Data");
@@ -3335,15 +3546,15 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Speed Class Control : "+ sdio_simple.unsigned_words);
+                        held.dec_item_add_content("Speed Class Control : "+ sdio_simple.unsigned_words);
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Speed Class Control : "+ sdio_simple.unsigned_words;
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"SPEED_CLASS",packet_string,"Data");
@@ -3352,7 +3563,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -3362,17 +3573,17 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Reserved bits";
                             types = "Misc";
-                            ScanaStudio.dec_item_add_content("Reserved bits");
+                            held.dec_item_add_content("Reserved bits");
                         }
                         else
                         {
                             packet_string = "Reserved bits should be 0";
                             types = "Error";
-                            ScanaStudio.dec_item_add_content("Reserved bits should be 0");
-                            ScanaStudio.dec_item_emphasize_error();
+                            held.dec_item_add_content("Reserved bits should be 0");
+                            held.dec_item_emphasize_error();
                         }
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Reserved Bit",packet_string,types);
                         CMD = -1;
@@ -3389,15 +3600,15 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            ScanaStudio.dec_item_add_content("Stuff Bits");
+                            held.dec_item_add_content("Stuff Bits");
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"Stuff Bit","Stuff Bits","Misc");
                             // Read Number of Block
@@ -3405,15 +3616,15 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            ScanaStudio.dec_item_add_content("Number of Block : " + sdio_simple.unsigned_words);
+                            held.dec_item_add_content("Number of Block : " + sdio_simple.unsigned_words);
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_string = sdio_simple.unsigned_words + " Blocks";
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"WR_BLK_ERASE_COUNT",packet_string,"Data");
@@ -3429,16 +3640,16 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            ScanaStudio.dec_item_add_content("Block Count : " + sdio_simple.unsigned_words);
+                            held.dec_item_add_content("Block Count : " + sdio_simple.unsigned_words);
                             Block_count = Number(sdio_simple.unsigned_words);
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"BLOCK_COUNT", Block_count, "Data");
                             CMD = -1;
@@ -3457,15 +3668,15 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Unsupported command for SDIO card only");
+                                held.dec_item_add_content("Unsupported command for SDIO card only");
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"CMD Argument","Unsupported command for SDIO card only","Error");
                                 if (CMD_mode == 1)
@@ -3480,7 +3691,7 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
@@ -3490,17 +3701,17 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "Busy";
                                 types = "Misc";
-                                ScanaStudio.dec_item_add_content("Busy ");
+                                held.dec_item_add_content("Busy ");
                             }
                             else
                             {
                                 packet_string = "Should be 0";
                                 types = "Error";
-                                ScanaStudio.dec_item_add_content("Should be 0");
-                                ScanaStudio.dec_item_emphasize_error();
+                                held.dec_item_add_content("Should be 0");
+                                held.dec_item_emphasize_error();
                             }
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"Busy bit",packet_string,types);
                             // Read HCS bit
@@ -3508,7 +3719,7 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
@@ -3518,16 +3729,16 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "Host Support Only SDSC";
                                 types = "Data";
-                                ScanaStudio.dec_item_add_content("Host Support Only SDSC");
+                                held.dec_item_add_content("Host Support Only SDSC");
                             }
                             else
                             {
                                 packet_string = "Host Support SDHC or SDXC";
                                 types = "Data";
-                                ScanaStudio.dec_item_add_content("Host Support SDHC or SDXC");
+                                held.dec_item_add_content("Host Support SDHC or SDXC");
                             }
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"HCS(OCR[30])",packet_string,types);
                             // Read (FB) bit
@@ -3535,7 +3746,7 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
@@ -3545,17 +3756,17 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "Reserved bit";
                                 types = "Misc";
-                                ScanaStudio.dec_item_add_content("Reserved bit");
+                                held.dec_item_add_content("Reserved bit");
                             }
                             else
                             {
                                 packet_string = "Should be 0";
                                 types = "Error";
-                                ScanaStudio.dec_item_add_content("Should be 0");
-                                ScanaStudio.dec_item_emphasize_error();
+                                held.dec_item_add_content("Should be 0");
+                                held.dec_item_emphasize_error();
                             }
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"eSD",packet_string,types);
                             // Read XPC bit
@@ -3563,7 +3774,7 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
@@ -3573,18 +3784,18 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "Power control : Power saving";
                                 types = "Data";
-                                ScanaStudio.dec_item_add_content("Power control : Power saving ");
-                                ScanaStudio.dec_item_add_content("Power saving");
+                                held.dec_item_add_content("Power control : Power saving ");
+                                held.dec_item_add_content("Power saving");
                             }
                             else
                             {
                                 packet_string = "Power control : Maximum performance";
                                 types = "Data";
-                                ScanaStudio.dec_item_add_content("Power control : Maximum performance");
-                                ScanaStudio.dec_item_add_content("Maximum performance");
+                                held.dec_item_add_content("Power control : Maximum performance");
+                                held.dec_item_add_content("Maximum performance");
                             }
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"XPC",packet_string,types);
                             // Read Reserved bit
@@ -3592,7 +3803,7 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
@@ -3602,17 +3813,17 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "Reserved bits";
                                 types = "Misc";
-                                ScanaStudio.dec_item_add_content("Reserved bits");
+                                held.dec_item_add_content("Reserved bits");
                             }
                             else
                             {
                                 packet_string = "Reserved bits should be 0";
                                 types = "Error";
-                                ScanaStudio.dec_item_add_content("Reserved bits should be 0");
-                                ScanaStudio.dec_item_emphasize_error();
+                                held.dec_item_add_content("Reserved bits should be 0");
+                                held.dec_item_emphasize_error();
                             }
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"Reserved",packet_string,types);
                             // Read Switching to 1.8V Request
@@ -3620,7 +3831,7 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
@@ -3630,16 +3841,16 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "Use current signal voltage";
                                 types = "Data";
-                                ScanaStudio.dec_item_add_content("Use current signal voltage");
+                                held.dec_item_add_content("Use current signal voltage");
                             }
                             else
                             {
                                 packet_string = "Switch to 1.8V signal voltage";
                                 types = "Data";
-                                ScanaStudio.dec_item_add_content("Switch to 1.8V signal voltage");
+                                held.dec_item_add_content("Switch to 1.8V signal voltage");
                             }
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"S18R",packet_string,types);
                             // Read OCR bits
@@ -3647,7 +3858,7 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
@@ -3655,7 +3866,7 @@ function on_decode_signals(resume)
                             dec_item_new_v2(ch_cmd,sdio_simple);
                             Voltage_window_24(item_display,sdio_simple,ch_cmd); //Display item content and packet view
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             CMD_mode = 0;
                             CMD = -1;
                             state_machine = ENUM_STATE_CRC7;
@@ -3667,16 +3878,16 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            ScanaStudio.dec_item_add_content("Missing CMD55 before ACMD41");
-                            ScanaStudio.dec_item_emphasize_warning();
+                            held.dec_item_add_content("Missing CMD55 before ACMD41");
+                            held.dec_item_emphasize_warning();
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"CMD Argument","Missing CMD55 before ACMD41","Error");
                             CMD = -1;
@@ -3694,7 +3905,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -3705,16 +3916,16 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         sdio_value = Number(sdio_simple.unsigned_words);
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Task ID : 0b" + pad(sdio_value.toString(2),5));
+                        held.dec_item_add_content("Task ID : 0b" + pad(sdio_value.toString(2),5));
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "0b" + pad(sdio_value.toString(2),5);
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Task ID",packet_string,"Data");
@@ -3724,7 +3935,7 @@ function on_decode_signals(resume)
                                                                                                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                                                                                         if (last_trans == true) //if sync_decode overpassed the last sample
                                                                                                         {
-                                                                                                            go_to_last_trans_cmd();
+                                                                                                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                                                                                             state_machine = ENUM_STATE_DATA_START;
                                                                                                             break;
                                                                                                         }
@@ -3736,7 +3947,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -3744,11 +3955,11 @@ function on_decode_signals(resume)
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
                         item_content = operation_code(sdio_value);
-                        ScanaStudio.dec_item_add_content("Queue Management Command : " + item_content);
-                        ScanaStudio.dec_item_add_content("Operation Code : " + item_content);
-                        ScanaStudio.dec_item_add_content(item_content);
+                        held.dec_item_add_content("Queue Management Command : " + item_content);
+                        held.dec_item_add_content("Operation Code : " + item_content);
+                        held.dec_item_add_content(item_content);
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Operation Code",item_content,"Data");
                         CMD = -1;
@@ -3763,7 +3974,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -3774,7 +3985,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -3789,10 +4000,10 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Write";
                         }
-                        ScanaStudio.dec_item_add_content("Direction : " + packet_string);
-                        ScanaStudio.dec_item_add_content(packet_string);
+                        held.dec_item_add_content("Direction : " + packet_string);
+                        held.dec_item_add_content(packet_string);
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Direction",packet_string,"Data");
                         // Reserved bits
@@ -3800,7 +4011,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -3811,7 +4022,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -3826,10 +4037,10 @@ function on_decode_signals(resume)
                         {
                             packet_string = "No priority";
                         }
-                        ScanaStudio.dec_item_add_content("Priority : " + packet_string);
-                        ScanaStudio.dec_item_add_content(packet_string);
+                        held.dec_item_add_content("Priority : " + packet_string);
+                        held.dec_item_add_content(packet_string);
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Priority",packet_string,"Data");
                         // Reserved bits
@@ -3837,7 +4048,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -3848,15 +4059,15 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Task ID : 0b" + pad(sdio_value.toString(2),5));
+                        held.dec_item_add_content("Task ID : 0b" + pad(sdio_value.toString(2),5));
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "0b" + pad(sdio_value.toString(2),5);
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Task ID",packet_string,"Data");
@@ -3865,15 +4076,15 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Number of block : " + sdio_simple.unsigned_words);
+                        held.dec_item_add_content("Number of block : " + sdio_simple.unsigned_words);
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = sdio_simple.unsigned_words;
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Number of block",packet_string,"Data");
@@ -3889,16 +4100,16 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         sdio_value = Number(sdio_simple.unsigned_words);
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Starting adress : 0x" + pad(sdio_value.toString(16),8));
+                        held.dec_item_add_content("Starting adress : 0x" + pad(sdio_value.toString(16),8));
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Starting adress : 0x" + pad(sdio_value.toString(16),8);
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Start block adress",packet_string,"Data");
@@ -3914,7 +4125,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -3925,16 +4136,16 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         sdio_value = Number(sdio_simple.unsigned_words);
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Task ID : 0b" + pad(sdio_value.toString(2),5));
+                        held.dec_item_add_content("Task ID : 0b" + pad(sdio_value.toString(2),5));
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "0b" + pad(sdio_value.toString(2),5);
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Task ID",packet_string,"Data");
@@ -3943,7 +4154,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -3961,7 +4172,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -3972,16 +4183,16 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         sdio_value = Number(sdio_simple.unsigned_words);
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Task ID : 0b" + pad(sdio_value.toString(2),5));
+                        held.dec_item_add_content("Task ID : 0b" + pad(sdio_value.toString(2),5));
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "0b" + pad(sdio_value.toString(2),5);
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Task ID",packet_string,"Data");
@@ -3990,7 +4201,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -4010,7 +4221,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -4025,9 +4236,9 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Memory Extension";
                         }
-                        ScanaStudio.dec_item_add_content("MIO : " + packet_string);
+                        held.dec_item_add_content("MIO : " + packet_string);
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"MIO",packet_string,"Data");
                         // Read FNO (Function No.)
@@ -4035,17 +4246,17 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
                         item_content = FNO(item_display, MIO_value);
-                        ScanaStudio.dec_item_add_content("FNO : " + item_content);
+                        held.dec_item_add_content("FNO : " + item_content);
 
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"FNO",item_content,"Data");
                         // Reserved bits
@@ -4053,7 +4264,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -4064,16 +4275,16 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         sdio_value = Number(sdio_simple.unsigned_words);
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Adress : 0x" + pad(sdio_value.toString(16),5));
+                        held.dec_item_add_content("Adress : 0x" + pad(sdio_value.toString(16),5));
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Adress : 0x" + pad(sdio_value.toString(16),5);
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"ADDR",packet_string,"Data");
@@ -4082,18 +4293,18 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         sdio_value = Number(sdio_simple.unsigned_words);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Effective Data Read : " + (sdio_value+1) + "Bytes");
-                        ScanaStudio.dec_item_add_content("Length : " + (sdio_value+1) + "Bytes");
-                        ScanaStudio.dec_item_add_content((sdio_value+1) + "Bytes");
+                        held.dec_item_add_content("Effective Data Read : " + (sdio_value+1) + "Bytes");
+                        held.dec_item_add_content("Length : " + (sdio_value+1) + "Bytes");
+                        held.dec_item_add_content((sdio_value+1) + "Bytes");
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Effective Data Read : " + sdio_value + "Bytes";
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"LEN",packet_string,"Data");
@@ -4109,7 +4320,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -4124,9 +4335,9 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Memory Extension";
                         }
-                        ScanaStudio.dec_item_add_content("MIO : " + packet_string);
+                        held.dec_item_add_content("MIO : " + packet_string);
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"MIO",packet_string,"Data");
                         // Read FNO (Function No.)
@@ -4134,17 +4345,17 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
                         item_content = FNO(item_display, MIO_value);
-                        ScanaStudio.dec_item_add_content("FNO : " + item_content);
+                        held.dec_item_add_content("FNO : " + item_content);
 
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"FNO",item_content,"Data");
                         // Read MW (Mask Write Mode)
@@ -4152,27 +4363,27 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
-                        var MW = Number(sdio_simple.unsigned_words);
+                        MW = Number(sdio_simple.unsigned_words);
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
                         if (MW == 0)
                         {
                             packet_string = "Mask Disabled";
-                            ScanaStudio.dec_item_add_content("Mask Disabled (Length is set to 16-08)");
-                            ScanaStudio.dec_item_add_content("Mask Disabled");
+                            held.dec_item_add_content("Mask Disabled (Length is set to 16-08)");
+                            held.dec_item_add_content("Mask Disabled");
                         }
                         else
                         {
                             packet_string = "Mask Enabled";
-                            ScanaStudio.dec_item_add_content("Mask Enabled (Mask is set to 15-08),Length is fixed to 1");
-                            ScanaStudio.dec_item_add_content("Mask Enabled");
+                            held.dec_item_add_content("Mask Enabled (Mask is set to 15-08),Length is fixed to 1");
+                            held.dec_item_add_content("Mask Enabled");
                         }
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"MW",packet_string,"Data");
                         // Read ADDR (Adress)
@@ -4180,16 +4391,16 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         sdio_value = Number(sdio_simple.unsigned_words);
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Adress : 0x" + pad(sdio_value.toString(16),5));
+                        held.dec_item_add_content("Adress : 0x" + pad(sdio_value.toString(16),5));
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Adress : " + pad(sdio_value.toString(16),5);
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"ADDR",packet_string,"Data");
@@ -4198,7 +4409,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -4213,15 +4424,15 @@ function on_decode_signals(resume)
                         if(item_display[0] == 1)
                         {
                             packet_string = "Write 0b" + item_content;
-                            ScanaStudio.dec_item_add_content(packet_string);
+                            held.dec_item_add_content(packet_string);
                         }
                         else
                         {
                             packet_string = "Register bit stay unchanged";
-                            ScanaStudio.dec_item_add_content(packet_string);
+                            held.dec_item_add_content(packet_string);
                         }
                         display_sample_0_1(sdio_simple,item_display);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"LEN/MASK",packet_string,"Data");
                         state_machine = ENUM_STATE_CRC7;
@@ -4236,7 +4447,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -4251,9 +4462,9 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Memory Extension";
                         }
-                        ScanaStudio.dec_item_add_content("MIO : " + packet_string);
+                        held.dec_item_add_content("MIO : " + packet_string);
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"MIO",packet_string,"Data");
                         // Read FNO (Function No.)
@@ -4261,17 +4472,17 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
                         item_content = FNO(item_display, MIO_value);
-                        ScanaStudio.dec_item_add_content("FNO : " + item_content);
+                        held.dec_item_add_content("FNO : " + item_content);
 
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"FNO",item_content,"Data");
                         // Read BUS (Function No.)
@@ -4279,7 +4490,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -4294,9 +4505,9 @@ function on_decode_signals(resume)
                         {
                             item_content = "32KBytes";
                         }
-                        ScanaStudio.dec_item_add_content("Block Unit Select : " + item_content);
+                        held.dec_item_add_content("Block Unit Select : " + item_content);
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Block Unit Select : " + item_content;
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"BUS",packet_string,"Data");
@@ -4305,16 +4516,16 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         sdio_value = Number(sdio_simple.unsigned_words);
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Adress : 0x" + pad(sdio_value.toString(16),5));
+                        held.dec_item_add_content("Adress : 0x" + pad(sdio_value.toString(16),5));
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Adress : 0x" + pad(sdio_value.toString(16),5);
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"ADDR",packet_string,"Data");
@@ -4323,18 +4534,18 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         sdio_value = Number(sdio_simple.unsigned_words);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Block Unit Count : " + (sdio_value+1) + "Blocks");
-                        ScanaStudio.dec_item_add_content("BUC : " + (sdio_value+1) + "Blocks");
-                        ScanaStudio.dec_item_add_content((sdio_value+1) + "Blocks");
+                        held.dec_item_add_content("Block Unit Count : " + (sdio_value+1) + "Blocks");
+                        held.dec_item_add_content("BUC : " + (sdio_value+1) + "Blocks");
+                        held.dec_item_add_content((sdio_value+1) + "Blocks");
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Effective Data Read : " + sdio_value + "Bytes";
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"LEN",packet_string,"Data");
@@ -4350,7 +4561,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -4365,9 +4576,9 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Memory Extension";
                         }
-                        ScanaStudio.dec_item_add_content("MIO : " + packet_string);
+                        held.dec_item_add_content("MIO : " + packet_string);
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"MIO",packet_string,"Data");
                         // Read FNO (Function No.)
@@ -4375,17 +4586,17 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
                         item_content = FNO(item_display, MIO_value);
-                        ScanaStudio.dec_item_add_content("FNO : " + item_content);
+                        held.dec_item_add_content("FNO : " + item_content);
 
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"FNO",item_content,"Data");
                         // Read BUS (Function No.)
@@ -4393,7 +4604,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -4408,9 +4619,9 @@ function on_decode_signals(resume)
                         {
                             item_content = "32KBytes";
                         }
-                        ScanaStudio.dec_item_add_content("Block Unit Select : " + item_content);
+                        held.dec_item_add_content("Block Unit Select : " + item_content);
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Block Unit Select : " + item_content;
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"BUS",packet_string,"Data");
@@ -4419,15 +4630,15 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Adress : 0x" + pad(sdio_value.toString(16),5));
+                        held.dec_item_add_content("Adress : 0x" + pad(sdio_value.toString(16),5));
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Adress : 0x" + pad(sdio_value.toString(16),5);
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"ADDR",packet_string,"Data");
@@ -4436,18 +4647,18 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         sdio_value = Number(sdio_simple.unsigned_words);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Block Unit Count : " + (sdio_value+1) + "Blocks");
-                        ScanaStudio.dec_item_add_content("BUC : " + (sdio_value+1) + "Blocks");
-                        ScanaStudio.dec_item_add_content((sdio_value+1) + "Blocks");
+                        held.dec_item_add_content("Block Unit Count : " + (sdio_value+1) + "Blocks");
+                        held.dec_item_add_content("BUC : " + (sdio_value+1) + "Blocks");
+                        held.dec_item_add_content((sdio_value+1) + "Blocks");
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Effective Data Read : " + sdio_value + "Bytes";
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"LEN",packet_string,"Data");
@@ -4463,7 +4674,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -4473,20 +4684,20 @@ function on_decode_signals(resume)
                         {
                             packet_string = "R/W = Write";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("R/W = Write");
-                            ScanaStudio.dec_item_add_content("Write");
+                            held.dec_item_add_content("R/W = Write");
+                            held.dec_item_add_content("Write");
                             R_W = 1;
                         }
                         else
                         {
                             packet_string = "R/W = Read";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("R/W = Read");
-                            ScanaStudio.dec_item_add_content("Read");
+                            held.dec_item_add_content("R/W = Read");
+                            held.dec_item_add_content("Read");
                             R_W = 0;
                         }
-                        ScanaStudio.dec_item_add_sample_point(sdio_simple.start_sample,"P");
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_add_sample_point(sdio_simple.start_sample,"P");
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"R/W",packet_string,types);
                         // Read Function number
@@ -4494,16 +4705,16 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         function_number = Number(sdio_simple.unsigned_words);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Function " + sdio_simple.unsigned_words);
+                        held.dec_item_add_content("Function " + sdio_simple.unsigned_words);
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Function " + sdio_simple.unsigned_words;
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Function Number",packet_string,types);
@@ -4512,7 +4723,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -4522,18 +4733,18 @@ function on_decode_signals(resume)
                         {
                             packet_string = "RAW = 1";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("RAW = 1");
+                            held.dec_item_add_content("RAW = 1");
                             RAW = 1;
                         }
                         else
                         {
                             packet_string = "RAW = 0";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("RAW = 0");
+                            held.dec_item_add_content("RAW = 0");
                             RAW = 0;
                         }
-                        ScanaStudio.dec_item_add_sample_point(sdio_simple.start_sample,"P");
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_add_sample_point(sdio_simple.start_sample,"P");
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"RAW",packet_string,types);
                         // Read stuff bit
@@ -4541,15 +4752,15 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         crc_calcul.push(sdio_simple.unsigned_words);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Stuff bit");
-                        ScanaStudio.dec_item_add_sample_point(sdio_simple.start_sample,"P");
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_add_content("Stuff bit");
+                        held.dec_item_add_sample_point(sdio_simple.start_sample,"P");
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Reserved Bit","Stuff bit","Misc");
                         // Read Register adress
@@ -4557,7 +4768,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -4565,11 +4776,11 @@ function on_decode_signals(resume)
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         register_adress = sdio_simple.unsigned_words;
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Register adress is " + sdio_simple.unsigned_words + " or 0h" + pad(sdio_value.toString(16),5));
-                        ScanaStudio.dec_item_add_content("Register adress is 0h" + pad(sdio_value.toString(16),5));
-                        ScanaStudio.dec_item_add_content("0h" + pad(sdio_value.toString(16),5));
+                        held.dec_item_add_content("Register adress is " + sdio_simple.unsigned_words + " or 0h" + pad(sdio_value.toString(16),5));
+                        held.dec_item_add_content("Register adress is 0h" + pad(sdio_value.toString(16),5));
+                        held.dec_item_add_content("0h" + pad(sdio_value.toString(16),5));
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = sdio_value + " or 0h" + pad(sdio_value.toString(16),5);
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Register Adress",packet_string,"Data");
@@ -4578,15 +4789,15 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         crc_calcul.push(sdio_simple.unsigned_words);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Stuff bit");
-                        ScanaStudio.dec_item_add_sample_point(sdio_simple.start_sample,"P");
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_add_content("Stuff bit");
+                        held.dec_item_add_sample_point(sdio_simple.start_sample,"P");
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Stuff Bit","Stuff bit","Misc");
                         // Read Write Data or stuff bits
@@ -4594,7 +4805,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -4604,17 +4815,17 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Write : " + sdio_simple.unsigned_words;
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("Write : " + sdio_simple.unsigned_words);
+                            held.dec_item_add_content("Write : " + sdio_simple.unsigned_words);
                             Write_data = sdio_simple.unsigned_words;
                         }
                         else
                         {
                             packet_string = "Stuff bits";
                             types = "Misc";
-                            ScanaStudio.dec_item_add_content("Stuff bits");
+                            held.dec_item_add_content("Stuff bits");
                         }
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Write_data/Stuff bit",packet_string,types);
                         CMD = -1;
@@ -4629,7 +4840,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -4639,20 +4850,20 @@ function on_decode_signals(resume)
                         {
                             packet_string = "R/W = Write";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("R/W = Write");
-                            ScanaStudio.dec_item_add_content("Write");
+                            held.dec_item_add_content("R/W = Write");
+                            held.dec_item_add_content("Write");
                             R_W = 1;
                         }
                         else
                         {
                             packet_string = "R/W = Read";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("R/W = Read");
-                            ScanaStudio.dec_item_add_content("Read");
+                            held.dec_item_add_content("R/W = Read");
+                            held.dec_item_add_content("Read");
                             R_W = 0;
                         }
-                        ScanaStudio.dec_item_add_sample_point(sdio_simple.start_sample,"P");
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_add_sample_point(sdio_simple.start_sample,"P");
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"R/W",packet_string,types);
                         // Read Function number
@@ -4660,7 +4871,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -4669,14 +4880,14 @@ function on_decode_signals(resume)
                         dec_item_new_v2(ch_cmd,sdio_simple);
                         if (function_number == 0)
                         {
-                            ScanaStudio.dec_item_add_content("Function " + sdio_simple.unsigned_words + " (CIA)");
+                            held.dec_item_add_content("Function " + sdio_simple.unsigned_words + " (CIA)");
                         }
                         else
                         {
-                            ScanaStudio.dec_item_add_content("Function " + sdio_simple.unsigned_words + " (Register Space)");
+                            held.dec_item_add_content("Function " + sdio_simple.unsigned_words + " (Register Space)");
                         }
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Function " + sdio_simple.unsigned_words;
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Function_number",packet_string,"Data");
@@ -4685,7 +4896,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -4695,20 +4906,20 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Block Mode = 1 (block basis)";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("Block Mode = 1 (block basis)");
-                            ScanaStudio.dec_item_add_content("Block basis");
+                            held.dec_item_add_content("Block Mode = 1 (block basis)");
+                            held.dec_item_add_content("Block basis");
                             Block_mode = 1;
                         }
                         else
                         {
                             packet_string = "Block Mode = 0 (byte basis)";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("Block Mode = 0 (byte basis)");
-                            ScanaStudio.dec_item_add_content("Byte basis");
+                            held.dec_item_add_content("Block Mode = 0 (byte basis)");
+                            held.dec_item_add_content("Byte basis");
                             Block_mode = 0;
                         }
-                        ScanaStudio.dec_item_add_sample_point(sdio_simple.start_sample,"P");
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_add_sample_point(sdio_simple.start_sample,"P");
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Block_mode",packet_string,types);
                         // Read OP Code
@@ -4716,7 +4927,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -4726,20 +4937,20 @@ function on_decode_signals(resume)
                         {
                             packet_string = "OP Code = 1 (fixed adress)";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("OP Code = 1 (fixed adress)");
-                            ScanaStudio.dec_item_add_content("Fixed adress");
+                            held.dec_item_add_content("OP Code = 1 (fixed adress)");
+                            held.dec_item_add_content("Fixed adress");
                             OP_code = 1;
                         }
                         else
                         {
                             packet_string = "OP Code = 0 (incrementing adress)";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("OP Code = 0 (incrementing adress)");
-                            ScanaStudio.dec_item_add_content("Incrementing adress");
+                            held.dec_item_add_content("OP Code = 0 (incrementing adress)");
+                            held.dec_item_add_content("Incrementing adress");
                             OP_code = 0;
                         }
-                        ScanaStudio.dec_item_add_sample_point(sdio_simple.start_sample,"P");
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_add_sample_point(sdio_simple.start_sample,"P");
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"OP_CODE",packet_string,types);
                         // Read Register adress
@@ -4747,16 +4958,16 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         register_adress = Number(sdio_simple.unsigned_words);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Register adress is " + sdio_simple.unsigned_words);
+                        held.dec_item_add_content("Register adress is " + sdio_simple.unsigned_words);
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Register adress is " + sdio_simple.unsigned_words;
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Register adress",packet_string,"Data");
@@ -4765,12 +4976,12 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
-                        var CMD53_Block_count = Number(sdio_simple.unsigned_words);
+                        CMD53_Block_count = Number(sdio_simple.unsigned_words);
                         dec_item_new_v2(ch_cmd,sdio_simple);
                         if (Block_mode == 1)
                         {
@@ -4784,7 +4995,7 @@ function on_decode_signals(resume)
                             }
                             packet_string = "Block Count : " + sdio_simple.unsigned_words;
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("Block Count : " + sdio_simple.unsigned_words);
+                            held.dec_item_add_content("Block Count : " + sdio_simple.unsigned_words);
                             Write_data = sdio_simple.unsigned_words;
                         }
                         else
@@ -4799,10 +5010,10 @@ function on_decode_signals(resume)
                             }
                             packet_string = "Byte Count : " + sdio_simple.unsigned_words;
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("Byte Count : " + sdio_simple.unsigned_words);
+                            held.dec_item_add_content("Byte Count : " + sdio_simple.unsigned_words);
                         }
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Block/Byte Count",packet_string,types);
                         CMD = -1;
@@ -4817,15 +5028,15 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Stuff bits");
+                        held.dec_item_add_content("Stuff bits");
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Reserved Bit","Stuff bits","Misc");
                         // Read Register adress
@@ -4833,7 +5044,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -4844,16 +5055,16 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Writing";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("Writing");
+                            held.dec_item_add_content("Writing");
                         }
                         else
                         {
                             packet_string = "Reading";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("Reading");
+                            held.dec_item_add_content("Reading");
                         }
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"RD/WR",packet_string,types);
                         CMD = -1;
@@ -4867,15 +5078,15 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Reserved command");
+                        held.dec_item_add_content("Reserved command");
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"CMD Argument","Reserved command","Misc");
                         if (CMD_mode == 1)
@@ -4900,7 +5111,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -4928,7 +5139,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -4958,25 +5169,25 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             sdio_value = Number(sdio_simple.unsigned_words);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            ScanaStudio.dec_item_add_content("Manufacturer ID : 0x"+ pad(sdio_value.toString(16),2) + " or 0b" + pad(sdio_value.toString(2),8));
-                            ScanaStudio.dec_item_add_content("Manufacturer ID : 0b" + pad(sdio_value.toString(2),8));
-                            ScanaStudio.dec_item_add_content("Manu ID : 0b" + pad(sdio_value.toString(2),8));
+                            held.dec_item_add_content("Manufacturer ID : 0x"+ pad(sdio_value.toString(16),2) + " or 0b" + pad(sdio_value.toString(2),8));
+                            held.dec_item_add_content("Manufacturer ID : 0b" + pad(sdio_value.toString(2),8));
+                            held.dec_item_add_content("Manu ID : 0b" + pad(sdio_value.toString(2),8));
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_string = "0x"+ pad(sdio_value.toString(16),2) + " or 0b" + pad(sdio_value.toString(2),8);
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"MID",packet_string,"Data");
                             // OEM/Application ID
                             nbits = 16;
-                            var content = "";
-                            var sampling_point = [];
+                            content = "";
+                            sampling_point = [];
                             for (n=0; n<nbits/8; n++)
                             {
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample + 1,8);
@@ -4986,7 +5197,7 @@ function on_decode_signals(resume)
                                 }
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -5001,23 +5212,23 @@ function on_decode_signals(resume)
                             // Peut etre faut l'enlever mais il fait pas de mal atm
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_start_sample = trs_clk_before_v2(item_start_sample + 1);
                             item_end_sample = trs_clk_after_v2(sdio_simple.end_sample + 1);
-                            ScanaStudio.dec_item_new(ch_cmd,item_start_sample,item_end_sample);
-                            ScanaStudio.dec_item_add_content("OEM Application ID : " + content);
+                            held.dec_item_new(ch_cmd,item_start_sample,item_end_sample);
+                            held.dec_item_add_content("OEM Application ID : " + content);
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_string = "OEM Application ID : " + content;
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"OID",packet_string,"Data");
                             // Product Name
                             nbits = 40;
-                            var content = "";
-                            var sampling_point = [];
+                            content = "";
+                            sampling_point = [];
                             for (n=0; n<nbits/8; n++)
                             {
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,8);
@@ -5027,7 +5238,7 @@ function on_decode_signals(resume)
                                 }
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -5042,16 +5253,16 @@ function on_decode_signals(resume)
                             // Peut etre faut l'enlever mais il fait pas de mal atm
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_start_sample = trs_clk_before_v2(item_start_sample + 1);
                             item_end_sample = trs_clk_after_v2(sdio_simple.end_sample + 1);
-                            ScanaStudio.dec_item_new(ch_cmd,item_start_sample, item_end_sample);
-                            ScanaStudio.dec_item_add_content("Product Name : " + content);
+                            held.dec_item_new(ch_cmd,item_start_sample, item_end_sample);
+                            held.dec_item_add_content("Product Name : " + content);
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_string = "Product Name : " + content;
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"PNM",packet_string,"Data");
@@ -5060,13 +5271,13 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
-                            var PRV_1_array = [];
-                            var PRV_2_array = [];
+                            PRV_1_array = [];
+                            PRV_2_array = [];
                             for (k=0; k<nbits; k++)
                             {
                                 if (k <4)
@@ -5079,13 +5290,13 @@ function on_decode_signals(resume)
                                     PRV_2_array.push(item_display[k]);
                                 }
                             }
-                            var PRV_1 = bin2dec(PRV_1_array,4);
-                            var PRV_2 = bin2dec(PRV_2_array,4);
+                            PRV_1 = bin2dec(PRV_1_array,4);
+                            PRV_2 = bin2dec(PRV_2_array,4);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            ScanaStudio.dec_item_add_content("Product Revision : "+ PRV_1 + "." + PRV_2);
-                            ScanaStudio.dec_item_add_content("PR : "+ PRV_1 + "." + PRV_2);
+                            held.dec_item_add_content("Product Revision : "+ PRV_1 + "." + PRV_2);
+                            held.dec_item_add_content("PR : "+ PRV_1 + "." + PRV_2);
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_string = "Product Revision : "+ PRV_1 + "." + PRV_2;
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"PRV",packet_string,"Data");
@@ -5094,17 +5305,17 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             sdio_value = Number(sdio_simple.unsigned_words);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            ScanaStudio.dec_item_add_content("Product Serial Number : 0b" + pad(sdio_value.toString(2),32));
-                            ScanaStudio.dec_item_add_content("PSN : 0b" + pad(sdio_value.toString(2),32));
+                            held.dec_item_add_content("Product Serial Number : 0b" + pad(sdio_value.toString(2),32));
+                            held.dec_item_add_content("PSN : 0b" + pad(sdio_value.toString(2),32));
                             display_sample_0_1(sdio_simple, item_display);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_string ="0x" + pad(sdio_value.toString(16),8);
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"PSN",packet_string,"Data");
@@ -5113,26 +5324,26 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            ScanaStudio.dec_item_add_content("Reserved Bits");
+                            held.dec_item_add_content("Reserved Bits");
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_string = "Reserved Bits";
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"Reserved Bit",packet_string,"Misc");
                             // Manufacturing Date
                             nbits = 12;
-                            var Year_array = [];
-                            var Month_array = [];
+                            Year_array = [];
+                            Month_array = [];
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
@@ -5148,13 +5359,13 @@ function on_decode_signals(resume)
                                     Month_array.push(item_display[k]);
                                 }
                             }
-                            var year = bin2dec(Year_array,8) + 2000;
-                            var month = bin2dec(Month_array,4);
+                            year = bin2dec(Year_array,8) + 2000;
+                            month = bin2dec(Month_array,4);
                             dec_item_new_v2(ch_cmd,sdio_simple);
-                            ScanaStudio.dec_item_add_content("Manufacturing Date : " + year + "/" + month + " (y/m)");
-                            ScanaStudio.dec_item_add_content("M.D : " + year + "/" + month + " (y/m)");
+                            held.dec_item_add_content("Manufacturing Date : " + year + "/" + month + " (y/m)");
+                            held.dec_item_add_content("M.D : " + year + "/" + month + " (y/m)");
                             display_sample(sdio_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_string = year + "/" + month + " (y/m)";
                             packet_view_add_packet_v2(ch_cmd,sdio_simple,"Manufacturing Date",packet_string,"Data");
@@ -5168,19 +5379,19 @@ function on_decode_signals(resume)
                             sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                             if (last_trans == true) //if sync_decode overpassed the last sample
                             {
-                                go_to_last_trans_cmd();
+                                if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                 state_machine = ENUM_STATE_DATA_START;
                                 break;
                             }
                             item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
-                            var CSD_version = Number(sdio_simple.unsigned_words);
+                            CSD_version = Number(sdio_simple.unsigned_words);
                              dec_item_new_v2(ch_cmd,sdio_simple);
 
                             if (CSD_version == 0) // If it's the 1.0 Version of the CSD
                             {
-                                ScanaStudio.dec_item_add_content("CSD Version 1.0 : Standard Capacity ") ;
+                                held.dec_item_add_content("CSD Version 1.0 : Standard Capacity ") ;
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = "CSD Version 1.0";
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"CSD_STRUCTURE",packet_string,"Data");
@@ -5189,7 +5400,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -5197,12 +5408,12 @@ function on_decode_signals(resume)
                                 reserved_bit(sdio_simple); // Create Item, display content and samples, create packet_view
                                 // Data Read access time-1 (TAAC)
                                 nbits = 8;
-                                var time_unit_array = [];
-                                var time_value_array = [];
+                                time_unit_array = [];
+                                time_value_array = [];
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -5218,36 +5429,36 @@ function on_decode_signals(resume)
                                         time_unit_array.push(item_display[k]);
                                     }
                                 }
-                                var time_value = time_value_switch(bin2dec(time_value_array,4));
+                                time_value = time_value_switch(bin2dec(time_value_array,4));
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                var string_content = time_unit_switch(bin2dec(time_unit_array,3), time_value, sdio_simple); // Display dec_item, samples, packet_view
+                                string_content = time_unit_switch(bin2dec(time_unit_array,3), time_value, sdio_simple); // Display dec_item, samples, packet_view
                                 // Data Read access time-2 in CLK cycles (NSAC*100) (NSAC)
                                 nbits = 8;
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
-                                var NSAC = 100*Number(sdio_simple.unsigned_words);
+                                NSAC = 100*Number(sdio_simple.unsigned_words);
                                 sdio_value = Number(sdio_simple.unsigned_words);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Data Read access time-2 (NSAC) : 0h" + pad(sdio_value.toString(16),2) + " or " + NSAC + " Clock Cycles");
-                                ScanaStudio.dec_item_add_content("NSAC : 0h" + pad(sdio_value.toString(16),2));
+                                held.dec_item_add_content("Data Read access time-2 (NSAC) : 0h" + pad(sdio_value.toString(16),2) + " or " + NSAC + " Clock Cycles");
+                                held.dec_item_add_content("NSAC : 0h" + pad(sdio_value.toString(16),2));
                                 display_sample(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = "NSAC : 0h" + pad(sdio_value.toString(16),2) + " or " + NSAC;
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"NSAC",packet_string,"Data");
                                 // Max data transfer rate (TRAN_SPEED)
                                 nbits = 8;
-                                var transfer_rate_unit_array = [];
+                                transfer_rate_unit_array = [];
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -5271,18 +5482,18 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "TRAN_SPEED : 0h" + pad(sdio_value.toString(16),2) + " or " + item_content;
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Max data transfer rate (TRAN_SPEED) : 0h" + pad(sdio_simple.unsigned_words.toString(16),2) + " or " + item_content);
-                                    ScanaStudio.dec_item_add_content("TRAN_SPEED : 0h" + pad(sdio_simple.unsigned_words.toString(16),2) + " or " + item_content);
+                                    held.dec_item_add_content("Max data transfer rate (TRAN_SPEED) : 0h" + pad(sdio_simple.unsigned_words.toString(16),2) + " or " + item_content);
+                                    held.dec_item_add_content("TRAN_SPEED : 0h" + pad(sdio_simple.unsigned_words.toString(16),2) + " or " + item_content);
                                 }
                                 else
                                 {
                                     packet_string = "0h" + pad(sdio_value.toString(16),2) + " is an invalid transfer rate";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("0h" + pad(sdio_value.toString(16),2) + " is an invalid transfer rate");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("0h" + pad(sdio_value.toString(16),2) + " is an invalid transfer rate");
+                                    held.dec_item_emphasize_error();
                                 }
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"TRAN_SPEED",packet_string,types);
                                 // Card Command Class (CCC)
@@ -5290,7 +5501,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -5301,19 +5512,19 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "Card Command Class (CCC) : 0b" + pad(sdio_value.toString(2),12);
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Card Command Class (CCC) : 0b" + pad(sdio_value.toString(2),12));
-                                    ScanaStudio.dec_item_add_content("CCC : 0b" + pad(sdio_value.toString(2),12));
+                                    held.dec_item_add_content("Card Command Class (CCC) : 0b" + pad(sdio_value.toString(2),12));
+                                    held.dec_item_add_content("CCC : 0b" + pad(sdio_value.toString(2),12));
                                     pad(sdio_value.toString(16),3)
                                 }
                                 else
                                 {
                                     packet_string = "Invalid Card Command Class";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("Invalid Card Command Class");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("Invalid Card Command Class");
+                                    held.dec_item_emphasize_error();
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"CCC",packet_string,types);
                                 // Max Read data block length (READ_BL_LEN)
@@ -5321,19 +5532,19 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 sdio_value = Number(sdio_simple.unsigned_words);
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
-                                var item_content = BL_LEN(sdio_value, CSD_version);
+                                item_content = BL_LEN(sdio_value, CSD_version);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Max Read data block length : " + item_content);
-                                ScanaStudio.dec_item_add_content("Max block length : " + item_content);
-                                ScanaStudio.dec_item_add_content("Max block : " + item_content);
+                                held.dec_item_add_content("Max Read data block length : " + item_content);
+                                held.dec_item_add_content("Max block length : " + item_content);
+                                held.dec_item_add_content("Max block : " + item_content);
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = item_content;
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"READ_BL_LEN",packet_string,"Data");
@@ -5342,7 +5553,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -5352,19 +5563,19 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "Partial Block Read is allowed";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Partial Block Read is allowed (min block size will be 1 byte) ");
-                                    ScanaStudio.dec_item_add_content("Partial Block Read is allowed");
+                                    held.dec_item_add_content("Partial Block Read is allowed (min block size will be 1 byte) ");
+                                    held.dec_item_add_content("Partial Block Read is allowed");
                                 }
                                 else
                                 {
                                     packet_string = "Partial Block Read isn't allowed";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("Partial Block Read isn't allowed (on SD memory Card it should)");
-                                    ScanaStudio.dec_item_add_content("Partial Block Read isn't allowed");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("Partial Block Read isn't allowed (on SD memory Card it should)");
+                                    held.dec_item_add_content("Partial Block Read isn't allowed");
+                                    held.dec_item_emphasize_error();
                                 }
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"Reserved Bit",packet_string,types);
                                 // Write Block Misalignement (WRITE_BLK_MISALIGN)
@@ -5372,7 +5583,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -5382,18 +5593,18 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "Signal out boundaries is allowed";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Signals that crossing physical block boundaries is allowed");
-                                    ScanaStudio.dec_item_add_content("Signals crossing block boundaries is allowed");
+                                    held.dec_item_add_content("Signals that crossing physical block boundaries is allowed");
+                                    held.dec_item_add_content("Signals crossing block boundaries is allowed");
                                 }
                                 else
                                 {
                                     packet_string = "Signal out boundaries is invalid";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Signals that crossing physical block boundaries is invalid");
-                                    ScanaStudio.dec_item_add_content("Signals crossing block boundaries is invalid");
+                                    held.dec_item_add_content("Signals that crossing physical block boundaries is invalid");
+                                    held.dec_item_add_content("Signals crossing block boundaries is invalid");
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"WRITE_BLK_MISALIGN",packet_string,"Data");
                                 // Read Block Misalignement (READ_BLK_MISALIGN)
@@ -5401,7 +5612,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -5411,18 +5622,18 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "Signal out boundaries is allowed";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Signals that crossing physical block boundaries is allowed");
-                                    ScanaStudio.dec_item_add_content("Signals crossing block boundaries is allowed");
+                                    held.dec_item_add_content("Signals that crossing physical block boundaries is allowed");
+                                    held.dec_item_add_content("Signals crossing block boundaries is allowed");
                                 }
                                 else
                                 {
                                     packet_string = "Signal out boundaries is invalid";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Signals that crossing physical block boundaries is invalid");
-                                    ScanaStudio.dec_item_add_content("Signals crossing block boundaries is invalid");
+                                    held.dec_item_add_content("Signals that crossing physical block boundaries is invalid");
+                                    held.dec_item_add_content("Signals crossing block boundaries is invalid");
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"READ_BLK_MISALIGN",packet_string,"Data");
                                 // DSR implemented (DSR_IMP)
@@ -5430,7 +5641,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -5440,16 +5651,16 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "DSR implemented";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("DSR implemented");
+                                    held.dec_item_add_content("DSR implemented");
                                 }
                                 else
                                 {
                                     packet_string = "DSR not implemented";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("DSR not implemented");
+                                    held.dec_item_add_content("DSR not implemented");
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"DSR_IMP",packet_string,"Data");
                                 // Reserved bits
@@ -5457,7 +5668,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -5468,17 +5679,17 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 sdio_value = Number(sdio_simple.unsigned_words);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Device Size (C_SIZE) : 0h" + pad(sdio_value.toString(16),3));
-                                ScanaStudio.dec_item_add_content("C_SIZE : 0h" + pad(sdio_value.toString(16),3));
+                                held.dec_item_add_content("Device Size (C_SIZE) : 0h" + pad(sdio_value.toString(16),3));
+                                held.dec_item_add_content("C_SIZE : 0h" + pad(sdio_value.toString(16),3));
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = "C_SIZE : 0h" + pad(sdio_value.toString(16),3);
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"Reserved Bit",packet_string,"Data");
@@ -5487,17 +5698,17 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 item_content = VDD_CURR_MIN(sdio_simple.unsigned_words);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Min Read current (VDD_R_CURR_MIN): " + item_content);
-                                ScanaStudio.dec_item_add_content("VDD_R_CURR_MIN : " + item_content);
+                                held.dec_item_add_content("Min Read current (VDD_R_CURR_MIN): " + item_content);
+                                held.dec_item_add_content("VDD_R_CURR_MIN : " + item_content);
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = "Min Read current : " + item_content;
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"VDD_R_CURR_MIN",packet_string,"Data");
@@ -5506,17 +5717,17 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 item_content = VDD_CURR_MAX(sdio_simple.unsigned_words);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Max Read current (VDD_R_CURR_MAX): " + item_content);
-                                ScanaStudio.dec_item_add_content("VDD_R_CURR_MAX : " + item_content);
+                                held.dec_item_add_content("Max Read current (VDD_R_CURR_MAX): " + item_content);
+                                held.dec_item_add_content("VDD_R_CURR_MAX : " + item_content);
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = "Max Read current : " + item_content;
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"VDD_R_CURR_MAX",packet_string,"Data");
@@ -5525,17 +5736,17 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 item_content = VDD_CURR_MIN(sdio_simple.unsigned_words);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Min Write current (VDD_W_CURR_MIN): " + item_content);
-                                ScanaStudio.dec_item_add_content("VDD_W_CURR_MIN : " + item_content);
+                                held.dec_item_add_content("Min Write current (VDD_W_CURR_MIN): " + item_content);
+                                held.dec_item_add_content("VDD_W_CURR_MIN : " + item_content);
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = "Min Write current : " + item_content;
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"VDD_W_CURR_MIN",packet_string,"Data");
@@ -5544,17 +5755,17 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 item_content = VDD_CURR_MAX(sdio_simple.unsigned_words);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Max Write current (VDD_W_CURR_MAX): " + item_content);
-                                ScanaStudio.dec_item_add_content("VDD_W_CURR_MAX : " + item_content);
+                                held.dec_item_add_content("Max Write current (VDD_W_CURR_MAX): " + item_content);
+                                held.dec_item_add_content("VDD_W_CURR_MAX : " + item_content);
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = "Max Write current : " + item_content;
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"VDD_W_CURR_MAX",packet_string,"Data");
@@ -5563,16 +5774,16 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Devic Size Multiplier (C_SIZE_MULT): " + Math.pow(2,sdio_simple.unsigned_words + 2));
-                                ScanaStudio.dec_item_add_content("C_SIZE_MULT : " + Math.pow(2,sdio_simple.unsigned_words + 2));
+                                held.dec_item_add_content("Devic Size Multiplier (C_SIZE_MULT): " + Math.pow(2,sdio_simple.unsigned_words + 2));
+                                held.dec_item_add_content("C_SIZE_MULT : " + Math.pow(2,sdio_simple.unsigned_words + 2));
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = Math.pow(2,sdio_simple.unsigned_words + 2);
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"C_SIZE_MULT",packet_string,"Data");
@@ -5581,17 +5792,17 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 item_content = ERASE_BLK_EN(sdio_simple.unsigned_words);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Erase Single Block Enable (ERASE_BLK_EN) : " + item_content);
-                                ScanaStudio.dec_item_add_content("(ERASE_BLK_EN): " + item_content);
+                                held.dec_item_add_content("Erase Single Block Enable (ERASE_BLK_EN) : " + item_content);
+                                held.dec_item_add_content("(ERASE_BLK_EN): " + item_content);
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = item_content;
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"ERASE_BLK_EN",packet_string,"Data");
@@ -5600,16 +5811,16 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Erase Sector Size (SECTOR_SIZE) : " + (sdio_simple.unsigned_words + 1));
-                                ScanaStudio.dec_item_add_content("SECTOR_SIZE : " + (sdio_simple.unsigned_words + 1));
+                                held.dec_item_add_content("Erase Sector Size (SECTOR_SIZE) : " + (sdio_simple.unsigned_words + 1));
+                                held.dec_item_add_content("SECTOR_SIZE : " + (sdio_simple.unsigned_words + 1));
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = (sdio_simple.unsigned_words + 1);
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"SECTOR_SIZE",packet_string,"Data");
@@ -5618,16 +5829,16 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Write Protect Group Size (WP_GRP_SIZE) : " + (sdio_simple.unsigned_words + 1));
-                                ScanaStudio.dec_item_add_content("WP_GRP_SIZE : " + (sdio_simple.unsigned_words + 1));
+                                held.dec_item_add_content("Write Protect Group Size (WP_GRP_SIZE) : " + (sdio_simple.unsigned_words + 1));
+                                held.dec_item_add_content("WP_GRP_SIZE : " + (sdio_simple.unsigned_words + 1));
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = (sdio_simple.unsigned_words + 1);
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"WP_GRP_SIZE",packet_string,"Data");
@@ -5636,17 +5847,17 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 item_content = WP_GRP_ENABLE(sdio_simple.unsigned_words);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Write Protect Group Enable (WP_GRP_ENABLE) : " + (sdio_simple.unsigned_words + 1));
-                                ScanaStudio.dec_item_add_content("WP_GRP_ENABLE: " + (sdio_simple.unsigned_words + 1));
+                                held.dec_item_add_content("Write Protect Group Enable (WP_GRP_ENABLE) : " + (sdio_simple.unsigned_words + 1));
+                                held.dec_item_add_content("WP_GRP_ENABLE: " + (sdio_simple.unsigned_words + 1));
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = (sdio_simple.unsigned_words + 1);
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"WP_GRP_ENABLE",packet_string,"Data");
@@ -5655,7 +5866,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -5666,7 +5877,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -5678,18 +5889,18 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 item_content = BL_LEN(sdio_simple.unsigned_words, CSD_version);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Max Write data block length : " + item_content);
-                                ScanaStudio.dec_item_add_content("Max block length : " + item_content);
-                                ScanaStudio.dec_item_add_content("Max block : " + item_content);
+                                held.dec_item_add_content("Max Write data block length : " + item_content);
+                                held.dec_item_add_content("Max block length : " + item_content);
+                                held.dec_item_add_content("Max block : " + item_content);
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = item_content;
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"WRITE_BL_LEN",packet_string,"Data");
@@ -5698,7 +5909,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -5708,17 +5919,17 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "Smaller block allowed, min 1 byte";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Partial Block Write is allowed (min block size will be 1 byte) ");
-                                    ScanaStudio.dec_item_add_content("Partial Block Write is allowed");
+                                    held.dec_item_add_content("Partial Block Write is allowed (min block size will be 1 byte) ");
+                                    held.dec_item_add_content("Partial Block Write is allowed");
                                 }
                                 else
                                 {
                                     packet_string = "Only 512Bytes Block Allowed";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Partial Block Write isn't allowed ");
+                                    held.dec_item_add_content("Partial Block Write isn't allowed ");
                                 }
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"WRITE_BL_PARTIAL",packet_string,types);
                                 // Reserved bits
@@ -5726,7 +5937,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -5736,17 +5947,17 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "Reserved bits";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Reserved bits");
+                                    held.dec_item_add_content("Reserved bits");
                                 }
                                 else
                                 {
                                     packet_string = "Reserved bits should be 0";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("Reserved bits should be 0");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("Reserved bits should be 0");
+                                    held.dec_item_emphasize_error();
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"Reserved Bit",packet_string,types);
                                 // File format group (FILE_FORMAT_GRP)
@@ -5754,17 +5965,17 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
-                                var FILE_FORMAT_GRP = Number(sdio_simple.unsigned_words);
+                                FILE_FORMAT_GRP = Number(sdio_simple.unsigned_words);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("File format group (FILE_FORMAT_GRP) : " + sdio_simple.unsigned_words);
-                                ScanaStudio.dec_item_add_content("FILE_FORMAT_GRP : " + sdio_simple.unsigned_words);
+                                held.dec_item_add_content("File format group (FILE_FORMAT_GRP) : " + sdio_simple.unsigned_words);
+                                held.dec_item_add_content("FILE_FORMAT_GRP : " + sdio_simple.unsigned_words);
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = Number(sdio_simple.unsigned_words);
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"FILE_FORMAT_GRP",packet_string,"Data");
@@ -5773,17 +5984,17 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 item_content = COPY(Number(sdio_simple.unsigned_words));
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Copy Flag (COPY) : " + item_content);
-                                ScanaStudio.dec_item_add_content("COPY : " + item_content);
+                                held.dec_item_add_content("Copy Flag (COPY) : " + item_content);
+                                held.dec_item_add_content("COPY : " + item_content);
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = item_content;
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"COPY",packet_string,"Data");
@@ -5792,17 +6003,17 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 item_content = WRITE_PROTECT(sdio_simple.unsigned_words);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Permanent Write Protection (PERM_WRITE_PROTECT) : " + item_content);
-                                ScanaStudio.dec_item_add_content("PERM_WRITE_PROTECT : " + item_content);
+                                held.dec_item_add_content("Permanent Write Protection (PERM_WRITE_PROTECT) : " + item_content);
+                                held.dec_item_add_content("PERM_WRITE_PROTECT : " + item_content);
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = item_content;
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"PERM_WRITE_PROTECT",packet_string,"Data");
@@ -5811,17 +6022,17 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 item_content = WRITE_PROTECT(sdio_simple.unsigned_words);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Temporary Write Protection (PERM_WRITE_PROTECT) : " + item_content);
-                                ScanaStudio.dec_item_add_content("TMP_WRITE_PROTECT : " + item_content);
+                                held.dec_item_add_content("Temporary Write Protection (PERM_WRITE_PROTECT) : " + item_content);
+                                held.dec_item_add_content("TMP_WRITE_PROTECT : " + item_content);
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = item_content;
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"TMP_WRITE_PROTECT",packet_string,"Data");
@@ -5830,17 +6041,17 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 item_content = FILE_FORMAT(Number(sdio_simple.unsigned_words), FILE_FORMAT_GRP);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("File Format (FILE_FORMAT) : " + item_content);
-                                ScanaStudio.dec_item_add_content("FILE_FORMAT : " + item_content);
+                                held.dec_item_add_content("File Format (FILE_FORMAT) : " + item_content);
+                                held.dec_item_add_content("FILE_FORMAT : " + item_content);
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = item_content;
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"FILE_FORMAT",packet_string,"Data");
@@ -5849,7 +6060,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -5859,26 +6070,26 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "Reserved bits";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Reserved bits");
+                                    held.dec_item_add_content("Reserved bits");
                                 }
                                 else
                                 {
                                     packet_string = "Reserved bits should be 0";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("Reserved bits should be 0");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("Reserved bits should be 0");
+                                    held.dec_item_emphasize_error();
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"Reserved Bit",packet_string,types);
                             } // end of 1.0 Version
 
                             else if (sdio_simple.unsigned_words == 1) // If it's the 2.0 Version of the CSD
                             {
-                                ScanaStudio.dec_item_add_content("CSD Version 2.0 : High Capacity and Extended Capacity");
+                                held.dec_item_add_content("CSD Version 2.0 : High Capacity and Extended Capacity");
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = "CSD Version 2.0";
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"CSD Version",packet_string,"Data");
@@ -5887,7 +6098,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -5895,12 +6106,12 @@ function on_decode_signals(resume)
                                 reserved_bit(sdio_simple); // Create Item, display content and samples, create packet_view
                                 // Data Read access time-1 (TAAC)
                                 nbits = 8;
-                                var time_unit_array = [];
-                                var time_value_array = [];
+                                time_unit_array = [];
+                                time_value_array = [];
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -5911,17 +6122,17 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "TAAC : 1ms"  ;
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Data Read access time-1 (TAAC) : 1ms");
-                                    ScanaStudio.dec_item_add_content("TAAC : " + string_content);
+                                    held.dec_item_add_content("Data Read access time-1 (TAAC) : 1ms");
+                                    held.dec_item_add_content("TAAC : " + string_content);
                                 }
                                 else
                                 {
                                     packet_string = "In CSD 2.0 TAAC should be fixed to 1ms"  ;
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("In CSD 2.0 TAAC should be fixed to 1ms");
+                                    held.dec_item_add_content("In CSD 2.0 TAAC should be fixed to 1ms");
                                 }
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"TAAC",packet_string,types);
                                 // Data Read access time-2 in CLK cycles (NSAC*100) (NSAC)
@@ -5929,7 +6140,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -5939,25 +6150,25 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "In CSD 2.0 NSAC isn't used"  ;
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("In CSD 2.0 NSAC isn't used to calculate time-out values");
+                                    held.dec_item_add_content("In CSD 2.0 NSAC isn't used to calculate time-out values");
                                 }
                                 else
                                 {
                                     packet_string = "In CSD 2.0 NSAC should be fixed and not used"  ;
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("In CSD 2.0 NSAC should be fixed and not used");
+                                    held.dec_item_add_content("In CSD 2.0 NSAC should be fixed and not used");
                                 }
                                 display_sample(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"NSAC",packet_string,types);
                                 // Max data transfer rate (TRAN_SPEED)
                                 nbits = 8;
-                                var transfer_rate_unit_array = [];
+                                transfer_rate_unit_array = [];
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -5988,13 +6199,13 @@ function on_decode_signals(resume)
                                         types = "Data";
                                         if (item_content == "Error Reserved bit should be 0")
                                         {
-                                            ScanaStudio.dec_item_add_content("Max data transfer rate (TRAN_SPEED) : 0h" + pad(sdio_value.toString(16),2));
-                                            ScanaStudio.dec_item_add_content("TRAN_SPEED : 0h" + pad(sdio_simple.unsigned_words.toString(16),2));
+                                            held.dec_item_add_content("Max data transfer rate (TRAN_SPEED) : 0h" + pad(sdio_value.toString(16),2));
+                                            held.dec_item_add_content("TRAN_SPEED : 0h" + pad(sdio_simple.unsigned_words.toString(16),2));
                                         }
                                         else
                                         {
-                                            ScanaStudio.dec_item_add_content("Max data transfer rate (TRAN_SPEED) : 0h" + pad(sdio_value.toString(16),2) + " or " + item_content);
-                                            ScanaStudio.dec_item_add_content("TRAN_SPEED : 0h" + pad(sdio_simple.unsigned_words.toString(16),2) + " or " + item_content);
+                                            held.dec_item_add_content("Max data transfer rate (TRAN_SPEED) : 0h" + pad(sdio_value.toString(16),2) + " or " + item_content);
+                                            held.dec_item_add_content("TRAN_SPEED : 0h" + pad(sdio_simple.unsigned_words.toString(16),2) + " or " + item_content);
                                         }
                                         break;
                                     }
@@ -6002,12 +6213,12 @@ function on_decode_signals(resume)
                                     {
                                         packet_string = "0h" + pad(sdio_value.toString(16),2) + " is an invalid transfer rate";
                                         types = "Error";
-                                        ScanaStudio.dec_item_add_content("0h" + pad(sdio_value.toString(16),2) + " or " + item_content + " is an invalid transfer rate");
-                                        ScanaStudio.dec_item_emphasize_error();
+                                        held.dec_item_add_content("0h" + pad(sdio_value.toString(16),2) + " or " + item_content + " is an invalid transfer rate");
+                                        held.dec_item_emphasize_error();
                                     }
                                 }
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"TRAN_SPEED",packet_string,types);
                                 // Card Command Class (CCC)
@@ -6015,7 +6226,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6026,18 +6237,18 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "0b" + pad(sdio_value.toString(2),12);
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Card Command Class (CCC) : 0b" + pad(sdio_value.toString(2),12));
-                                    ScanaStudio.dec_item_add_content("CCC : 0b" + pad(sdio_value.toString(2),12));
+                                    held.dec_item_add_content("Card Command Class (CCC) : 0b" + pad(sdio_value.toString(2),12));
+                                    held.dec_item_add_content("CCC : 0b" + pad(sdio_value.toString(2),12));
                                 }
                                 else
                                 {
                                     packet_string = "0b" + pad(sdio_value.toString(2),12) + " is Invalid Card Command Class";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("0b" + pad(sdio_value.toString(2),12) + " is Invalid Card Command Class");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("0b" + pad(sdio_value.toString(2),12) + " is Invalid Card Command Class");
+                                    held.dec_item_emphasize_error();
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"CCC",packet_string,types);
                                 // Max Read data block length (READ_BL_LEN)
@@ -6045,7 +6256,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6056,19 +6267,19 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "Max Read data block length : 512 Bytes";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Max Read data block length : 512 Bytes");
-                                    ScanaStudio.dec_item_add_content("Max block length : 512 Bytes");
-                                    ScanaStudio.dec_item_add_content("Max block : 512 Bytes");
+                                    held.dec_item_add_content("Max Read data block length : 512 Bytes");
+                                    held.dec_item_add_content("Max block length : 512 Bytes");
+                                    held.dec_item_add_content("Max block : 512 Bytes");
                                 }
                                 else
                                 {
                                     packet_string = "READ_BL_LEN is fixed to 512bytes";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("Error in 2.0 Version, READ_BL_LEN is fixed to 512bytes");
-                                    ScanaStudio.dec_item_add_content("Error");
+                                    held.dec_item_add_content("Error in 2.0 Version, READ_BL_LEN is fixed to 512bytes");
+                                    held.dec_item_add_content("Error");
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"READ_BL_LEN",packet_string,types);
                                 // Partial Read for read allowed (READ_BL_PARTIAL)
@@ -6076,7 +6287,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6086,18 +6297,18 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "In 2.0, only unit block is allowed";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("Error, in 2.0, only unit block is allowed");
-                                    ScanaStudio.dec_item_add_content("Error");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("Error, in 2.0, only unit block is allowed");
+                                    held.dec_item_add_content("Error");
+                                    held.dec_item_emphasize_error();
                                 }
                                 else
                                 {
                                     packet_string = "Only unit block is allowed";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Only unit block is allowed");
+                                    held.dec_item_add_content("Only unit block is allowed");
                                 }
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"READ_BL_PARTIAL",packet_string,types);
                                 // Write Block Misalignement (WRITE_BLK_MISALIGN)
@@ -6105,7 +6316,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6116,19 +6327,19 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "In 2.0, signal out boundaries isn't allowed";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("Error, in 2.0 Version, signals crossing block boundaries never are allowed");
-                                    ScanaStudio.dec_item_add_content("Error");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("Error, in 2.0 Version, signals crossing block boundaries never are allowed");
+                                    held.dec_item_add_content("Error");
+                                    held.dec_item_emphasize_error();
                                 }
                                 else
                                 {
                                     packet_string = "Signal out boundaries is invalid";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Signals that crossing physical block boundaries is invalid");
-                                    ScanaStudio.dec_item_add_content("Signals crossing block boundaries is invalid");
+                                    held.dec_item_add_content("Signals that crossing physical block boundaries is invalid");
+                                    held.dec_item_add_content("Signals crossing block boundaries is invalid");
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"WRITE_BLK_MISALIGN",packet_string,types);
                                 // Read Block Misalignement (READ_BLK_MISALIGN)
@@ -6136,7 +6347,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6147,19 +6358,19 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "In 2.0, signal out boundaries isn't allowed";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("Error, in 2.0 Version, signals crossing block boundaries never are allowed");
-                                    ScanaStudio.dec_item_add_content("Error");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("Error, in 2.0 Version, signals crossing block boundaries never are allowed");
+                                    held.dec_item_add_content("Error");
+                                    held.dec_item_emphasize_error();
                                 }
                                 else
                                 {
                                     packet_string = "Signal out boundaries is invalid";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Signals that crossing physical block boundaries is invalid");
-                                    ScanaStudio.dec_item_add_content("Signals crossing block boundaries is invalid");
+                                    held.dec_item_add_content("Signals that crossing physical block boundaries is invalid");
+                                    held.dec_item_add_content("Signals crossing block boundaries is invalid");
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"READ_BLK_MISALIGN",packet_string,types);
                                 // DSR implemented (DSR_IMP)
@@ -6167,7 +6378,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6177,16 +6388,16 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "DSR implemented";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("DSR implemented");
+                                    held.dec_item_add_content("DSR implemented");
                                 }
                                 else
                                 {
                                     packet_string = "DSR not implemented";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("DSR not implemented");
+                                    held.dec_item_add_content("DSR not implemented");
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"DSR_IMP",packet_string,"Data");
                                 // Reserved bits
@@ -6194,7 +6405,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6205,17 +6416,17 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 sdio_value = Number(sdio_simple.unsigned_words);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Device Size (C_SIZE) : 0h" + pad(sdio_value.toString(16),3));
-                                ScanaStudio.dec_item_add_content("C_SIZE : 0h" + pad(sdio_value.toString(16),3));
+                                held.dec_item_add_content("Device Size (C_SIZE) : 0h" + pad(sdio_value.toString(16),3));
+                                held.dec_item_add_content("C_SIZE : 0h" + pad(sdio_value.toString(16),3));
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = "Device Size : 0h" + pad(sdio_value.toString(16),3);
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"C_SIZE",packet_string,"Data");
@@ -6226,7 +6437,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6237,7 +6448,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6248,18 +6459,18 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "Erase units of 512Bytes";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Erase Single Block Enable (ERASE_BLK_EN) : Erase units of 512Bytes");
-                                    ScanaStudio.dec_item_add_content("(ERASE_BLK_EN): Erase units of 512Bytes");
+                                    held.dec_item_add_content("Erase Single Block Enable (ERASE_BLK_EN) : Erase units of 512Bytes");
+                                    held.dec_item_add_content("(ERASE_BLK_EN): Erase units of 512Bytes");
                                 }
                                 else
                                 {
                                     packet_string = "2.0 Version, only erase block of 512Bytes";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("Error, in 2.0 Version, only erase block of 512Bytes");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("Error, in 2.0 Version, only erase block of 512Bytes");
+                                    held.dec_item_emphasize_error();
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"ERASE_BLK_EN",packet_string,types);
                                 // Erase Sector Size (SECTOR_SIZE)
@@ -6267,7 +6478,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6277,19 +6488,19 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "64KBytes";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Erase Sector Size (SECTOR_SIZE) : 64KBytes");
-                                    ScanaStudio.dec_item_add_content("SECTOR_SIZE : 64KBytes");
+                                    held.dec_item_add_content("Erase Sector Size (SECTOR_SIZE) : 64KBytes");
+                                    held.dec_item_add_content("SECTOR_SIZE : 64KBytes");
                                 }
                                 else
                                 {
                                     packet_string = "Should be fixed to 64KBytes";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("Error, 2.0 Version, SECTOR_SIZE is fixed to 64KBytes");
-                                    ScanaStudio.dec_item_add_content("Error");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("Error, 2.0 Version, SECTOR_SIZE is fixed to 64KBytes");
+                                    held.dec_item_add_content("Error");
+                                    held.dec_item_emphasize_error();
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"SECTOR_SIZE",packet_string,types);
                                 // Write Protect Group Size (WP_GRP_SIZE)
@@ -6297,7 +6508,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6307,17 +6518,17 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "SDHC/SDXC don't support WP_GRP";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("SDHC and SDXC don't support WP_GRP");
+                                    held.dec_item_add_content("SDHC and SDXC don't support WP_GRP");
                                 }
                                 else
                                 {
                                     packet_string = "SDHC/SDXC shouldn't support WP_GRP";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("SDHC and SDXC shouldn't support WP_GRP");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("SDHC and SDXC shouldn't support WP_GRP");
+                                    held.dec_item_emphasize_error();
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"WP_GRP_SIZE",packet_string,types);
                                 // Write Protect Group Enable (WP_GRP_ENABLE)
@@ -6325,7 +6536,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6336,17 +6547,17 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "SDHC/SDXC don't support WP_GRP";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("SDHC and SDXC don't support WP_GRP");
+                                    held.dec_item_add_content("SDHC and SDXC don't support WP_GRP");
                                 }
                                 else
                                 {
                                     packet_string = "SDHC/SDXC support WP_GRP";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("SDHC and SDXC shouldn't support WP_GRP");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("SDHC and SDXC shouldn't support WP_GRP");
+                                    held.dec_item_emphasize_error();
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"WP_GRP_ENABLE",packet_string,types);
                                 // Reserved bits
@@ -6354,7 +6565,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6365,7 +6576,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6377,18 +6588,18 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 item_content = BL_LEN(sdio_simple.unsigned_words, CSD_version);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Max Read data block length : " + item_content);
-                                ScanaStudio.dec_item_add_content("Max block length : " + item_content);
-                                ScanaStudio.dec_item_add_content("Max block : " + item_content);
+                                held.dec_item_add_content("Max Read data block length : " + item_content);
+                                held.dec_item_add_content("Max block length : " + item_content);
+                                held.dec_item_add_content("Max block : " + item_content);
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = item_content;
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"WRITE_BL_LEN",packet_string,"Data");
@@ -6397,7 +6608,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6407,17 +6618,17 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "In 2.0, smaller block shouldn't be allowed";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("In 2.0, smaller block shouldn't be allowed");
-                                    ScanaStudio.dec_item_add_content("Partial Block Write shouldn't be allowed");
+                                    held.dec_item_add_content("In 2.0, smaller block shouldn't be allowed");
+                                    held.dec_item_add_content("Partial Block Write shouldn't be allowed");
                                 }
                                 else
                                 {
                                     packet_string = "Only 512Bytes Block Allowed";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Partial Block Write isn't allowed");
+                                    held.dec_item_add_content("Partial Block Write isn't allowed");
                                 }
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"WRITE_BL_PARTIAL",packet_string,types);
 
@@ -6427,7 +6638,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6438,27 +6649,27 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
-                                var FILE_FORMAT_GRP = Number(sdio_simple.unsigned_words);
+                                FILE_FORMAT_GRP = Number(sdio_simple.unsigned_words);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
                                 if (sdio_simple.unsigned_words == 0)
                                 {
                                     packet_string = "In 2.0, this field isn't used";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("In 2.0, this field isn't used");
+                                    held.dec_item_add_content("In 2.0, this field isn't used");
                                 }
                                 else
                                 {
                                     packet_string = "In 2.0, this field shouldn't be used";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("In 2.0, this field shouldn't be used");
+                                    held.dec_item_add_content("In 2.0, this field shouldn't be used");
                                 }
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"FILE_FORMAT_GRP",packet_string,types);
                                 // Copy Flag (COPY)
@@ -6466,17 +6677,17 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 item_content = COPY(Number(sdio_simple.unsigned_words));
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Copy Flag (COPY) : " + item_content);
-                                ScanaStudio.dec_item_add_content("COPY : " + item_content);
+                                held.dec_item_add_content("Copy Flag (COPY) : " + item_content);
+                                held.dec_item_add_content("COPY : " + item_content);
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = item_content;
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"COPY",packet_string,"Data");
@@ -6485,17 +6696,17 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 item_content = WRITE_PROTECT(sdio_simple.unsigned_words);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Permanent Write Protection (PERM_WRITE_PROTECT) : " + item_content);
-                                ScanaStudio.dec_item_add_content("PERM_WRITE_PROTECT : " + item_content);
+                                held.dec_item_add_content("Permanent Write Protection (PERM_WRITE_PROTECT) : " + item_content);
+                                held.dec_item_add_content("PERM_WRITE_PROTECT : " + item_content);
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = item_content;
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"PERM_WRITE_PROTECT",packet_string,"Data");
@@ -6504,17 +6715,17 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 item_content = WRITE_PROTECT(sdio_simple.unsigned_words);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Temporary Write Protection (PERM_WRITE_PROTECT) : " + item_content);
-                                ScanaStudio.dec_item_add_content("TMP_WRITE_PROTECT : " + item_content);
+                                held.dec_item_add_content("Temporary Write Protection (PERM_WRITE_PROTECT) : " + item_content);
+                                held.dec_item_add_content("TMP_WRITE_PROTECT : " + item_content);
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = item_content;
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"TMP_WRITE_PROTECT",packet_string,"Data");
@@ -6523,7 +6734,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6534,16 +6745,16 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "In 2.0, this field isn't used";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("In 2.0, this field isn't used");
+                                    held.dec_item_add_content("In 2.0, this field isn't used");
                                 }
                                 else
                                 {
                                     packet_string = "In 2.0, this field shouldn't be used";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("In 2.0, this field shouldn't be used");
+                                    held.dec_item_add_content("In 2.0, this field shouldn't be used");
                                 }
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"FILE_FORMAT",packet_string,"Data");
                                 // Reserved bits
@@ -6551,7 +6762,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6561,26 +6772,26 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "Reserved bits";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Reserved bits");
+                                    held.dec_item_add_content("Reserved bits");
                                 }
                                 else
                                 {
                                     packet_string = "Reserved bits should be 0";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("Reserved bits should be 0");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("Reserved bits should be 0");
+                                    held.dec_item_emphasize_error();
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"CMD Argument",packet_string,types);
                             } // end of 2.0 Version
 
                             else if (sdio_simple.unsigned_words == 2) // If it's the 3.0 Version of the CSD
                             {
-                                ScanaStudio.dec_item_add_content("CSD Version 3.0 : Ultra Capacity (SDUC)");
+                                held.dec_item_add_content("CSD Version 3.0 : Ultra Capacity (SDUC)");
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = "CSD Version 3.0";
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"CSD Version",packet_string,"Data");
@@ -6589,7 +6800,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6597,12 +6808,12 @@ function on_decode_signals(resume)
                                 reserved_bit(sdio_simple); // Create Item, display content and samples, create packet_view
                                 // Data Read access time-1 (TAAC)
                                 nbits = 8;
-                                var time_unit_array = [];
-                                var time_value_array = [];
+                                time_unit_array = [];
+                                time_value_array = [];
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6612,17 +6823,17 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "TAAC : 1ms"  ;
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Data Read access time-1 (TAAC) : 1ms");
-                                    ScanaStudio.dec_item_add_content("TAAC : " + string_content);
+                                    held.dec_item_add_content("Data Read access time-1 (TAAC) : 1ms");
+                                    held.dec_item_add_content("TAAC : " + string_content);
                                 }
                                 else
                                 {
                                     packet_string = "TAAC should be fixed to 1ms"  ;
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("In CSD 3.0 TAAC should be fixed to 1ms");
+                                    held.dec_item_add_content("In CSD 3.0 TAAC should be fixed to 1ms");
                                 }
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"TAAC",packet_string,types);
                                 // Data Read access time-2 in CLK cycles (NSAC*100) (NSAC)
@@ -6630,7 +6841,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6640,25 +6851,25 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "In CSD 3.0 NSAC isn't used"  ;
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("In CSD 3.0 NSAC isn't used to calculate time-out values");
+                                    held.dec_item_add_content("In CSD 3.0 NSAC isn't used to calculate time-out values");
                                 }
                                 else
                                 {
                                     packet_string = "NSAC should be fixed and not used"  ;
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("In CSD 3.0 NSAC should be fixed and not used");
+                                    held.dec_item_add_content("In CSD 3.0 NSAC should be fixed and not used");
                                 }
                                 display_sample(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"NSAC",packet_string,types);
                                 // Max data transfer rate (TRAN_SPEED)
                                 nbits = 8;
-                                var transfer_rate_unit_array = [];
+                                transfer_rate_unit_array = [];
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6675,7 +6886,7 @@ function on_decode_signals(resume)
                                     }
                                 }
                                 time_value = time_value_switch(time_value_array);
-                                var transfer_rate_unit = bin2dec(transfer_rate_unit_array,4);
+                                transfer_rate_unit = bin2dec(transfer_rate_unit_array,4);
                                 item_content = transfer_rate_switch(transfer_rate_unit, time_value);
                                 sdio_value = Number(sdio_simple.unsigned_words);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
@@ -6688,20 +6899,20 @@ function on_decode_signals(resume)
                                     {
                                         packet_string = "TRAN_SPEED : 0h" + pad(sdio_value.toString(16),2) + " or " + item_content;
                                         types = "Data";
-                                        ScanaStudio.dec_item_add_content("Max data transfer rate (TRAN_SPEED) : 0h" + pad(sdio_value.toString(16),2) + " or " + item_content);
-                                        ScanaStudio.dec_item_add_content("TRAN_SPEED : 0h" + pad(sdio_simple.unsigned_words.toString(16),2) + " or " + item_content);
+                                        held.dec_item_add_content("Max data transfer rate (TRAN_SPEED) : 0h" + pad(sdio_value.toString(16),2) + " or " + item_content);
+                                        held.dec_item_add_content("TRAN_SPEED : 0h" + pad(sdio_simple.unsigned_words.toString(16),2) + " or " + item_content);
                                         break;
                                     }
                                     default :
                                     {
                                         packet_string = "0h" + pad(sdio_value.toString(16),2) + " is an invalid transfer rate";
                                         types = "Error";
-                                        ScanaStudio.dec_item_add_content("0h" + pad(sdio_value.toString(16),2) + " or " + item_content + " is an invalid transfer rate");
-                                        ScanaStudio.dec_item_emphasize_error();
+                                        held.dec_item_add_content("0h" + pad(sdio_value.toString(16),2) + " or " + item_content + " is an invalid transfer rate");
+                                        held.dec_item_emphasize_error();
                                     }
                                 }
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"TRAN_SPEED",packet_string,types);
                                 // Card Command Class (CCC)
@@ -6709,7 +6920,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6720,18 +6931,18 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "Card Command Class (CCC) : 0b" + pad(sdio_value.toString(2),12);
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Card Command Class (CCC) : 0b" + pad(sdio_value.toString(2),12));
-                                    ScanaStudio.dec_item_add_content("CCC : 0b" + pad(sdio_value.toString(2),12));
+                                    held.dec_item_add_content("Card Command Class (CCC) : 0b" + pad(sdio_value.toString(2),12));
+                                    held.dec_item_add_content("CCC : 0b" + pad(sdio_value.toString(2),12));
                                 }
                                 else
                                 {
                                     packet_string = "0b" + pad(sdio_value.toString(2),12) + " is an Invalid CCC";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("0b" + pad(sdio_value.toString(2),12) + " is an Invalid Card Command Class");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("0b" + pad(sdio_value.toString(2),12) + " is an Invalid Card Command Class");
+                                    held.dec_item_emphasize_error();
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"CCC",packet_string,types);
                                 // Max Read data block length (READ_BL_LEN)
@@ -6739,7 +6950,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6750,19 +6961,19 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "Max Read data block length : 512 Bytes";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Max Read data block length : 512 Bytes");
-                                    ScanaStudio.dec_item_add_content("Max block length : 512 Bytes");
-                                    ScanaStudio.dec_item_add_content("Max block : 512 Bytes");
+                                    held.dec_item_add_content("Max Read data block length : 512 Bytes");
+                                    held.dec_item_add_content("Max block length : 512 Bytes");
+                                    held.dec_item_add_content("Max block : 512 Bytes");
                                 }
                                 else
                                 {
                                     packet_string = "READ_BL_LEN is fixed to 512bytes";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("Error in 3.0 Version, READ_BL_LEN is fixed to 512bytes");
-                                    ScanaStudio.dec_item_add_content("Error");
+                                    held.dec_item_add_content("Error in 3.0 Version, READ_BL_LEN is fixed to 512bytes");
+                                    held.dec_item_add_content("Error");
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"READ_BL_LEN",packet_string,types);
                                 // Partial Read for read allowed (READ_BL_PARTIAL)
@@ -6770,7 +6981,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6780,18 +6991,18 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "In 3.0, only unit block is allowed";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("Error, in 3.0, only unit block is allowed");
-                                    ScanaStudio.dec_item_add_content("Error");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("Error, in 3.0, only unit block is allowed");
+                                    held.dec_item_add_content("Error");
+                                    held.dec_item_emphasize_error();
                                 }
                                 else
                                 {
                                     packet_string = "Only unit block is allowed";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Only unit block is allowed");
+                                    held.dec_item_add_content("Only unit block is allowed");
                                 }
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"READ_BL_PARTIAL",packet_string,types);
                                 // Write Block Misalignement (WRITE_BLK_MISALIGN)
@@ -6799,7 +7010,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6810,19 +7021,19 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "Signal out boundaries isn't allowed";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("Error, in 3.0 Version, signals crossing block boundaries are never allowed");
-                                    ScanaStudio.dec_item_add_content("Error");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("Error, in 3.0 Version, signals crossing block boundaries are never allowed");
+                                    held.dec_item_add_content("Error");
+                                    held.dec_item_emphasize_error();
                                 }
                                 else
                                 {
                                     packet_string = "Signal out boundaries is invalid";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Signals that crossing physical block boundaries is invalid");
-                                    ScanaStudio.dec_item_add_content("Signals crossing block boundaries is invalid");
+                                    held.dec_item_add_content("Signals that crossing physical block boundaries is invalid");
+                                    held.dec_item_add_content("Signals crossing block boundaries is invalid");
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"WRITE_BLK_MISALIGN",packet_string,types);
                                 // Read Block Misalignement (READ_BLK_MISALIGN)
@@ -6830,7 +7041,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6841,19 +7052,19 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "In 2.0, signal out boundaries isn't allowed";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("Error, in 3.0 Version, signals crossing block boundaries never are allowed");
-                                    ScanaStudio.dec_item_add_content("Error");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("Error, in 3.0 Version, signals crossing block boundaries never are allowed");
+                                    held.dec_item_add_content("Error");
+                                    held.dec_item_emphasize_error();
                                 }
                                 else
                                 {
                                     packet_string = "Signal out boundaries is invalid";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Signals that crossing physical block boundaries is invalid");
-                                    ScanaStudio.dec_item_add_content("Signals crossing block boundaries is invalid");
+                                    held.dec_item_add_content("Signals that crossing physical block boundaries is invalid");
+                                    held.dec_item_add_content("Signals crossing block boundaries is invalid");
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"READ_BLK_MISALIGN",packet_string,types);
                                 // DSR implemented (DSR_IMP)
@@ -6861,7 +7072,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6871,16 +7082,16 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "DSR implemented";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("DSR implemented");
+                                    held.dec_item_add_content("DSR implemented");
                                 }
                                 else
                                 {
                                     packet_string = "DSR not implemented";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("DSR not implemented");
+                                    held.dec_item_add_content("DSR not implemented");
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"DSR_IMP",packet_string,"Data");
                                 // Device Size (C_SIZE)
@@ -6888,17 +7099,17 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 sdio_value = Number(sdio_simple.unsigned_words);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Device Size (C_SIZE) : 0h" + pad(sdio_value.toString(16),3));
-                                ScanaStudio.dec_item_add_content("C_SIZE : 0h" + pad(sdio_value.toString(16),3));
+                                held.dec_item_add_content("Device Size (C_SIZE) : 0h" + pad(sdio_value.toString(16),3));
+                                held.dec_item_add_content("C_SIZE : 0h" + pad(sdio_value.toString(16),3));
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = "Device Size : 0h" + pad(sdio_value.toString(16),3);
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"C_SIZE",packet_string,"Data");
@@ -6907,7 +7118,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6918,7 +7129,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6929,18 +7140,18 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "Erase units of 512Bytes";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Erase Single Block Enable (ERASE_BLK_EN) : Erase units of 512Bytes");
-                                    ScanaStudio.dec_item_add_content("(ERASE_BLK_EN): Erase units of 512Bytes");
+                                    held.dec_item_add_content("Erase Single Block Enable (ERASE_BLK_EN) : Erase units of 512Bytes");
+                                    held.dec_item_add_content("(ERASE_BLK_EN): Erase units of 512Bytes");
                                 }
                                 else
                                 {
                                     packet_string = "3.0 Version, only erase block of 512Bytes";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("Error, in 3.0 Version, only erase block of 512Bytes");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("Error, in 3.0 Version, only erase block of 512Bytes");
+                                    held.dec_item_emphasize_error();
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"ERASE_BLK_EN",packet_string,types);
                                 // Erase Sector Size (SECTOR_SIZE)
@@ -6948,7 +7159,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6958,19 +7169,19 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "64KBytes";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Erase Sector Size (SECTOR_SIZE) : 64KBytes");
-                                    ScanaStudio.dec_item_add_content("SECTOR_SIZE : 64KBytes");
+                                    held.dec_item_add_content("Erase Sector Size (SECTOR_SIZE) : 64KBytes");
+                                    held.dec_item_add_content("SECTOR_SIZE : 64KBytes");
                                 }
                                 else
                                 {
                                     packet_string = "Should be fixed to 64KBytes";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("Error, 3.0 Version, SECTOR_SIZE is fixed to 64KBytes");
-                                    ScanaStudio.dec_item_add_content("Error");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("Error, 3.0 Version, SECTOR_SIZE is fixed to 64KBytes");
+                                    held.dec_item_add_content("Error");
+                                    held.dec_item_emphasize_error();
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"SECTOR_SIZE",packet_string,types);
                                 // Write Protect Group Size (WP_GRP_SIZE)
@@ -6978,7 +7189,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -6988,17 +7199,17 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "SDHC/SDXC don't support WP_GRP";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("SDHC and SDXC don't support WP_GRP");
+                                    held.dec_item_add_content("SDHC and SDXC don't support WP_GRP");
                                 }
                                 else
                                 {
                                     packet_string = "SDHC/SDXC shouldn't support WP_GRP";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("SDHC and SDXC shouldn't support WP_GRP");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("SDHC and SDXC shouldn't support WP_GRP");
+                                    held.dec_item_emphasize_error();
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"WP_GRP_SIZE",packet_string,types);
                                 // Write Protect Group Enable (WP_GRP_ENABLE)
@@ -7006,7 +7217,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -7017,17 +7228,17 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "SDHC/SDXC don't support WP_GRP";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("SDHC and SDXC don't support WP_GRP");
+                                    held.dec_item_add_content("SDHC and SDXC don't support WP_GRP");
                                 }
                                 else
                                 {
                                     packet_string = "SDHC/SDXC support WP_GRP";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("SDHC and SDXC shouldn't support WP_GRP");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("SDHC and SDXC shouldn't support WP_GRP");
+                                    held.dec_item_emphasize_error();
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"WP_GRP_ENABLE",packet_string,types);
                                 // Reserved bits
@@ -7035,7 +7246,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -7046,7 +7257,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -7058,18 +7269,18 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 item_content = BL_LEN(sdio_simple.unsigned_words, CSD_version);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Max Read data block length : " + item_content);
-                                ScanaStudio.dec_item_add_content("Max block length : " + item_content);
-                                ScanaStudio.dec_item_add_content("Max block : " + item_content);
+                                held.dec_item_add_content("Max Read data block length : " + item_content);
+                                held.dec_item_add_content("Max block length : " + item_content);
+                                held.dec_item_add_content("Max block : " + item_content);
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = item_content;
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"WRITE_BL_LEN",packet_string,"Data");
@@ -7078,7 +7289,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -7088,17 +7299,17 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "In 3.0, smaller block shouldn't be allowed";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("In 3.0, smaller block shouldn't be allowed");
-                                    ScanaStudio.dec_item_add_content("Partial Block Write shouldn't be allowed");
+                                    held.dec_item_add_content("In 3.0, smaller block shouldn't be allowed");
+                                    held.dec_item_add_content("Partial Block Write shouldn't be allowed");
                                 }
                                 else
                                 {
                                     packet_string = "Only 512Bytes Block Allowed";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Partial Block Write isn't allowed");
+                                    held.dec_item_add_content("Partial Block Write isn't allowed");
                                 }
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"WRITE_BL_PARTIAL",packet_string,types);
                                 // Reserved bits
@@ -7106,7 +7317,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -7117,27 +7328,27 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
-                                var FILE_FORMAT_GRP = Number(sdio_simple.unsigned_words);
+                                FILE_FORMAT_GRP = Number(sdio_simple.unsigned_words);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
                                 if (sdio_simple.unsigned_words == 0)
                                 {
                                     packet_string = "In 3.0, this field isn't used";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("In 3.0, this field isn't used");
+                                    held.dec_item_add_content("In 3.0, this field isn't used");
                                 }
                                 else
                                 {
                                     packet_string = "In 3.0, this field shouldn't be used";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("In 3.0, this field shouldn't be used");
+                                    held.dec_item_add_content("In 3.0, this field shouldn't be used");
                                 }
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"FILE_FORMAT_GRP",packet_string,types);
                                 // Copy Flag (COPY)
@@ -7145,17 +7356,17 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 item_content = COPY(Number(sdio_simple.unsigned_words));
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Copy Flag (COPY) : " + item_content);
-                                ScanaStudio.dec_item_add_content("COPY : " + item_content);
+                                held.dec_item_add_content("Copy Flag (COPY) : " + item_content);
+                                held.dec_item_add_content("COPY : " + item_content);
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = item_content;
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"COPY",packet_string,"Data");
@@ -7164,17 +7375,17 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 item_content = WRITE_PROTECT(sdio_simple.unsigned_words);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Permanent Write Protection (PERM_WRITE_PROTECT) : " + item_content);
-                                ScanaStudio.dec_item_add_content("PERM_WRITE_PROTECT : " + item_content);
+                                held.dec_item_add_content("Permanent Write Protection (PERM_WRITE_PROTECT) : " + item_content);
+                                held.dec_item_add_content("PERM_WRITE_PROTECT : " + item_content);
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = item_content;
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"PERM_WRITE_PROTECT",packet_string,"Data");
@@ -7183,17 +7394,17 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
                                 item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                                 item_content = WRITE_PROTECT(sdio_simple.unsigned_words);
                                 dec_item_new_v2(ch_cmd,sdio_simple);
-                                ScanaStudio.dec_item_add_content("Temporary Write Protection (PERM_WRITE_PROTECT) : " + item_content);
-                                ScanaStudio.dec_item_add_content("TMP_WRITE_PROTECT : " + item_content);
+                                held.dec_item_add_content("Temporary Write Protection (PERM_WRITE_PROTECT) : " + item_content);
+                                held.dec_item_add_content("TMP_WRITE_PROTECT : " + item_content);
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = item_content;
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"TMP_WRITE_PROTECT",packet_string,"Data");
@@ -7202,7 +7413,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -7213,16 +7424,16 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "In 3.0, this field isn't used";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("In 3.0, this field isn't used");
+                                    held.dec_item_add_content("In 3.0, this field isn't used");
                                 }
                                 else
                                 {
                                     packet_string = "In 3.0, this field shouldn't be used";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("In 3.0, this field shouldn't be used");
+                                    held.dec_item_add_content("In 3.0, this field shouldn't be used");
                                 }
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = item_content;
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"FILE_FORMAT",packet_string,"Data");
@@ -7231,7 +7442,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -7241,26 +7452,26 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "Reserved bits";
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("Reserved bits");
+                                    held.dec_item_add_content("Reserved bits");
                                 }
                                 else
                                 {
                                     packet_string = "Reserved bits should be 0";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("Reserved bits should be 0");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("Reserved bits should be 0");
+                                    held.dec_item_emphasize_error();
                                 }
                                 display_sample_0_1(sdio_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"Reserved Bit",packet_string,types);
                             } // end of 3.0 Version
 
                             else  // Reserved Version
                             {
-                                ScanaStudio.dec_item_add_content("CSD Reserved Version");
+                                held.dec_item_add_content("CSD Reserved Version");
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = "CSD Reserved Version";
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"CSD Version",packet_string,"Data");
@@ -7270,7 +7481,7 @@ function on_decode_signals(resume)
                                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                                 if (last_trans == true) //if sync_decode overpassed the last sample
                                 {
-                                    go_to_last_trans_cmd();
+                                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                                     state_machine = ENUM_STATE_DATA_START;
                                     break;
                                 }
@@ -7278,23 +7489,23 @@ function on_decode_signals(resume)
                                 {
                                     crc_calcul.push(sdio_simple.unsigned_words[u]);
                                 }
-                                var tmp_trs_sample_index;
-                                var item_start = ScanaStudio.trs_get_before(ch_clk,start_item + 1);
+                                tmp_trs_sample_index;
+                                item_start = ScanaStudio.trs_get_before(ch_clk,start_item + 1);
                                 tmp_trs_sample_index = item_start.sample_index;
-                                while( (tmp_trs_sample_index == item_start.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+                                while( (tmp_trs_sample_index == item_start.sample_index) && (is_not_last(ch_clk) == true) )
                                 {
                                     item_start = ScanaStudio.trs_get_next(ch_clk);
                                 }
-                                var item_end = ScanaStudio.trs_get_before(ch_clk,sdio_simple.end_sample + 1);
+                                item_end = ScanaStudio.trs_get_before(ch_clk,sdio_simple.end_sample + 1);
                                 tmp_trs_sample_index = item_end.sample_index;
-                                while( (tmp_trs_sample_index == item_end.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+                                while( (tmp_trs_sample_index == item_end.sample_index) && (is_not_last(ch_clk) == true) )
                                 {
                                     item_end = ScanaStudio.trs_get_next(ch_clk);
                                 }
-                                ScanaStudio.dec_item_new(ch_cmd,item_start.sample_index + 2,item_end.sample_index - 2);
-                                ScanaStudio.dec_item_add_content("Reserved");
+                                held.dec_item_new(ch_cmd,item_start.sample_index + 2,item_end.sample_index - 2);
+                                held.dec_item_add_content("Reserved");
                                 display_sample(sdio_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"CMD Argument","Reserved","Misc");
                             } // end of Reserved Version
@@ -7312,7 +7523,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -7324,7 +7535,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -7333,18 +7544,18 @@ function on_decode_signals(resume)
                         {
                             packet_string = R_type + " to CMD" + last_CMD;
                             types = "Preamble";
-                            ScanaStudio.dec_item_add_content("Reserved bits (111 1111)");
-                            ScanaStudio.dec_item_add_content("Reserved bits");
+                            held.dec_item_add_content("Reserved bits (111 1111)");
+                            held.dec_item_add_content("Reserved bits");
                         }
                         else
                         {
                             types = "Error";
                             packet_string = "Should be (111 1111)";
-                            ScanaStudio.dec_item_add_content("Should be (111 1111)");
-                            ScanaStudio.dec_item_emphasize_warning();
+                            held.dec_item_add_content("Should be (111 1111)");
+                            held.dec_item_emphasize_warning();
                         }
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         R_type = "Undefined";
                         state_machine = ENUM_STATE_CMD_END;
                         break;
@@ -7356,7 +7567,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -7365,19 +7576,19 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Card Ready to operate";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("Card Ready to operate");
-                            ScanaStudio.dec_item_add_content("Ready");
+                            held.dec_item_add_content("Card Ready to operate");
+                            held.dec_item_add_content("Ready");
                         }
                         else
                         {
                             packet_string = "Card Not Ready to operate";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("Card Not Ready to operate");
-                            ScanaStudio.dec_item_add_content("Card Not Ready");
-                            ScanaStudio.dec_item_add_content("Not Ready");
+                            held.dec_item_add_content("Card Not Ready to operate");
+                            held.dec_item_add_content("Card Not Ready");
+                            held.dec_item_add_content("Not Ready");
                         }
-                        ScanaStudio.dec_item_add_sample_point(sdio_simple.start_sample,"P");
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_add_sample_point(sdio_simple.start_sample,"P");
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Ready ?",packet_string,types);
 
@@ -7386,16 +7597,16 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content(sdio_simple.unsigned_words +" I/O Functions supported");
-                        ScanaStudio.dec_item_add_content(sdio_simple.unsigned_words +" I/O Functions");
-                        ScanaStudio.dec_item_add_content(sdio_simple.unsigned_words +" Functions");
+                        held.dec_item_add_content(sdio_simple.unsigned_words +" I/O Functions supported");
+                        held.dec_item_add_content(sdio_simple.unsigned_words +" I/O Functions");
+                        held.dec_item_add_content(sdio_simple.unsigned_words +" Functions");
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = sdio_simple.unsigned_words +" I/O Functions supported";
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"I/O Function supported",packet_string,"Data");
@@ -7404,7 +7615,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -7414,18 +7625,18 @@ function on_decode_signals(resume)
                             packet_string = "Card contains SD memory";
                             types = "Data";
                             SDIO_only = false;
-                            ScanaStudio.dec_item_add_content("Card contains SD memory");
-                            ScanaStudio.dec_item_add_content("SD memory");
+                            held.dec_item_add_content("Card contains SD memory");
+                            held.dec_item_add_content("SD memory");
                         }
                         else
                         {
                             packet_string = "Card is I/O only";
                             SDIO_only = true;
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("Card is I/O only");
+                            held.dec_item_add_content("Card is I/O only");
                         }
-                        ScanaStudio.dec_item_add_sample_point(sdio_simple.start_sample,"P");
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_add_sample_point(sdio_simple.start_sample,"P");
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Memory Present",packet_string,types);
                         // Stuff bits
@@ -7433,15 +7644,15 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Stuff bits (irrelevant)");
-                        ScanaStudio.dec_item_add_content("Stuff bits");
+                        held.dec_item_add_content("Stuff bits (irrelevant)");
+                        held.dec_item_add_content("Stuff bits");
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Stuff bit","Stuff Bits","Misc");
                         // Read S18A
@@ -7449,7 +7660,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -7457,15 +7668,15 @@ function on_decode_signals(resume)
                         if (sdio_simple.unsigned_words == 1)
                         {
                             packet_string = "Switching Accepted";
-                            ScanaStudio.dec_item_add_content("Switching Accepted");
+                            held.dec_item_add_content("Switching Accepted");
                         }
                         else
                         {
                             packet_string = "Switching Not Accepted";
-                            ScanaStudio.dec_item_add_content("Switching Not Accepted");
+                            held.dec_item_add_content("Switching Not Accepted");
                         }
-                        ScanaStudio.dec_item_add_sample_point(sdio_simple.start_sample,"P");
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_add_sample_point(sdio_simple.start_sample,"P");
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"S18A",packet_string,"Data");
                         // Read OCR Value
@@ -7473,7 +7684,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -7482,14 +7693,14 @@ function on_decode_signals(resume)
                         RSP_VDD_value = sdio_simple.unsigned_words ;
                         Voltage_window_24(item_display,sdio_simple,ch_cmd); //Display item content and packet view
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         item_display = [];
                         // Reserved Bits
                         nbits = 7;
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -7498,17 +7709,17 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Reserved Bits (1111111)";
                             types = "Misc";
-                            ScanaStudio.dec_item_add_content("Reserved Bits (1111111)");
+                            held.dec_item_add_content("Reserved Bits (1111111)");
                         }
                         else
                         {
                             packet_string = "Should be Reserved Bits (1111111)";
                             types = "Error";
-                            ScanaStudio.dec_item_add_content("Should be Reserved Bits (1111111)");
-                            ScanaStudio.dec_item_emphasize_warning();
+                            held.dec_item_add_content("Should be Reserved Bits (1111111)");
+                            held.dec_item_emphasize_warning();
                         }
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Reserved Bit",packet_string,types);
                         R_type = "Undefined";
@@ -7523,15 +7734,15 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Stuff bits ");
+                        held.dec_item_add_content("Stuff bits ");
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Stuff Bit","Stuff Bits","Misc");
                         // Read Response Flags Bit
@@ -7540,27 +7751,27 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        var str_array = flag_data_error(item_display);
+                        str_array = flag_data_error(item_display);
                         if (str_array[0] == "")
                         {
                             packet_string = "OK, " + str_array[1];
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("OK, " + str_array[1]);
+                            held.dec_item_add_content("OK, " + str_array[1]);
                         }
                         else
                         {
                             packet_string = str_array[0] + str_array[1];
                             types = "Error";
-                            ScanaStudio.dec_item_add_content(str_array[0] + str_array[1]);
+                            held.dec_item_add_content(str_array[0] + str_array[1]);
                         }
                         display_sample_0_1(sdio_simple, item_display);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Response Flag Bit",packet_string,types);
                         item_display = [];
@@ -7569,7 +7780,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -7580,36 +7791,36 @@ function on_decode_signals(resume)
                         types = "Data";
                         if (R_W == 1 && RAW == 1)
                         {
-                            ScanaStudio.dec_item_add_content("Read the value written by CMD" + CMD + " : " + sdio_simple.unsigned_words);
+                            held.dec_item_add_content("Read the value written by CMD" + CMD + " : " + sdio_simple.unsigned_words);
                         }
                         else if (R_W == 1 && RAW == 0)
                         {
-                            ScanaStudio.dec_item_add_content("CMD" + CMD + " Write Data value : " + Write_data);
+                            held.dec_item_add_content("CMD" + CMD + " Write Data value : " + Write_data);
                         }
                         else if (last_CMD == 53)
                         {
                             if (sdio_value == 0)
                             {
                                 types = "Misc";
-                                ScanaStudio.dec_item_add_content("Stuff Bits");
+                                held.dec_item_add_content("Stuff Bits");
                             }
                             else
                             {
                                 types = "Error";
-                                ScanaStudio.dec_item_add_content("Stuff bits should be 0");
-                                ScanaStudio.dec_item_emphasize_warning();
+                                held.dec_item_add_content("Stuff bits should be 0");
+                                held.dec_item_emphasize_warning();
                             }
                         }
                         else if (R_W == 1 && RAW == 1 && function_number == 0 && register_adress == 6 && sdio_value == 8) // Write to the CCCR to reset the I/O Portion of the Card
                         {
-                            ScanaStudio.dec_item_add_content("The I/O portion of the Card has been soft reset");
+                            held.dec_item_add_content("The I/O portion of the Card has been soft reset");
                         }
                         else
                         {
-                            ScanaStudio.dec_item_add_content("Actual value of adress 0x" + pad(register_adress.toString(16),5) + " from function " + function_number + " is : " + sdio_simple.unsigned_words);
+                            held.dec_item_add_content("Actual value of adress 0x" + pad(register_adress.toString(16),5) + " from function " + function_number + " is : " + sdio_simple.unsigned_words);
                         }
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Read/Write Data","Look Item","Data");
                         // Reset all variables values
@@ -7629,16 +7840,16 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
                         sdio_value = Number(sdio_simple.unsigned_words);
                         dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("RCA (Card Adress) : 0x"+ pad(sdio_value.toString(16),4));
+                        held.dec_item_add_content("RCA (Card Adress) : 0x"+ pad(sdio_value.toString(16),4));
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Card Adress : 0x"+ pad(sdio_value.toString(16),4);
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"RCA",packet_string,"Data");
@@ -7647,7 +7858,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -7667,7 +7878,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -7677,17 +7888,17 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Reserved (00000h)";
                             types = "Misc";
-                            ScanaStudio.dec_item_add_content("Reserved (00000h)");
+                            held.dec_item_add_content("Reserved (00000h)");
                         }
                         else
                         {
                             packet_string = "Should be 00000h";
                             types = "Error";
-                            ScanaStudio.dec_item_add_content("Should be 00000h");
-                            ScanaStudio.dec_item_emphasize_error();
+                            held.dec_item_add_content("Should be 00000h");
+                            held.dec_item_emphasize_error();
                         }
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Reserved bit",packet_string,types);
                         // Read PCIe 1.2V Support
@@ -7695,7 +7906,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -7705,15 +7916,15 @@ function on_decode_signals(resume)
                         if (sdio_value == 0)
                         {
                             packet_string = "Not Supported"
-                            ScanaStudio.dec_item_add_content("PCIe 1.2V Support : Not Supported");
+                            held.dec_item_add_content("PCIe 1.2V Support : Not Supported");
                         }
                         else
                         {
                             packet_string = "Supported";
-                            ScanaStudio.dec_item_add_content("PCIe 1.2V Support : Supported");
+                            held.dec_item_add_content("PCIe 1.2V Support : Supported");
                         }
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"PCIe 1.2V Support",packet_string,"Data");
                         // Read PCIe acceptance
@@ -7721,7 +7932,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -7731,15 +7942,15 @@ function on_decode_signals(resume)
                         if (sdio_value == 0)
                         {
                             packet_string = "Not Accepted"
-                            ScanaStudio.dec_item_add_content("PCIe 1.2V Support : Not Accepted");
+                            held.dec_item_add_content("PCIe 1.2V Support : Not Accepted");
                         }
                         else
                         {
                             packet_string = "Accepted";
-                            ScanaStudio.dec_item_add_content("PCIe 1.2V Support : Accepted");
+                            held.dec_item_add_content("PCIe 1.2V Support : Accepted");
                         }
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"PCIe acceptance",packet_string,"Data");
                         // Voltage accepted
@@ -7747,7 +7958,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -7757,18 +7968,18 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Voltage accepted";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("Voltage accepted");
+                            held.dec_item_add_content("Voltage accepted");
                         }
                         else
                         {
                             packet_string = "Voltage unaccepted";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("Voltage unaccepted");
-                            ScanaStudio.dec_item_emphasize_warning();
+                            held.dec_item_add_content("Voltage unaccepted");
+                            held.dec_item_emphasize_warning();
                         }
                         CMD8_Voltage = -1; //reset CMD8_Voltage value
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"HSV",packet_string,types);
                         // Echo-back of check pattern
@@ -7776,7 +7987,7 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -7786,18 +7997,18 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Check Pattern OK";
                             types = "Check";
-                            ScanaStudio.dec_item_add_content("Check Pattern OK");
+                            held.dec_item_add_content("Check Pattern OK");
                         }
                         else
                         {
                             packet_string = "Check Pattern not OK";
                             types = "Error";
-                            ScanaStudio.dec_item_add_content("Check Pattern not OK");
-                            ScanaStudio.dec_item_emphasize_warning();
+                            held.dec_item_add_content("Check Pattern not OK");
+                            held.dec_item_emphasize_warning();
                         }
                         CMD8_check_pattern = -1; //reset CMD8_check_pattern value
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Check Pattern",packet_string,types);
                         R_type = "Undefined";
@@ -7812,16 +8023,16 @@ function on_decode_signals(resume)
                         sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
                         item_display = crc_pre_calcul(sdio_simple.unsigned_words,nbits,crc_calcul);
-                        var test = dec_item_new_v2(ch_cmd,sdio_simple);
-                        ScanaStudio.dec_item_add_content("Error, CMD" + last_CMD + " shouldn't have RSP");
-                        ScanaStudio.dec_item_emphasize_error();
+                        test = dec_item_new_v2(ch_cmd,sdio_simple);
+                        held.dec_item_add_content("Error, CMD" + last_CMD + " shouldn't have RSP");
+                        held.dec_item_emphasize_error();
                         display_sample(sdio_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Error, CMD" + last_CMD + " shouldn't have RSP";
                         packet_view_add_packet_v2(ch_cmd,sdio_simple,"Check Pattern",packet_string ,"Error");
@@ -7839,7 +8050,7 @@ function on_decode_signals(resume)
                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                 if (last_trans == true) //if sync_decode overpassed the last sample
                 {
-                    go_to_last_trans_cmd();
+                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                     state_machine = ENUM_STATE_DATA_START;
                     break;
                 }
@@ -7851,19 +8062,19 @@ function on_decode_signals(resume)
                 {
                     packet_string = "CRC-7 OK";
                     types = "Check";
-                    ScanaStudio.dec_item_add_content("CRC-7 OK");
-                    ScanaStudio.dec_item_add_content("OK");
+                    held.dec_item_add_content("CRC-7 OK");
+                    held.dec_item_add_content("OK");
                 }
                 else
                 {
                     packet_string = "CRC-7 NOT OK";
                     types = "Error";
-                    ScanaStudio.dec_item_add_content("CRC-7 NOT OK");
-                    ScanaStudio.dec_item_add_content("NOT OK");
-                    ScanaStudio.dec_item_emphasize_warning();
+                    held.dec_item_add_content("CRC-7 NOT OK");
+                    held.dec_item_add_content("NOT OK");
+                    held.dec_item_emphasize_warning();
                 }
                 display_sample_0_1(sdio_simple, item_display);
-                ScanaStudio.dec_item_end();
+                held.dec_item_end();
                 //Packet View
                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"CRC",packet_string,types);
                 item_display = [];
@@ -7885,21 +8096,21 @@ function on_decode_signals(resume)
                         if (crc_calculated[c] == Number(sdio_simple.unsigned_words[c]))
                         {
                             packet_string = "CRC-16 OK";
-                            ScanaStudio.dec_item_add_content("CRC-16 OK");
-                            ScanaStudio.dec_item_add_content("OK");
-                            ScanaStudio.packet_view_add_packet(false,data_channels[c],sdio_simple.start_sample,sdio_simple.start_sample,"CRC",packet_string,ScanaStudio.PacketColors.Check.Title,ScanaStudio.PacketColors.Check.Content);
+                            held.dec_item_add_content("CRC-16 OK");
+                            held.dec_item_add_content("OK");
+                            held.packet_view_add_packet(false,data_channels[c],sdio_simple.start_sample,sdio_simple.start_sample,"CRC",packet_string,ScanaStudio.PacketColors.Check.Title,ScanaStudio.PacketColors.Check.Content);
                         }
                         else
                         {
                             packet_string = "CRC-16 NOT OK";
-                            ScanaStudio.dec_item_add_content("CRC-16 NOT OK");
-                            ScanaStudio.dec_item_add_content("NOT OK");
-                            ScanaStudio.dec_item_emphasize_warning();
-                            ScanaStudio.packet_view_add_packet(false,data_channels[c],sdio_simple.start_sample,sdio_simple.start_sample,"CRC",packet_string,ScanaStudio.PacketColors.Error.Title,ScanaStudio.PacketColors.Error.Content);
+                            held.dec_item_add_content("CRC-16 NOT OK");
+                            held.dec_item_add_content("NOT OK");
+                            held.dec_item_emphasize_warning();
+                            held.packet_view_add_packet(false,data_channels[c],sdio_simple.start_sample,sdio_simple.start_sample,"CRC",packet_string,ScanaStudio.PacketColors.Error.Title,ScanaStudio.PacketColors.Error.Content);
                         }
                         // Display 0/1 on the dec.item
                         display_sample_0_1(sdio_simple, item_display);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                     }
                 }
                 else
@@ -7909,21 +8120,21 @@ function on_decode_signals(resume)
                     if (crc_calculated == Number(sdio_simple.unsigned_words))
                     {
                         packet_string = "CRC-16 OK";
-                        ScanaStudio.dec_item_add_content("CRC-16 OK");
-                        ScanaStudio.dec_item_add_content("OK");
-                        ScanaStudio.packet_view_add_packet(false,ch_dat0,sdio_simple.start_sample,sdio_simple.start_sample,"CRC",packet_string,ScanaStudio.PacketColors.Check.Title,ScanaStudio.PacketColors.Check.Content);
+                        held.dec_item_add_content("CRC-16 OK");
+                        held.dec_item_add_content("OK");
+                        held.packet_view_add_packet(false,ch_dat0,sdio_simple.start_sample,sdio_simple.start_sample,"CRC",packet_string,ScanaStudio.PacketColors.Check.Title,ScanaStudio.PacketColors.Check.Content);
                     }
                     else
                     {
                         packet_string = "CRC-16 NOT OK";
-                        ScanaStudio.dec_item_add_content("CRC-16 NOT OK");
-                        ScanaStudio.dec_item_add_content("NOT OK");
-                        ScanaStudio.dec_item_emphasize_warning();
-                        ScanaStudio.packet_view_add_packet(false,data_channels,sdio_simple.start_sample,sdio_simple.start_sample,"CRC",packet_string,ScanaStudio.PacketColors.Error.Title,ScanaStudio.PacketColors.Error.Content);
+                        held.dec_item_add_content("CRC-16 NOT OK");
+                        held.dec_item_add_content("NOT OK");
+                        held.dec_item_emphasize_warning();
+                        held.packet_view_add_packet(false,data_channels,sdio_simple.start_sample,sdio_simple.start_sample,"CRC",packet_string,ScanaStudio.PacketColors.Error.Title,ScanaStudio.PacketColors.Error.Content);
                     }
                     // Display 0/1 on the dec.item
                     display_sample_0_1(sdio_simple, item_display);
-                    ScanaStudio.dec_item_end();
+                    held.dec_item_end();
                 }
                 item_display = [];
                 state_machine = ENUM_STATE_DATA_END;
@@ -7936,7 +8147,7 @@ function on_decode_signals(resume)
                 sdio_simple = sync_decode_v2(cmd_channel,sdio_simple.end_sample +1,nbits);
                 if (last_trans == true) //if sync_decode overpassed the last sample
                 {
-                    go_to_last_trans_cmd();
+                    if (wait_for_more_data()) return; go_to_last_trans_cmd();
                     state_machine = ENUM_STATE_DATA_START;
                     break;
                 }
@@ -7949,25 +8160,25 @@ function on_decode_signals(resume)
                 {
                     packet_string = "End CMD";
                     types = "Wrap";
-                    ScanaStudio.dec_item_add_content("End");
-                    ScanaStudio.dec_item_add_content("E");
+                    held.dec_item_add_content("End");
+                    held.dec_item_add_content("E");
                 }
                 else
                 {
                     packet_string = "End CMD";
                     types = "Error";
-                    ScanaStudio.dec_item_add_content("End");
-                    ScanaStudio.dec_item_add_content("E");
-                    ScanaStudio.dec_item_emphasize_error();
+                    held.dec_item_add_content("End");
+                    held.dec_item_add_content("E");
+                    held.dec_item_emphasize_error();
                 }
-                ScanaStudio.dec_item_add_sample_point(sdio_simple.start_sample,"P");
-                ScanaStudio.dec_item_end();
+                held.dec_item_add_sample_point(sdio_simple.start_sample,"P");
+                held.dec_item_end();
                 //Packet View
                 packet_view_add_packet_v2(ch_cmd,sdio_simple,"End",packet_string,types);
                 while ((trs_cmd.sample_index < sdio_simple.end_sample))
                 {
                     trs_cmd = ScanaStudio.trs_get_next(ch_cmd);
-                    if (!ScanaStudio.trs_is_not_last(ch_cmd))
+                    if (!is_not_last(ch_cmd))
                     {
                         break;
                     }
@@ -7977,7 +8188,7 @@ function on_decode_signals(resume)
                 while(tmp_trs_sample_index == trs_dat0.sample_index)
                 {
                     trs_dat0 = ScanaStudio.trs_get_next(ch_dat0);
-                    if (!ScanaStudio.trs_is_not_last(ch_dat0))
+                    if (!is_not_last(ch_dat0))
                     {
                         break;
                     }
@@ -7989,14 +8200,14 @@ function on_decode_signals(resume)
                         {
                             trs_cmd = ScanaStudio.trs_get_next(ch_cmd);
                             stop_cmd = sync_decode_v2(cmd_channel,trs_cmd.sample_index +1,8);
-                            if (!ScanaStudio.trs_is_not_last(ch_cmd))
+                            if (!is_not_last(ch_cmd))
                             {
                                 break;
                             }
                         }*/
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_data();
+                            if (wait_for_more_data()) return; go_to_last_trans_data();
                             // state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -8010,7 +8221,7 @@ function on_decode_signals(resume)
                     {
                         if (last_trans == true) //if sync_decode overpassed the last sample
                         {
-                            go_to_last_trans_cmd();
+                            if (wait_for_more_data()) return; go_to_last_trans_cmd();
                             state_machine = ENUM_STATE_DATA_START;
                             break;
                         }
@@ -8038,7 +8249,7 @@ function on_decode_signals(resume)
                 sdio_simple = sync_decode_v3(data_channels,sdio_simple.end_sample +1,nbits);
                 if (last_trans == true) //if sync_decode overpassed the last sample
                 {
-                    go_to_last_trans_data();
+                    if (wait_for_more_data()) return; go_to_last_trans_data();
                     state_machine = ENUM_STATE_DATA_START;
                     break;
                 }
@@ -8053,25 +8264,25 @@ function on_decode_signals(resume)
                     {
                         packet_string = "End DATA";
                         types = "Wrap";
-                        ScanaStudio.dec_item_add_content("End");
-                        ScanaStudio.dec_item_add_content("E");
+                        held.dec_item_add_content("End");
+                        held.dec_item_add_content("E");
                     }
                     else
                     {
                         packet_string = "End DATA";
                         types = "Error";
-                        ScanaStudio.dec_item_add_content("End");
-                        ScanaStudio.dec_item_add_content("E");
-                        ScanaStudio.dec_item_emphasize_error();
+                        held.dec_item_add_content("End");
+                        held.dec_item_add_content("E");
+                        held.dec_item_emphasize_error();
                     }
-                    ScanaStudio.dec_item_add_sample_point(sdio_simple.start_sample,"P");
-                    ScanaStudio.dec_item_end();
+                    held.dec_item_add_sample_point(sdio_simple.start_sample,"P");
+                    held.dec_item_end();
                     //Packet View
-                    ScanaStudio.packet_view_add_packet(false,ch_dat0,sdio_simple.start_sample,sdio_simple.start_sample,"End","Data",ScanaStudio.PacketColors.Wrap.Title,ScanaStudio.PacketColors.Wrap.Content);
+                    held.packet_view_add_packet(false,ch_dat0,sdio_simple.start_sample,sdio_simple.start_sample,"End","Data",ScanaStudio.PacketColors.Wrap.Title,ScanaStudio.PacketColors.Wrap.Content);
                     // packet_view_add_packet_v2(ch_cmd,sdio_simple,"End",packet_string,types);
                     while ((trs_dat0.sample_index < sdio_simple.end_sample))
                     {
-                      if (!ScanaStudio.trs_is_not_last(ch_dat0))
+                      if (!is_not_last(ch_dat0))
                       {
                         break;
                       }
@@ -8082,29 +8293,29 @@ function on_decode_signals(resume)
                 {
                     for (a=0; a<data_channels.length; a++)
                     {
-                        var start_and_stop_item = dec_item_new_v2(data_channels[a], sdio_simple);
+                        start_and_stop_item = dec_item_new_v2(data_channels[a], sdio_simple);
                         if (sdio_simple.unsigned_words[a] == 1)
                         {
                             packet_string = "End DATA";
                             types = "Wrap";
-                            ScanaStudio.dec_item_add_content("End");
-                            ScanaStudio.dec_item_add_content("E");
+                            held.dec_item_add_content("End");
+                            held.dec_item_add_content("E");
                         }
                         else
                         {
                             packet_string = "End DATA";
                             types = "Error";
-                            ScanaStudio.dec_item_add_content("End");
-                            ScanaStudio.dec_item_add_content("E");
-                            ScanaStudio.dec_item_emphasize_error();
+                            held.dec_item_add_content("End");
+                            held.dec_item_add_content("E");
+                            held.dec_item_emphasize_error();
                         }
-                        ScanaStudio.dec_item_add_sample_point(sdio_simple.start_sample,"P");
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_add_sample_point(sdio_simple.start_sample,"P");
+                        held.dec_item_end();
                         //Packet View
-                        ScanaStudio.packet_view_add_packet(false,data_channels[a],sdio_simple.start_sample,sdio_simple.end_sample,"End","End Data",ScanaStudio.PacketColors.Wrap.Title,ScanaStudio.PacketColors.Wrap.Content);
+                        held.packet_view_add_packet(false,data_channels[a],sdio_simple.start_sample,sdio_simple.end_sample,"End","End Data",ScanaStudio.PacketColors.Wrap.Title,ScanaStudio.PacketColors.Wrap.Content);
                         while ((trs_data[a].sample_index < sdio_simple.end_sample))
                         {
-                            if (!ScanaStudio.trs_is_not_last(data_channels[a]))
+                            if (!is_not_last(data_channels[a]))
                             {
                                 break;
                             }
@@ -8113,30 +8324,30 @@ function on_decode_signals(resume)
                     }
                     // Display the busy signal on the DAT0 line
                     trs_dat0 = ScanaStudio.trs_get_before(ch_dat0,(trs_data[2].sample_index + 1));
-                    /*var busy = (trs_data[1].sample_index - trs_data[0].sample_index) > 2; //
+                    /*busy = (trs_data[1].sample_index - trs_data[0].sample_index) > 2; //
                     if (busy)
                     {
                         tmp_trs_sample_index = trs_dat0.sample_index;
-                        while( (tmp_trs_sample_index == trs_dat0.sample_index) && (ScanaStudio.trs_is_not_last(ch_dat0) == true) )
+                        while( (tmp_trs_sample_index == trs_dat0.sample_index) && (is_not_last(ch_dat0) == true) )
                         {
                             trs_dat0 = ScanaStudio.trs_get_previous(ch_dat0);
                         }
                         tmp_trs_sample_index = trs_dat0.sample_index;
-                        while( (tmp_trs_sample_index == trs_dat0.sample_index) && (ScanaStudio.trs_is_not_last(ch_dat0) == true) )
+                        while( (tmp_trs_sample_index == trs_dat0.sample_index) && (is_not_last(ch_dat0) == true) )
                         {
                             trs_dat0 = ScanaStudio.trs_get_next(ch_dat0);
                         }
                         trs_cmd = ScanaStudio.trs_get_before(ch_cmd,sdio_simple.end_sample);
                         tmp_trs_sample_index = trs_cmd.sample_index;
-                        while( (tmp_trs_sample_index == trs_cmd.sample_index) && (ScanaStudio.trs_is_not_last(ch_cmd) == true) )
+                        while( (tmp_trs_sample_index == trs_cmd.sample_index) && (is_not_last(ch_cmd) == true) )
                         {
                             trs_cmd = ScanaStudio.trs_get_next(ch_cmd);
                         }
-                        if ((ScanaStudio.trs_is_not_last(data_channels[2])) && (trs_dat0.sample_index > start_and_stop_item[1]) && (trs_dat0.sample_index < trs_cmd.sample_index)) // if we read enough data block
+                        if ((is_not_last(data_channels[2])) && (trs_dat0.sample_index > start_and_stop_item[1]) && (trs_dat0.sample_index < trs_cmd.sample_index)) // if we read enough data block
                         {
-                            test = ScanaStudio.dec_item_new(ch_dat0,start_and_stop_item[1],trs_dat0.sample_index);
-                            ScanaStudio.dec_item_add_content("Busy Signal");
-                            ScanaStudio.dec_item_end();
+                            test = held.dec_item_new(ch_dat0,start_and_stop_item[1],trs_dat0.sample_index);
+                            held.dec_item_add_content("Busy Signal");
+                            held.dec_item_end();
                         }
                     }*/
                 }
@@ -8168,10 +8379,26 @@ function on_decode_signals(resume)
 
             case ENUM_STATE_UNDEFINED :
             {
+                if (!ScanaStudio.trs_is_not_last(ch_cmd)) //no edge to move on to (yet)
+                {
+                    if (wait_for_more_data()) return;
+                    go_to_last_trans_cmd();
+                    break;
+                }
                 trs_cmd = ScanaStudio.trs_get_next(ch_cmd);
                 break;
             }//end ENUM_STATE_UNDEFINED
         }//end switch(state_machine)
+        }
+        catch (e)
+        {
+            if (e === PASS_WAIT)
+            {
+                return; //this pass is done again with more data
+            }
+            throw e;
+        }
+        pass_commit();
   }//end while(ScanaStudio.abort_is_requested() == false)
   if (show_pdf_on_console == true)
   {
@@ -8414,10 +8641,17 @@ function trig_build_step (step_desc)
 }
 
 //Function called to generate demo signals (when no physical device is attached)
+var DEMO_MAX_CLOCKS = 200000;
+var DEMO_BURSTS = 40;
+
 function on_build_demo_signals()
 {
   //Use the function below to get the number of samples to be built
-  var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
+  //At most DEMO_MAX_CLOCKS clock cycles of traffic, in DEMO_BURSTS bursts spread over the
+  //whole capture with the bus at rest between them: a long capture built cycle by cycle
+  //would keep the demo device configuring for hours
+  var samples_requested = ScanaStudio.builder_get_maximum_samples_count();
+  var samples_to_build = Math.min(samples_requested, DEMO_MAX_CLOCKS * 100); //100 samples per clock, see sdio_f
   var sdio_builder = ScanaStudio.BuilderObject;
   var sample_rate = ScanaStudio.builder_get_sample_rate();
   var ch_cmd = ScanaStudio.gui_get_value("ch_cmd");
@@ -8442,6 +8676,10 @@ function on_build_demo_signals()
 
 
   sdio_builder.config(ch_cmd,ch_clk,ch_dat0,ch_dat1,ch_dat2,ch_dat3,sdio_f,ddr_mode, dat_mode);
+  var burst_length = samples_to_build / DEMO_BURSTS;
+  var gap_length = (samples_requested - samples_to_build) / DEMO_BURSTS;
+  var burst_end = burst_length;
+  var all_lines = [ch_cmd, ch_clk, ch_dat0, ch_dat1, ch_dat2, ch_dat3];
 
   var lvl = 1;
   var value;
@@ -9029,8 +9267,14 @@ function on_build_demo_signals()
   current_state = "stby";
 
 
-  while( ScanaStudio.builder_get_samples_acc(cmd_channel) < samples_to_build )
+  while( ScanaStudio.builder_get_samples_acc(ch_cmd) < samples_requested )
   {
+      if ((gap_length > 0) && (ScanaStudio.builder_get_samples_acc(ch_cmd) >= burst_end))
+      {
+          demo_rest(all_lines, ScanaStudio.builder_get_samples_acc(ch_cmd) + gap_length);
+          burst_end = ScanaStudio.builder_get_samples_acc(ch_cmd) + burst_length;
+          sdio_builder.put_silence(10*sample_per_clock);
+      }
       if (R_type != "Undefined") // Response
       {
           sdio_builder.put_silence(10*sample_per_clock);
@@ -9417,7 +9661,25 @@ function on_build_demo_signals()
       }
   }
 
+
+  demo_rest(all_lines, samples_requested); //the bus at rest until the end of the capture
 }//end on on_build_demo_signals
+
+//Every line high, the clock stopped, up to the given sample
+function demo_rest(lines, until)
+{
+    for (var r = 0; r < lines.length; r++)
+    {
+        if (lines[r] >= 0)
+        {
+            var left = until - ScanaStudio.builder_get_samples_acc(lines[r]);
+            if (left > 0)
+            {
+                ScanaStudio.builder_add_samples(lines[r], 1, left);
+            }
+        }
+    }
+}
 
 //Builder object that can be shared to other scripts
 ScanaStudio.BuilderObject =
@@ -9960,7 +10222,9 @@ ScanaStudio.BuilderObject =
         this.ch_dat1 = ch_dat1;
         this.ch_dat2 = ch_dat2;
         this.ch_dat3 = ch_dat3;
-        this.samples_per_clock = ScanaStudio.builder_get_sample_rate() / (frequency);
+        //a whole, even number of samples: ScanaStudio 3 truncates every count, so a period
+        //of 99.999 samples drifted CMD against CLK by one sample per bit
+        this.samples_per_clock = 2 * Math.max(1, Math.round(ScanaStudio.builder_get_sample_rate() / frequency / 2));
         this.CRCTable = [];
         this.ddr_mode = ddr_mode;
         this.dat_mode = dat_mode;
@@ -10020,7 +10284,7 @@ function add_sdio_usual_data_item(ch, sdio_simple, nbits, crc_calcul) // Used to
             {
                 dec_item_new_v2(ch[q],sdio_simple);
                 display_sample_0_1(sdio_simple,item_display);
-                ScanaStudio.dec_item_end();
+                held.dec_item_end();
             }
     }
     var item_display_2 = [];
@@ -10052,14 +10316,14 @@ function add_sdio_usual_data_item(ch, sdio_simple, nbits, crc_calcul) // Used to
     }
 
     item_start_stop_array = dec_item_new_v2 (ch_dat0, sdio_simple);
-    ScanaStudio.hex_view_add_byte(ch_dat0,item_start_stop_array[0], item_start_stop_array[1] ,hex_val);
+    held.hex_view_add_byte(ch_dat0,item_start_stop_array[0], item_start_stop_array[1] ,hex_val);
     if (ScanaStudio.is_pre_decoding())
     {
         //in case tbis decoder is called by another decoder,
         //provide data in a way that can be easily interpreted
         //by the parent decoder.
         content = "0x" + pad(value.toString(16),Math.ceil(sdio_simple.valid_bits/4));
-        ScanaStudio.dec_item_add_content(content);
+        held.dec_item_add_content(content);
     }
     else
     {
@@ -10080,9 +10344,9 @@ function add_sdio_usual_data_item(ch, sdio_simple, nbits, crc_calcul) // Used to
         {
             content += " 0b" + pad(value.toString(2),sdio_simple.valid_bits) ;
         }
-        ScanaStudio.dec_item_add_content(content);
+        held.dec_item_add_content(content);
         // Packet View
-        ScanaStudio.packet_view_add_packet(false,ch_dat0,sdio_simple.start_sample,sdio_simple.end_sample,
+        held.packet_view_add_packet(false,ch_dat0,sdio_simple.start_sample,sdio_simple.end_sample,
             "Data",content,ScanaStudio.PacketColors.Data.Title,ScanaStudio.PacketColors.Data.Content);
         //Add a smaller version of the content field
         content = "";
@@ -10102,9 +10366,9 @@ function add_sdio_usual_data_item(ch, sdio_simple, nbits, crc_calcul) // Used to
         {
             content += " 0b" + pad(value.toString(2),sdio_simple.valid_bits);
         }
-    ScanaStudio.dec_item_add_content(content);
+    held.dec_item_add_content(content);
     display_sample_0_1(sdio_simple,item_display);
-    ScanaStudio.dec_item_end();
+    held.dec_item_end();
     }
 }
 
@@ -10128,7 +10392,7 @@ function add_sdio_wide_width_data_item(ch, sdio_simple, nbits, crc_calcul) // Us
             {
                 dec_item_new_v2(ch[q],sdio_simple);
                 display_sample_0_1(sdio_simple,item_display);
-                ScanaStudio.dec_item_end();
+                held.dec_item_end();
             }
     }
     var item_display_2 = [];
@@ -10159,7 +10423,7 @@ function add_sdio_wide_width_data_item(ch, sdio_simple, nbits, crc_calcul) // Us
         hex_val = (value >> b*8) & 0xFF;
     }
     item_start_stop_array = dec_item_new_v2 (ch_dat0, sdio_simple);
-    ScanaStudio.hex_view_add_byte(ch_dat0,item_start_stop_array[0], item_start_stop_array[1] ,hex_val);
+    held.hex_view_add_byte(ch_dat0,item_start_stop_array[0], item_start_stop_array[1] ,hex_val);
     display_sample_0_1(sdio_simple,item_display);
     return value;
 }
@@ -10181,9 +10445,9 @@ function add_CMD19_data(ch, sdio_simple, nbits, crc_calcul)
         value = Number(sdio_simple.unsigned_words[q]);
         item_display = fill_item_array(value, nbits, bit_array);
         dec_item_new_v2(ch[q],sdio_simple);
-        ScanaStudio.dec_item_add_content("0h" +  (pad(value.toString(16),nbits/4)))
+        held.dec_item_add_content("0h" +  (pad(value.toString(16),nbits/4)))
         display_sample_0_1(sdio_simple,item_display);
-        ScanaStudio.dec_item_end();
+        held.dec_item_end();
         packet_string = "0h" +  (pad(value.toString(16),nbits/4));
         // Packet View
         packet_view_add_packet_v2(ch, sdio_simple, "Tunning Pattern", packet_string, "Data");
@@ -10254,7 +10518,7 @@ function packet_view_add_packet_v2 (ch,sdio_simple,title,content,types)
             {
                 case "Wrap" :
                 {
-                    ScanaStudio.packet_view_add_packet(false,
+                    held.packet_view_add_packet(false,
                     ch[i],
                     sdio_simple.start_sample,
                     sdio_simple.end_sample,
@@ -10266,7 +10530,7 @@ function packet_view_add_packet_v2 (ch,sdio_simple,title,content,types)
                 }
                 case "Head" :
                 {
-                    ScanaStudio.packet_view_add_packet(false,
+                    held.packet_view_add_packet(false,
                     ch[i],
                     sdio_simple.start_sample,
                     sdio_simple.end_sample,
@@ -10278,7 +10542,7 @@ function packet_view_add_packet_v2 (ch,sdio_simple,title,content,types)
                 }
                 case "Preamble" :
                 {
-                    ScanaStudio.packet_view_add_packet(false,
+                    held.packet_view_add_packet(false,
                     ch[i],
                     sdio_simple.start_sample,
                     sdio_simple.end_sample,
@@ -10290,7 +10554,7 @@ function packet_view_add_packet_v2 (ch,sdio_simple,title,content,types)
                 }
                 case "Data" :
                 {
-                    ScanaStudio.packet_view_add_packet(false,
+                    held.packet_view_add_packet(false,
                     ch[i],
                     sdio_simple.start_sample,
                     sdio_simple.end_sample,
@@ -10302,7 +10566,7 @@ function packet_view_add_packet_v2 (ch,sdio_simple,title,content,types)
                 }
                 case "Check" :
                 {
-                    ScanaStudio.packet_view_add_packet(false,
+                    held.packet_view_add_packet(false,
                     ch[i],
                     sdio_simple.start_sample,
                     sdio_simple.end_sample,
@@ -10314,7 +10578,7 @@ function packet_view_add_packet_v2 (ch,sdio_simple,title,content,types)
                 }
                 case "Error" :
                 {
-                    ScanaStudio.packet_view_add_packet(false,
+                    held.packet_view_add_packet(false,
                     ch[i],
                     sdio_simple.start_sample,
                     sdio_simple.end_sample,
@@ -10326,7 +10590,7 @@ function packet_view_add_packet_v2 (ch,sdio_simple,title,content,types)
                 }
                 case "Misc" :
                 {
-                    ScanaStudio.packet_view_add_packet(false,
+                    held.packet_view_add_packet(false,
                     ch[i],
                     sdio_simple.start_sample,
                     sdio_simple.end_sample,
@@ -10345,7 +10609,7 @@ function packet_view_add_packet_v2 (ch,sdio_simple,title,content,types)
         {
             case "Wrap" :
             {
-                ScanaStudio.packet_view_add_packet(false,
+                held.packet_view_add_packet(false,
                     ch,
                     sdio_simple.start_sample,
                     sdio_simple.end_sample,
@@ -10357,7 +10621,7 @@ function packet_view_add_packet_v2 (ch,sdio_simple,title,content,types)
             }
             case "Head" :
             {
-                ScanaStudio.packet_view_add_packet(false,
+                held.packet_view_add_packet(false,
                 ch,
                 sdio_simple.start_sample,
                 sdio_simple.end_sample,
@@ -10369,7 +10633,7 @@ function packet_view_add_packet_v2 (ch,sdio_simple,title,content,types)
             }
             case "Preamble" :
             {
-                ScanaStudio.packet_view_add_packet(false,
+                held.packet_view_add_packet(false,
                 ch,
                 sdio_simple.start_sample,
                 sdio_simple.end_sample,
@@ -10381,7 +10645,7 @@ function packet_view_add_packet_v2 (ch,sdio_simple,title,content,types)
             }
             case "Data" :
             {
-                ScanaStudio.packet_view_add_packet(false,
+                held.packet_view_add_packet(false,
                 ch,
                 sdio_simple.start_sample,
                 sdio_simple.end_sample,
@@ -10393,7 +10657,7 @@ function packet_view_add_packet_v2 (ch,sdio_simple,title,content,types)
             }
             case "Check" :
             {
-                ScanaStudio.packet_view_add_packet(false,
+                held.packet_view_add_packet(false,
                 ch,
                 sdio_simple.start_sample,
                 sdio_simple.end_sample,
@@ -10405,7 +10669,7 @@ function packet_view_add_packet_v2 (ch,sdio_simple,title,content,types)
             }
             case "Error" :
             {
-                ScanaStudio.packet_view_add_packet(false,
+                held.packet_view_add_packet(false,
                 ch,
                 sdio_simple.start_sample,
                 sdio_simple.end_sample,
@@ -10417,7 +10681,7 @@ function packet_view_add_packet_v2 (ch,sdio_simple,title,content,types)
             }
             case "Misc" :
             {
-                ScanaStudio.packet_view_add_packet(false,
+                held.packet_view_add_packet(false,
                 ch,
                 sdio_simple.start_sample,
                 sdio_simple.end_sample,
@@ -10439,7 +10703,7 @@ function packet_view_add_wide_width_packet(ch,sdio_simple,title,content,types)
     {
         case "Wrap" :
         {
-            ScanaStudio.packet_view_add_packet(false,
+            held.packet_view_add_packet(false,
                 ch,
                 sdio_simple.start_sample,
                 sdio_simple.end_sample,
@@ -10451,7 +10715,7 @@ function packet_view_add_wide_width_packet(ch,sdio_simple,title,content,types)
         }
         case "Head" :
         {
-            ScanaStudio.packet_view_add_packet(false,
+            held.packet_view_add_packet(false,
             ch,
             sdio_simple.start_sample,
             sdio_simple.end_sample,
@@ -10463,7 +10727,7 @@ function packet_view_add_wide_width_packet(ch,sdio_simple,title,content,types)
         }
         case "Preamble" :
         {
-            ScanaStudio.packet_view_add_packet(false,
+            held.packet_view_add_packet(false,
             ch,
             sdio_simple.start_sample,
             sdio_simple.end_sample,
@@ -10475,7 +10739,7 @@ function packet_view_add_wide_width_packet(ch,sdio_simple,title,content,types)
         }
         case "Data" :
         {
-            ScanaStudio.packet_view_add_packet(false,
+            held.packet_view_add_packet(false,
             ch,
             sdio_simple.start_sample,
             sdio_simple.end_sample,
@@ -10487,7 +10751,7 @@ function packet_view_add_wide_width_packet(ch,sdio_simple,title,content,types)
         }
         case "Check" :
         {
-            ScanaStudio.packet_view_add_packet(false,
+            held.packet_view_add_packet(false,
             ch,
             sdio_simple.start_sample,
             sdio_simple.end_sample,
@@ -10499,7 +10763,7 @@ function packet_view_add_wide_width_packet(ch,sdio_simple,title,content,types)
         }
         case "Error" :
         {
-            ScanaStudio.packet_view_add_packet(false,
+            held.packet_view_add_packet(false,
             ch,
             sdio_simple.start_sample,
             sdio_simple.end_sample,
@@ -10511,7 +10775,7 @@ function packet_view_add_wide_width_packet(ch,sdio_simple,title,content,types)
         }
         case "Misc" :
         {
-            ScanaStudio.packet_view_add_packet(false,
+            held.packet_view_add_packet(false,
             ch,
             sdio_simple.start_sample,
             sdio_simple.end_sample,
@@ -10919,7 +11183,7 @@ function time_unit_switch(time_unit, time_value, sdio_simple) // Both are Dec va
     if (time_value == "Error")
     {
         return content = "Time value error";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     switch (time_unit)
     {
@@ -10927,69 +11191,69 @@ function time_unit_switch(time_unit, time_value, sdio_simple) // Both are Dec va
         {
             packet_string = "Data Read access time-1 :" + 1*time_value + "ns";
             types = "Data";
-            ScanaStudio.dec_item_add_content("Data Read access time-1 (TAAC) : " + 1*time_value + "ns");
-            ScanaStudio.dec_item_add_content("TAAC : " + 1*time_value + "ns");
+            held.dec_item_add_content("Data Read access time-1 (TAAC) : " + 1*time_value + "ns");
+            held.dec_item_add_content("TAAC : " + 1*time_value + "ns");
             break;
         }
         case 1 :
         {
             packet_string = "Data Read access time-1 :" + 10*time_value + "ns";
             types = "Data";
-            ScanaStudio.dec_item_add_content("Data Read access time-1 (TAAC) : " + 10*time_value + "ns");
-            ScanaStudio.dec_item_add_content("TAAC : " + 10*time_value + "ns");
+            held.dec_item_add_content("Data Read access time-1 (TAAC) : " + 10*time_value + "ns");
+            held.dec_item_add_content("TAAC : " + 10*time_value + "ns");
             break;
         }
         case 2 :
         {
             packet_string = "Data Read access time-1 :" + 100*time_value + "ns";
             types = "Data";
-            ScanaStudio.dec_item_add_content("Data Read access time-1 (TAAC) : " + 100*time_value + "ns");
-            ScanaStudio.dec_item_add_content("TAAC : " + 100*time_value + "ns");
+            held.dec_item_add_content("Data Read access time-1 (TAAC) : " + 100*time_value + "ns");
+            held.dec_item_add_content("TAAC : " + 100*time_value + "ns");
             break;
         }
         case 3 :
         {
             packet_string = "Data Read access time-1 :" + 1*time_value + "us";
             types = "Data";
-            ScanaStudio.dec_item_add_content("Data Read access time-1 (TAAC) : " + 1*time_value + "us");
-            ScanaStudio.dec_item_add_content("TAAC : " + 1*time_value + "us");
+            held.dec_item_add_content("Data Read access time-1 (TAAC) : " + 1*time_value + "us");
+            held.dec_item_add_content("TAAC : " + 1*time_value + "us");
             break;
         }
         case 4 :
         {
             packet_string = "Data Read access time-1 :" + 10*time_value + "us";
             types = "Data";
-            ScanaStudio.dec_item_add_content("Data Read access time-1 (TAAC) : " + 10*time_value + "us");
-            ScanaStudio.dec_item_add_content("TAAC : " + 10*time_value + "us");
+            held.dec_item_add_content("Data Read access time-1 (TAAC) : " + 10*time_value + "us");
+            held.dec_item_add_content("TAAC : " + 10*time_value + "us");
             break;
         }
         case 5 :
         {
             packet_string = "Data Read access time-1 :" + 100*time_value + "us";
             types = "Data";
-            ScanaStudio.dec_item_add_content("Data Read access time-1 (TAAC) : " + 100*time_value + "us");
-            ScanaStudio.dec_item_add_content("TAAC : " + 100*time_value + "us");
+            held.dec_item_add_content("Data Read access time-1 (TAAC) : " + 100*time_value + "us");
+            held.dec_item_add_content("TAAC : " + 100*time_value + "us");
             break;
         }
         case 6 :
         {
             packet_string = "Data Read access time-1 :" + 1*time_value + "ms";
             types = "Data";
-            ScanaStudio.dec_item_add_content("Data Read access time-1 (TAAC) : " + 1*time_value + "ms");
-            ScanaStudio.dec_item_add_content("TAAC : " + 1*time_value + "ms");
+            held.dec_item_add_content("Data Read access time-1 (TAAC) : " + 1*time_value + "ms");
+            held.dec_item_add_content("TAAC : " + 1*time_value + "ms");
             break;
         }
         case 7 :
         {
             packet_string = "Data Read access time-1 :" + 10*time_value + "ms";
             types = "Data";
-            ScanaStudio.dec_item_add_content("Data Read access time-1 (TAAC) : " + 10*time_value + "ms");
-            ScanaStudio.dec_item_add_content("TAAC : " + 10*time_value + "ms");
+            held.dec_item_add_content("Data Read access time-1 (TAAC) : " + 10*time_value + "ms");
+            held.dec_item_add_content("TAAC : " + 10*time_value + "ms");
             break;
         }
     }
     display_sample(sdio_simple);
-    ScanaStudio.dec_item_end();
+    held.dec_item_end();
     packet_view_add_packet_v2(ch_cmd,sdio_simple,"TAAC",packet_string,types);
 }
 
@@ -11039,7 +11303,7 @@ function transfer_rate_switch(transfer_rate_unit, time_value) //Both are dec val
     if (time_value == "Error")
     {
         return content = "Error";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     switch (Number(transfer_rate_unit))
     {
@@ -11185,15 +11449,15 @@ function R2W_FACTOR(value, CSD_version, item_display)
         {
             packet_string = "These bits should be set to 0";
             types = "Error";
-            ScanaStudio.dec_item_add_content("These bits should be set to 0");
-            ScanaStudio.dec_item_emphasize_error();
+            held.dec_item_add_content("These bits should be set to 0");
+            held.dec_item_emphasize_error();
         }
         else
         {
             packet_string = "Write Speed Factor" + Math.pow(2,value);
             types = "Data";
-            ScanaStudio.dec_item_add_content("Write Speed Factor (R2W_FACTOR)" + Math.pow(2,value));
-            ScanaStudio.dec_item_add_content("R2W_FACTOR" + Math.pow(2,value));
+            held.dec_item_add_content("Write Speed Factor (R2W_FACTOR)" + Math.pow(2,value));
+            held.dec_item_add_content("R2W_FACTOR" + Math.pow(2,value));
         }
     }
     else
@@ -11202,19 +11466,19 @@ function R2W_FACTOR(value, CSD_version, item_display)
         {
             packet_string = "Write Speed Factor" + Math.pow(2,value);
             types = "Data";
-            ScanaStudio.dec_item_add_content("Write Speed Factor (R2W_FACTOR)" + Math.pow(2,value));
-            ScanaStudio.dec_item_add_content("R2W_FACTOR" + Math.pow(2,value));
+            held.dec_item_add_content("Write Speed Factor (R2W_FACTOR)" + Math.pow(2,value));
+            held.dec_item_add_content("R2W_FACTOR" + Math.pow(2,value));
         }
         else
         {
             packet_string = "In 2.0 Version, R2W factor is fixed to 4";
             types = "Error";
-            ScanaStudio.dec_item_add_content("In 2.0 Version, R2W factor is fixed to 4");
-            ScanaStudio.dec_item_emphasize_error();
+            held.dec_item_add_content("In 2.0 Version, R2W factor is fixed to 4");
+            held.dec_item_emphasize_error();
         }
     }
     display_sample_0_1(sdio_simple, item_display);
-    ScanaStudio.dec_item_end();
+    held.dec_item_end();
     //Packet View
     packet_view_add_packet_v2(ch_cmd,sdio_simple,"R2W_FACTOR",packet_string,types);
 }
@@ -11287,25 +11551,59 @@ function reserved_bit(decoder_result_t) // When there is reserved bit, it create
     {
         packet_string = "Reserved bits";
         types = "Data";
-        ScanaStudio.dec_item_add_content("Reserved bits");
+        held.dec_item_add_content("Reserved bits");
     }
     else
     {
         packet_string = "Reserved bits should be 0";
         types = "Error";
-        ScanaStudio.dec_item_add_content("Reserved bits should be 0");
-        ScanaStudio.dec_item_add_content("Should be 0");
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_add_content("Reserved bits should be 0");
+        held.dec_item_add_content("Should be 0");
+        held.dec_item_emphasize_error();
     }
     display_sample(sdio_simple);
-    ScanaStudio.dec_item_end();
+    held.dec_item_end();
     //Packet View
     packet_view_add_packet_v2(ch_cmd,sdio_simple,"Reserved bit",packet_string,types);
+}
+
+//During a capture, ScanaStudio.sync_decode waits for the clock edges of a word the
+//capture has not brought yet: true once the samples received cover the whole word
+function word_is_available (clock_start_sample,bits_per_word)
+{
+    //the clock period, measured on the edges already received before the word
+    var edge_0 = ScanaStudio.trs_get_before(ch_clk,clock_start_sample);
+    var edge_1 = ScanaStudio.trs_get_before(ch_clk,edge_0.sample_index - 1);
+    var edge_2 = ScanaStudio.trs_get_before(ch_clk,edge_1.sample_index - 1);
+    var period = edge_0.sample_index - edge_2.sample_index;
+    if (period <= 0)
+    {
+        return true; //no period to measure here: sync_decode tells
+    }
+    var available = ScanaStudio.get_available_samples(ch_clk);
+    if (available >= clock_start_sample + (bits_per_word + 1)*period)
+    {
+        return true;
+    }
+    //the end of the capture: sync_decode reads what there is, as it always did
+    return (available == wait_available) && !clock_edge_to_come(available);
+}
+
+//What a word not received yet reads as: no bit, and the position left where it was
+function word_not_available (clock_start_sample)
+{
+    last_trans = true;
+    return {start_sample: clock_start_sample, end_sample: clock_start_sample - 1, valid_bits: 0,
+            unsigned_words: [0], signed_words: [0], sampling_points: []};
 }
 
 // Simplify the sync_decode_function
 function sync_decode_v2 (channel,clock_start_sample,bits_per_word)
 {
+    if (!word_is_available(clock_start_sample,bits_per_word))
+    {
+        return word_not_available(clock_start_sample);
+    }
     var tab_1 = [];
     var tab_2 = [];
     var pretab_1 = [];
@@ -11326,7 +11624,7 @@ function sync_decode_v2 (channel,clock_start_sample,bits_per_word)
     {
         clock_polarity = 1;
     }
-        for (b=0; (b < Math.floor(bits_per_word/32)) && (ScanaStudio.trs_is_not_last(ch_clk)); b++)
+        for (b=0; (b < Math.floor(bits_per_word/32)) && (is_not_last(ch_clk)); b++)
         {
             decoder_result_t = ScanaStudio.sync_decode(ch_clk,channel,current_start_sample,clock_polarity,true,32,false,0,-1);
             if (decoder_result_t.valid_bits != 32)
@@ -11345,7 +11643,7 @@ function sync_decode_v2 (channel,clock_start_sample,bits_per_word)
             }
             valid_bit += decoder_result_t.valid_bits;
         }
-        if(ScanaStudio.trs_is_not_last(ch_clk))
+        if(is_not_last(ch_clk))
         {
             if (bits_per_word%32 != 0)
             {
@@ -11364,6 +11662,10 @@ function sync_decode_v2 (channel,clock_start_sample,bits_per_word)
                 }
                 valid_bit += decoder_result_t.valid_bits;
             }
+        }
+        if (valid_bit != bits_per_word) //also when no clock edge was there to read at all
+        {
+            last_trans = true;
         }
         unsigned_words.push(bin2dec(tab_1,bits_per_word));
         signed_words.push(bin2dec(tab_2,bits_per_word));
@@ -11392,6 +11694,10 @@ function sync_decode_v2 (channel,clock_start_sample,bits_per_word)
 // Simplify the sync_decode_function
 function sync_decode_v3 (channel,clock_start_sample,bits_per_word)
 {
+    if (!word_is_available(clock_start_sample,bits_per_word))
+    {
+        return word_not_available(clock_start_sample);
+    }
     var sampling_point = [];
     var start = clock_start_sample;
     var ch_cmd = ScanaStudio.gui_get_value("ch_cmd");
@@ -11423,12 +11729,12 @@ function trs_clk_before_v2 (sample_index)
     var trs_start = ScanaStudio.trs_get_before(ch_clk,sample_index + 1);
     var tmp_trs_sample_index;
     tmp_trs_sample_index = trs_start.sample_index;
-    while( (tmp_trs_sample_index == trs_start.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+    while( (tmp_trs_sample_index == trs_start.sample_index) && (is_not_last(ch_clk) == true) )
     {
         trs_start = ScanaStudio.trs_get_previous(ch_clk);
     }
     tmp_trs_sample_index = trs_start.sample_index;
-    while( (tmp_trs_sample_index == trs_start.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+    while( (tmp_trs_sample_index == trs_start.sample_index) && (is_not_last(ch_clk) == true) )
     {
         trs_start = ScanaStudio.trs_get_next(ch_clk);
     }
@@ -11440,7 +11746,7 @@ function trs_clk_after_v2 (sample_index)
     var trs_end = ScanaStudio.trs_get_before(ch_clk,sample_index + 1);
     var tmp_trs_sample_index;
     tmp_trs_sample_index = trs_end.sample_index;
-    while( (tmp_trs_sample_index == trs_end.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+    while( (tmp_trs_sample_index == trs_end.sample_index) && (is_not_last(ch_clk) == true) )
     {
         trs_end = ScanaStudio.trs_get_next(ch_clk);
     }
@@ -11456,19 +11762,19 @@ function dec_item_new_v2 (data_channel, sdio_simple)
         var trs_start = ScanaStudio.trs_get_before(ch_clk,sdio_simple.start_sample + 1);
         var tmp_trs_sample_index;
         tmp_trs_sample_index = trs_start.sample_index;
-        while( (tmp_trs_sample_index == trs_start.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+        while( (tmp_trs_sample_index == trs_start.sample_index) && (is_not_last(ch_clk) == true) )
         {
             trs_start = ScanaStudio.trs_get_previous(ch_clk);
         }
         tmp_trs_sample_index = trs_start.sample_index;
-        while( (tmp_trs_sample_index == trs_start.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+        while( (tmp_trs_sample_index == trs_start.sample_index) && (is_not_last(ch_clk) == true) )
         {
             trs_start = ScanaStudio.trs_get_next(ch_clk);
         }
         var trs_end = ScanaStudio.trs_get_before(ch_clk,sdio_simple.end_sample + 1);
         var tmp_trs_sample_index;
         tmp_trs_sample_index = trs_end.sample_index;
-        while( (tmp_trs_sample_index == trs_end.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+        while( (tmp_trs_sample_index == trs_end.sample_index) && (is_not_last(ch_clk) == true) )
         {
             trs_end = ScanaStudio.trs_get_next(ch_clk);
         }
@@ -11485,7 +11791,7 @@ function dec_item_new_v2 (data_channel, sdio_simple)
             }
             return [trs_start.sample_index, trs_end.sample_index];
         }
-        test = ScanaStudio.dec_item_new(data_channel,trs_start.sample_index ,trs_end.sample_index - 1);
+        test = held.dec_item_new(data_channel,trs_start.sample_index ,trs_end.sample_index - 1);
         if (test != 1)
         {
             error ++;
@@ -11497,17 +11803,17 @@ function dec_item_new_v2 (data_channel, sdio_simple)
         var trs_start = ScanaStudio.trs_get_before(ch_clk,sdio_simple.start_sample + 1);
         var tmp_trs_sample_index;
         tmp_trs_sample_index = trs_start.sample_index;
-        while( (tmp_trs_sample_index == trs_start.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+        while( (tmp_trs_sample_index == trs_start.sample_index) && (is_not_last(ch_clk) == true) )
         {
             trs_start = ScanaStudio.trs_get_previous(ch_clk);
         }
         tmp_trs_sample_index = trs_start.sample_index;
-        while( (tmp_trs_sample_index == trs_start.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+        while( (tmp_trs_sample_index == trs_start.sample_index) && (is_not_last(ch_clk) == true) )
         {
             trs_start = ScanaStudio.trs_get_next(ch_clk);
         }
         var quarter_clk_sample = get_quarter_clk_sample(trs_start.sample_index);
-        test = ScanaStudio.dec_item_new(data_channel,trs_start.sample_index + quarter_clk_sample, sdio_simple.end_sample + quarter_clk_sample -1);
+        test = held.dec_item_new(data_channel,trs_start.sample_index + quarter_clk_sample, sdio_simple.end_sample + quarter_clk_sample -1);
         if (test != 1)
         {
             // ScanaStudio.console_info_msg("sdio_simple.start_sample ",sdio_simple.start_sample);
@@ -11525,12 +11831,12 @@ function get_quarter_clk_sample (sample_value)
     var clock_second_edge_sample = ScanaStudio.trs_get_before(ch_clk,sample_value);
     var tmp_trs_sample_index;
     tmp_trs_sample_index = clock_second_edge_sample.sample_index;
-    while( (tmp_trs_sample_index == clock_second_edge_sample.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+    while( (tmp_trs_sample_index == clock_second_edge_sample.sample_index) && (is_not_last(ch_clk) == true) )
     {
         clock_second_edge_sample = ScanaStudio.trs_get_next(ch_clk);
     }
     tmp_trs_sample_index = clock_second_edge_sample.sample_index;
-    while( (tmp_trs_sample_index == clock_second_edge_sample.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+    while( (tmp_trs_sample_index == clock_second_edge_sample.sample_index) && (is_not_last(ch_clk) == true) )
     {
         clock_second_edge_sample = ScanaStudio.trs_get_next(ch_clk);
     }
@@ -11608,32 +11914,32 @@ function flag_data_error(item_display)
     if (item_display[0] == 1)
     {
         str_error += "COM_CRC_ERROR/";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     if (item_display[1] == 1)
     {
         str_error += "ILLEGAL_COMMAND ERROR/";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     if (item_display[4] == 1)
     {
         str_error += "GENERAL ERROR/";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     if (item_display[5] == 1)
     {
         str_error += "6th bit should be set at 0/";
-        ScanaStudio.dec_item_emphasize_warning();
+        held.dec_item_emphasize_warning();
     }
     if (item_display[6] == 1)
     {
         str_error += "FUNCTION NUMBER INVALID/";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     if (item_display[7] == 1)
     {
         str_error += "OUT_OF_RANGE ERROR";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     for(i=2; i<4; i++)
     {
@@ -11677,19 +11983,19 @@ function card_status_error_16(bit_array)
         {
             str += "COM_CRC_ERROR/";
             types = "Error";
-            ScanaStudio.dec_item_emphasize_error();
+            held.dec_item_emphasize_error();
         }
         if (bit_array[1] == 1)
         {
             str += "ILLEGAL_COMMAND ERROR/";
             types = "Error";
-            ScanaStudio.dec_item_emphasize_error();
+            held.dec_item_emphasize_error();
         }
         if (bit_array[2] == 1)
         {
             str += "GENERAL ERROR/";
             types = "Error";
-            ScanaStudio.dec_item_emphasize_error();
+            held.dec_item_emphasize_error();
         }
         if (bit_array[7] == 1)
         {
@@ -11764,24 +12070,24 @@ function card_status_error_16(bit_array)
         if (bit_array[0] == 1)
         {
             str += "COM_CRC_ERROR/";
-            ScanaStudio.dec_item_emphasize_error();
+            held.dec_item_emphasize_error();
         }
         if (bit_array[1] == 1)
         {
             str += "ILLEGAL_COMMAND ERROR/";
-            ScanaStudio.dec_item_emphasize_error();
+            held.dec_item_emphasize_error();
         }
         if (bit_array[2] == 1)
         {
             str += "GENERAL ERROR";
-            ScanaStudio.dec_item_emphasize_error();
+            held.dec_item_emphasize_error();
         }
     }
     if (types == "Data")
     {
         packet_string = str;
-        ScanaStudio.dec_item_add_content("OK, no errors  " + str);
-        ScanaStudio.dec_item_add_content(str);
+        held.dec_item_add_content("OK, no errors  " + str);
+        held.dec_item_add_content(str);
     }
     else
     {
@@ -11792,16 +12098,16 @@ function card_status_error_16(bit_array)
         else
         {
             packet_string = str ;
-            ScanaStudio.dec_item_add_content(str);
+            held.dec_item_add_content(str);
         }
 
         show_pdf_on_console = true;
-        ScanaStudio.dec_item_add_content(str);
-        ScanaStudio.dec_item_add_content("Too many Errors, cannot be displayed, look significance on sdio specifications");
+        held.dec_item_add_content(str);
+        held.dec_item_add_content("Too many Errors, cannot be displayed, look significance on sdio specifications");
     }
 
     display_sample_0_1(sdio_simple,item_display);
-    ScanaStudio.dec_item_end();
+    held.dec_item_end();
     //Packet View
     packet_view_add_packet_v2(ch_cmd,sdio_simple,"Card Status",packet_string,types);
     return str;
@@ -11816,43 +12122,43 @@ function card_status_error_32(bit_array)
     {
         str += "OUT_OF_RANGE ERROR/";
         types = "Error";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     if (bit_array[1] == 1)
     {
         str += "ADRESS ERROR/";
         types = "Error";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     if (bit_array[2] == 1)
     {
         str += "BLOCK_LEN ERROR/";
         types = "Error";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     if (bit_array[3] == 1)
     {
         str += "ERASE_SEQ ERROR/";
         types = "Error";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     if (bit_array[4] == 1)
     {
         str += "ERASE_PARAM ERROR/";
         types = "Error";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     if (bit_array[5] == 1)
     {
         str += "WP_VIOLATION, this block is protected/";
         types = "Error";
-        ScanaStudio.dec_item_emphasize_warning();
+        held.dec_item_emphasize_warning();
     }
     if (bit_array[6] == 1)
     {
         str += "CARD IS LOCKED/";
         Card_is_Lock = true;
-        ScanaStudio.dec_item_emphasize_warning();
+        held.dec_item_emphasize_warning();
     }
     else
     {
@@ -11862,60 +12168,60 @@ function card_status_error_32(bit_array)
     {
         str += "LOCK_UNLOCK_FAILED ERROR/";
         types = "Error";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     if (bit_array[8] == 1)
     {
         str += "COM_CRC_ERROR/";
         types = "Error";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     if (bit_array[9] == 1)
     {
         str += "ILLEGAL_COMMAND ERROR/";
         types = "Error";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     if (bit_array[10] == 1)
     {
         str += "CARD_ECC FAILED/";
         types = "Error";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     if (bit_array[11] == 1)
     {
         str += "CC ERROR/";
         types = "Error";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     if (bit_array[12] == 1)
     {
         str += "GENERAL ERROR/";
         types = "Error";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     if (bit_array[15] == 1)
     {
         str += "CSD_OVERWRITE ERROR/";
         types = "Error";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     if (bit_array[16] == 1)
     {
         str += "WP_ERASE_SKIP ERROR, SOME BLOCK ARE PROTECTED/";
         types = "Error";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     if (bit_array[17] == 1)
     {
         str += "CARD_ECC IS DISABLED/";
-        ScanaStudio.dec_item_emphasize_warning();
+        held.dec_item_emphasize_warning();
     }
     if (bit_array[18] == 1)
     {
         str += "ERASE_RESET ERROR/";
         types = "Error";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     // 19 to 22 are used together
     if (bit_array[23] == 1)
@@ -11936,7 +12242,7 @@ function card_status_error_32(bit_array)
     {
         str += "AKE_SEQ ERROR";
         types = "Error";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
     // 29-31 Reserved
     var current_state_value_2 = 0;
@@ -12005,8 +12311,8 @@ function card_status_error_32(bit_array)
     if (types == "Data")
     {
         packet_string = str;
-        ScanaStudio.dec_item_add_content("OK, no errors  " + str);
-        ScanaStudio.dec_item_add_content(str);
+        held.dec_item_add_content("OK, no errors  " + str);
+        held.dec_item_add_content(str);
     }
     else
     {
@@ -12017,16 +12323,16 @@ function card_status_error_32(bit_array)
         else
         {
             packet_string = str ;
-            ScanaStudio.dec_item_add_content(str);
+            held.dec_item_add_content(str);
         }
 
         show_pdf_on_console = true;
-        ScanaStudio.dec_item_add_content(str);
-        ScanaStudio.dec_item_add_content("Too many Errors, cannot be displayed, look significance on sdio specifications");
+        held.dec_item_add_content(str);
+        held.dec_item_add_content("Too many Errors, cannot be displayed, look significance on sdio specifications");
     }
 
     display_sample_0_1(sdio_simple,item_display);
-    ScanaStudio.dec_item_end();
+    held.dec_item_end();
     //Packet View
     packet_view_add_packet_v2(ch_cmd,sdio_simple,"Card Status",packet_string,types);
     return str;
@@ -12058,9 +12364,9 @@ function task_status_error_32(item_display, sdio_simple)
         packet_string = "Too many task ready, look item";
     }
     // show_pdf_on_console = true;
-    ScanaStudio.dec_item_add_content(str);
+    held.dec_item_add_content(str);
     display_sample_0_1(sdio_simple,item_display);
-    ScanaStudio.dec_item_end();
+    held.dec_item_end();
     //Packet View
     packet_view_add_packet_v2(ch_cmd,sdio_simple,"Task Status",packet_string,"Data");
     return str;
@@ -12105,13 +12411,13 @@ function Voltage_window_24(bit_array,sdio_simple,ch)
     if (n == 1)
     {
         types = "Data";
-        ScanaStudio.dec_item_add_content("VDD voltage window " + VDD_min.toFixed(1) + "-" + VDD_max.toFixed(1) + "V");
+        held.dec_item_add_content("VDD voltage window " + VDD_min.toFixed(1) + "-" + VDD_max.toFixed(1) + "V");
     }
     else
     {
         types = "Error";
-        ScanaStudio.dec_item_add_content("Reserved bits should be 0");
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_add_content("Reserved bits should be 0");
+        held.dec_item_emphasize_error();
     }
     packet_view_add_packet_v2(ch,sdio_simple,"OCR",packet_string,types);
 }
@@ -12172,16 +12478,16 @@ function Voltage_window_32(bit_array,ch_cmd,sdio_simple,ch)
     {
         packet_string = "VDD voltage window " + VDD_min.toFixed(1) + "-" + VDD_max.toFixed(1) + "V";
         types = "Data";
-        ScanaStudio.dec_item_add_content(str + "/VDD voltage window " + VDD_min.toFixed(1) + "-" + VDD_max.toFixed(1) + "V");
+        held.dec_item_add_content(str + "/VDD voltage window " + VDD_min.toFixed(1) + "-" + VDD_max.toFixed(1) + "V");
     }
     else
     {
         types = "Error";
-        ScanaStudio.dec_item_add_content("Reserved bits should be 0");
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_add_content("Reserved bits should be 0");
+        held.dec_item_emphasize_error();
     }
     display_sample(sdio_simple);
-    ScanaStudio.dec_item_end();
+    held.dec_item_end();
     // Packet View
     packet_view_add_packet_v2(ch,sdio_simple,"OCR",packet_string,types);
 }
@@ -12455,7 +12761,7 @@ function FNO(item_display, MIO_value)
         if (item_display[0] == 1)
         {
             return str += ", fourth bit should be set to 0";
-            ScanaStudio.dec_item_emphasize_warning();
+            held.dec_item_emphasize_warning();
         }
     }
     else //Memory Extension
@@ -12472,7 +12778,7 @@ function display_sample(decoder_result_t)
 {
     for (i=0; i < decoder_result_t.sampling_points.length; i++)
     {
-        ScanaStudio.dec_item_add_sample_point(decoder_result_t.sampling_points[i],"P");
+        held.dec_item_add_sample_point(decoder_result_t.sampling_points[i],"P");
     }
 }
 
@@ -12482,11 +12788,11 @@ function display_sample_0_1(decoder_result_t, display_array)
     {
         if (display_array[i] == 1)
         {
-            ScanaStudio.dec_item_add_sample_point(decoder_result_t.sampling_points[i],"1");
+            held.dec_item_add_sample_point(decoder_result_t.sampling_points[i],"1");
         }
         else
         {
-            ScanaStudio.dec_item_add_sample_point(decoder_result_t.sampling_points[i],"0");
+            held.dec_item_add_sample_point(decoder_result_t.sampling_points[i],"0");
         }
     }
 }
@@ -12980,57 +13286,57 @@ function Physical_Specification_Version(SD_SPEC, SD_SPEC3, SD_SPEC4, SD_SPECX)
     if (SD_SPEC == 0 && SD_SPEC3 == 0 && SD_SPEC4 == 0 && SD_SPECX == 0)
     {
         packet_string = "Version 1.0 and 1.01";
-        ScanaStudio.dec_item_add_content("Physical_Specification : Version 1.0 and 1.01");
-        ScanaStudio.dec_item_add_content("Version 1.0 and 1.01");
+        held.dec_item_add_content("Physical_Specification : Version 1.0 and 1.01");
+        held.dec_item_add_content("Version 1.0 and 1.01");
     }
     else if (SD_SPEC == 1 && SD_SPEC3 == 0 && SD_SPEC4 == 0 && SD_SPECX == 0)
     {
         packet_string = "Version 1.10";
-        ScanaStudio.dec_item_add_content("Physical_Specification : Version 1.10");
-        ScanaStudio.dec_item_add_content("Version 1.10");
+        held.dec_item_add_content("Physical_Specification : Version 1.10");
+        held.dec_item_add_content("Version 1.10");
     }
     else if (SD_SPEC == 2 && SD_SPEC3 == 0 && SD_SPEC4 == 0 && SD_SPECX == 0)
     {
         packet_string = "Version 2.00";
-        ScanaStudio.dec_item_add_content("Physical_Specification : Version 2.00");
-        ScanaStudio.dec_item_add_content("Version 2.00");
+        held.dec_item_add_content("Physical_Specification : Version 2.00");
+        held.dec_item_add_content("Version 2.00");
     }
     else if (SD_SPEC == 2 && SD_SPEC3 == 1 && SD_SPEC4 == 0 && SD_SPECX == 0)
     {
         packet_string = "Version 3.0x";
-        ScanaStudio.dec_item_add_content("Physical_Specification : Version 3.0x");
-        ScanaStudio.dec_item_add_content("Version 3.0x");
+        held.dec_item_add_content("Physical_Specification : Version 3.0x");
+        held.dec_item_add_content("Version 3.0x");
     }
     else if (SD_SPEC == 2 && SD_SPEC3 == 1 && SD_SPEC4 == 1 && SD_SPECX == 0)
     {
         packet_string = "Version 4.xx";
-        ScanaStudio.dec_item_add_content("Physical_Specification : Version 4.xx");
-        ScanaStudio.dec_item_add_content("Version 4.xx");
+        held.dec_item_add_content("Physical_Specification : Version 4.xx");
+        held.dec_item_add_content("Version 4.xx");
     }
     else if (SD_SPEC == 2 && SD_SPEC3 == 1 &&  SD_SPECX == 1)
     {
         packet_string = "Version 5.xx";
-        ScanaStudio.dec_item_add_content("Physical_Specification : Version 5.xx");
-        ScanaStudio.dec_item_add_content("Version 5.xx");
+        held.dec_item_add_content("Physical_Specification : Version 5.xx");
+        held.dec_item_add_content("Version 5.xx");
     }
     else if (SD_SPEC == 2 && SD_SPEC3 == 1 &&  SD_SPECX == 2)
     {
         packet_string = "Version 6.xx";
-        ScanaStudio.dec_item_add_content("Physical_Specification : Version 6.xx");
-        ScanaStudio.dec_item_add_content("Version 6.xx");
+        held.dec_item_add_content("Physical_Specification : Version 6.xx");
+        held.dec_item_add_content("Version 6.xx");
     }
     else if (SD_SPEC == 2 && SD_SPEC3 == 1 &&  SD_SPECX == 3)
     {
         packet_string = "Version 7.xx";
-        ScanaStudio.dec_item_add_content("Physical_Specification : Version 7.xx");
-        ScanaStudio.dec_item_add_content("Version 7.xx");
+        held.dec_item_add_content("Physical_Specification : Version 7.xx");
+        held.dec_item_add_content("Version 7.xx");
     }
     else
     {
         packet_string = "Reserved";
         types = "Error";
-        ScanaStudio.dec_item_add_content("Physical_Specification : Reserved");
-        ScanaStudio.dec_item_emphasize_warning();
+        held.dec_item_add_content("Physical_Specification : Reserved");
+        held.dec_item_emphasize_warning();
     }
     packet_view_add_wide_width_packet(ch_dat0,sdio_simple,"Physical_Specification",packet_string,types);
 }
