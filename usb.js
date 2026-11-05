@@ -3,13 +3,14 @@
 <DESCRIPTION>
 USB 1.5 and 12 Mbps decoder
 </DESCRIPTION>
-<VERSION> 0.0 </VERSION>
-<AUTHOR_NAME> Hristo Gochkov </AUTHOR_NAME>
+<VERSION> 0.2 </VERSION>
+<AUTHOR_NAME> Hristo Gochkov, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> hristo.gochkov@bitsbg.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Hristo Gochkov </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.2:  Full Speed by default. Demo signals and trigger. The last packet and a remote wakeup are decoded.
 V0.1:  Initial release.
 </RELEASE_NOTES>
 */
@@ -239,8 +240,8 @@ function on_draw_gui_decoder(){
     ScanaStudio.gui_add_ch_selector("dp","D+","D+");
     ScanaStudio.gui_add_ch_selector("dm","D-","D-");
     ScanaStudio.gui_add_combo_box("is_low_speed","Select USB Speed");
-      ScanaStudio.gui_add_item_to_combo_box("Full Speed (12 Mbps)");
-      ScanaStudio.gui_add_item_to_combo_box("Low Speed (1.5 Mbps)");
+      ScanaStudio.gui_add_item_to_combo_box("Full Speed (12 Mbps)", true);
+      ScanaStudio.gui_add_item_to_combo_box("Low Speed (1.5 Mbps)", false);
 
   ScanaStudio.gui_add_separator("Options")
     ScanaStudio.gui_add_new_tab("General Display Options", true);
@@ -891,7 +892,7 @@ function handle_packet_fail(pin_state, bits, nanosec, index, samples){
 //track and detect bus state changes and start/end of packets
 var last_state = null;
 
-function handle_state(pin_state, bits, nanosec, index, samples){
+function handle_state(pin_state, bits, nanosec, index, samples, next_state){
 
   //if change is too short, then skip.
   //That would cause the next state to be the same as the one before, so skip that one too.
@@ -910,22 +911,30 @@ function handle_state(pin_state, bits, nanosec, index, samples){
       in_packet = true;
       handle_packet_start(pin_state, bits, nanosec, index, samples);
     }
+    var is_eop = (last_state != null && last_state[0] == USB_SE0 && last_state[1] == 2 && pin_state == USB_J && bits > 1);
     if(in_packet){
-      if(pin_state == USB_SE1 || (pin_state == USB_SE0 && bits > 2) || (pin_state == USB_J && nanosec > 3000000)){
+      //the idle J after an EOP may last any time: the EOP is checked first
+      if(!is_eop && (pin_state == USB_SE1 || (pin_state == USB_SE0 && bits > 2) || (pin_state == USB_J && nanosec > 3000000))){
         //packet fail
         //ScanaStudio.console_info_msg("(pin_state == USB_SE1):"+(pin_state == USB_SE1)+", (pin_state == USB_SE0 && bits > 2):"+(pin_state == USB_SE0 && bits > 2)+", (pin_state == USB_J && nanosec > 3000000):"+(pin_state == USB_J && nanosec > 3000000));
         handle_packet_fail(pin_state, bits, nanosec, index, samples);//one_bit_samples);
         in_packet = false;
       } else {
         //valid packet state
-        if(last_state != null && last_state[0] == USB_SE0 && last_state[1] == 2 && pin_state == USB_J && bits > 1){
+        if(is_eop){
           //EOP
           in_packet = false;
           handle_packet_end(pin_state, 1, one_bit_ns, last_state[3], last_state[4]+one_bit_samples);
           //handle the rest of the bits (idle/suspend)
           handle_state(pin_state, bits-1, nanosec-one_bit_ns, index+one_bit_samples, samples - one_bit_samples);
         } else if(pin_state == USB_SE0 && bits == 2){
-          //Start EOP
+          //Start EOP: ends the packet as soon as J follows, so the last packet of a capture shows too
+          if(next_state == USB_J){
+            in_packet = false;
+            handle_packet_end(USB_J, 1, one_bit_ns, index, samples + one_bit_samples);
+            last_state = [pin_state, bits, nanosec, index, samples];
+            return;
+          }
         } else {
           //add bits
           handle_packet_bit(0, index, (bits==1)?samples:one_bit_samples, (bits==1)?0:samples-one_bit_samples);
@@ -966,7 +975,8 @@ function handle_state(pin_state, bits, nanosec, index, samples){
       }
     }
   } else if(bus_state == USB_SUSPEND){
-      if(pin_state == USB_K && nanosec > 20000000){
+      //a host resumes with 20 ms of K, a device's remote wakeup lasts 1 to 15 ms
+      if(pin_state == USB_K && nanosec > 1000000){
         //ScanaStudio.console_info_msg("RESUMED at "+index);
         set_bus_sate(USB_ATTACH, index);
       } else if(pin_state == USB_SE0){
@@ -987,10 +997,12 @@ function handle_change(index, dpl, dml){
   var nanosec = samples * one_sample_ns;
   var bits = Math.round(samples / one_bit_samples);
   var pin_state = (last_change[1] * 2) + last_change[2];
+  var next_state = (dpl * 2) + dml;
   if(is_low_speed){
     pin_state = (last_change[2] * 2) + last_change[1];
+    next_state = (dml * 2) + dpl;
   }
-  handle_state(pin_state, bits, nanosec, last_change[0], samples);
+  handle_state(pin_state, bits, nanosec, last_change[0], samples, next_state);
   last_change = [index, dpl, dml];
 }
 
@@ -1005,31 +1017,43 @@ var dm_level = 0;
 var dm_index = 0;
 var dm_trs = null;
 
+var lines_started = false;
+var dp_done = false; //the current D+ edge is already handled
+
 function on_decode_signals(resume){
+  if (!resume){ //If resume == false, it's the first call to this function.
+      sample_rate_too_low = false;
+      init_ui_settings();
+      init_globals();
+      bus_state = USB_INVALID;
+      last_state = null;
+      in_transaction = false;
+      transaction_packets = [];
+      bit_stuffing = 0;
+      in_packet = false;
+      lines_started = false;
+      dp_done = false;
+  }
   if(sample_rate_too_low){
     return;
   }
-  if (!resume){ //If resume == false, it's the first call to this function.
-      init_ui_settings();
-      init_globals();
-      if(sample_rate_too_low){
-        return;
-      }
-
+  if(!lines_started){
       //reset the trs iterators
       ScanaStudio.trs_reset(dp);
       ScanaStudio.trs_reset(dm);
 
       dp_trs = ScanaStudio.trs_get_next(dp);
+      dm_trs = ScanaStudio.trs_get_next(dm);
+      //A line that holds no transition yet reads as neither 0 nor 1 (ScanaStudio 3): wait for it
+      if((dp_trs.value > 1) || (dm_trs.value > 1)){
+        return;
+      }
+      lines_started = true;
       dp_level = dp_trs.value;
       dp_index = dp_trs.sample_index;
-      //ScanaStudio.console_info_msg("D+: value: "+dp_trs.value+", index: "+dp_trs.sample_index);
-      dm_trs = ScanaStudio.trs_get_next(dm);
       dm_level = dm_trs.value;
       dm_index = dm_trs.sample_index;
-      //ScanaStudio.console_info_msg("D-: value: "+dm_trs.value+", index: "+dm_trs.sample_index);
       last_change = [dp_index, dp_level, dm_level];
-      in_packet = false;
   }
 
   while (ScanaStudio.abort_is_requested() == false) {
@@ -1039,16 +1063,27 @@ function on_decode_signals(resume){
         break;
       }
       dp_trs = ScanaStudio.trs_get_next(dp);
+      dp_done = false;
     }
-    
+
     //check if dm is behind dp
     while(dm_trs.sample_index < (dp_trs.sample_index - half_bit_samples)){
       dm_level = dm_trs.value;
       dm_index = dm_trs.sample_index;
       if(!ScanaStudio.trs_is_not_last(dm)){
+        //D- is quiet: once the data goes past this D+ edge, no D- edge can come with it
+        if(!dp_done && (ScanaStudio.get_available_samples(dm) > (dp_trs.sample_index + half_bit_samples))){
+          handle_change(dp_trs.sample_index, dp_trs.value, dm_level);
+          dp_done = true;
+        }
         dp_level = dp_trs.value;
         dp_index = dp_trs.sample_index;
-        return;
+        if(!dp_done || !ScanaStudio.trs_is_not_last(dp)){
+          return;
+        }
+        dp_trs = ScanaStudio.trs_get_next(dp);
+        dp_done = false;
+        continue;
       }
       dm_trs = ScanaStudio.trs_get_next(dm);
       //still behind? handle the change then
@@ -1059,10 +1094,14 @@ function on_decode_signals(resume){
 
     if((dm_trs.sample_index >= (dp_trs.sample_index - half_bit_samples)) && (dm_trs.sample_index <= (dp_trs.sample_index + half_bit_samples))){
       //we got edge
-      handle_change(dp_trs.sample_index, dp_trs.value, dm_trs.value);
+      if(!dp_done){
+        handle_change(dp_trs.sample_index, dp_trs.value, dm_trs.value);
+      }
     } else if(dm_trs.sample_index > (dp_trs.sample_index + half_bit_samples)){
       //dm is ahead
-      handle_change(dp_trs.sample_index, dp_trs.value, dm_level);
+      if(!dp_done){ //else it was handled while D- was quiet
+        handle_change(dp_trs.sample_index, dp_trs.value, dm_level);
+      }
 
       if(is_low_speed){
         handle_change(dm_trs.sample_index, dp_trs.value, dm_trs.value);
@@ -1073,20 +1112,450 @@ function on_decode_signals(resume){
   }
 }
 
+/*
+ * Trigger
+ * The bits of SYNC, PID and of a token are known in advance: the trigger follows their
+ * NRZI edges on the line that is high in the J state (D+ at full speed, D- at low speed),
+ * each edge one or more bit times after the previous one, give or take half a bit.
+*/
+
+const TRIG_RESET = 0;
+const TRIG_SOP = 1;
+const TRIG_EOP = 2;
+const TRIG_SUSPEND = 3;
+const TRIG_RESUME = 4;
+const TRIG_TOKEN = 5;
+const TRIG_DATA_HANDSHAKE = 6;
+const TRIG_TOKEN_ADDRESS = 7;
+const TRIG_SOF_FRAME = 8;
+
+const TRIG_TOKEN_PIDS = [USB_SETUP, USB_IN, USB_OUT, USB_SOF];
+const TRIG_TOKEN_NAMES = ["SETUP", "IN", "OUT", "SOF"];
+const TRIG_DATA_PIDS = [USB_DATA0, USB_DATA1, USB_ACK, USB_NACK, USB_STALL];
+const TRIG_DATA_NAMES = ["DATA0", "DATA1", "ACK", "NAK", "STALL"];
+
 //Trigger sequence GUI
 function on_draw_gui_trigger(){
-  //Add gui functions...
+  ScanaStudio.gui_add_new_selectable_containers_group("trig_type", "Trigger on");
+    ScanaStudio.gui_add_new_container("Bus reset (SE0 for more than 2.5 us, triggers when it ends)", true);
+    ScanaStudio.gui_end_container();
+    ScanaStudio.gui_add_new_container("Start of any packet (SYNC)", false);
+    ScanaStudio.gui_end_container();
+    ScanaStudio.gui_add_new_container("End of any packet (EOP)", false);
+    ScanaStudio.gui_end_container();
+    ScanaStudio.gui_add_new_container("End of a suspend (bus idle for more than 3 ms)", false);
+    ScanaStudio.gui_end_container();
+    ScanaStudio.gui_add_new_container("Resume (K state for more than 1 ms, triggers when it ends)", false);
+    ScanaStudio.gui_end_container();
+    ScanaStudio.gui_add_new_container("Token packet", false);
+      ScanaStudio.gui_add_combo_box("trig_token_pid", "PID");
+      for (var i = 0; i < TRIG_TOKEN_NAMES.length; i++) {
+        ScanaStudio.gui_add_item_to_combo_box(TRIG_TOKEN_NAMES[i], i == 0);
+      }
+    ScanaStudio.gui_end_container();
+    ScanaStudio.gui_add_new_container("Data or handshake packet", false);
+      ScanaStudio.gui_add_combo_box("trig_data_pid", "PID");
+      for (var i = 0; i < TRIG_DATA_NAMES.length; i++) {
+        ScanaStudio.gui_add_item_to_combo_box(TRIG_DATA_NAMES[i], i == 0);
+      }
+    ScanaStudio.gui_end_container();
+    ScanaStudio.gui_add_new_container("Token to a device address and endpoint", false);
+      ScanaStudio.gui_add_combo_box("trig_addr_pid", "PID");
+      for (var i = 0; i < 3; i++) {
+        ScanaStudio.gui_add_item_to_combo_box(TRIG_TOKEN_NAMES[i], i == 0);
+      }
+      ScanaStudio.gui_add_text_input("trig_address", "Device address (0 to 127)", "0");
+      ScanaStudio.gui_add_text_input("trig_endpoint", "Endpoint (0 to 15)", "0");
+    ScanaStudio.gui_end_container();
+    ScanaStudio.gui_add_new_container("SOF with a frame number", false);
+      ScanaStudio.gui_add_text_input("trig_frame", "Frame number (0 to 2047)", "0");
+    ScanaStudio.gui_end_container();
+  ScanaStudio.gui_end_selectable_containers_group();
 }
 
 //Evaluate trigger GUI
 function on_eval_gui_trigger(){
+  var type = Number(ScanaStudio.gui_get_value("trig_type"));
+  if (type == TRIG_TOKEN_ADDRESS) {
+    if (isNaN(trig_integer("trig_address", 127))) {
+      return "The device address must be an integer between 0 and 127";
+    }
+    if (isNaN(trig_integer("trig_endpoint", 15))) {
+      return "The endpoint must be an integer between 0 and 15";
+    }
+  }
+  else if (type == TRIG_SOF_FRAME) {
+    if (isNaN(trig_integer("trig_frame", 2047))) {
+      return "The frame number must be an integer between 0 and 2047";
+    }
+  }
   return ""; //All good.
+}
+
+//The value of a text field, NaN unless it is an integer between 0 and max (decimal, or hex with 0x)
+function trig_integer(id, max){
+  var text = String(ScanaStudio.gui_get_value(id)).trim();
+  var value = (text == "") ? NaN : Number(text);
+  if (isNaN(value) || (value < 0) || (value > max) || (Math.floor(value) != value)) {
+    return NaN;
+  }
+  return value;
 }
 
 //Build trigger sequence
 function on_build_trigger(){
-  //Add trigger steps here...
+  dp = ScanaStudio.gui_get_value("dp");
+  dm = ScanaStudio.gui_get_value("dm");
+  var low_speed = (ScanaStudio.gui_get_value("is_low_speed") == 1);
+  var trig = {
+    j_line: low_speed ? dm : dp, //the line that is high in the J state
+    k_line: low_speed ? dp : dm,
+    bit: 1 / (low_speed ? 1500000 : 12000000)
+  };
+  var type = Number(ScanaStudio.gui_get_value("trig_type"));
+  var steps = [];
+
+  if (type == TRIG_RESET) {
+    //inside traffic the J line stays low at most 7 K bits + 2 SE0 bits: 6 us at low speed
+    steps.push({ j: "F" });
+    steps.push({ j: "R", k: "0", t_min: Math.max(2.5e-6, 10 * trig.bit) });
+  }
+  else if (type == TRIG_SOP) {
+    steps = trig_packet_steps(usb_bits_lsb_first(0x80, 8), false);
+    //SYNC ends on K; whatever the PID, the next edge comes 2 to 6 bits later
+    steps.push({ j: "R", t_min: 1.5 * trig.bit, t_max: 6.5 * trig.bit });
+  }
+  else if (type == TRIG_EOP) {
+    //J line low for the 2 SE0 bits (and the K bits before them), then up while the K line stays low
+    steps.push({ j: "F" });
+    steps.push({ j: "R", k: "0", t_min: 1.5 * trig.bit, t_max: 10 * trig.bit });
+  }
+  else if (type == TRIG_SUSPEND) {
+    steps.push({ j: "R" });
+    steps.push({ j: "F", t_min: 3e-3 });
+  }
+  else if (type == TRIG_RESUME) {
+    steps.push({ k: "R" });
+    steps.push({ k: "F", t_min: 1e-3 });
+  }
+  else if (type == TRIG_TOKEN) {
+    var pid = TRIG_TOKEN_PIDS[ScanaStudio.gui_get_value("trig_token_pid")];
+    steps = trig_packet_steps(usb_bits_lsb_first(0x80, 8).concat(usb_bits_lsb_first(pid, 8)), false);
+  }
+  else if (type == TRIG_DATA_HANDSHAKE) {
+    var pid = TRIG_DATA_PIDS[ScanaStudio.gui_get_value("trig_data_pid")];
+    var handshake = (pid == USB_ACK) || (pid == USB_NACK) || (pid == USB_STALL);
+    steps = trig_packet_steps(usb_bits_lsb_first(0x80, 8).concat(usb_bits_lsb_first(pid, 8)), handshake);
+  }
+  else if ((type == TRIG_TOKEN_ADDRESS) || (type == TRIG_SOF_FRAME)) {
+    var pid, field;
+    if (type == TRIG_TOKEN_ADDRESS) {
+      pid = TRIG_TOKEN_PIDS[ScanaStudio.gui_get_value("trig_addr_pid")];
+      field = trig_integer("trig_address", 127) | (trig_integer("trig_endpoint", 15) << 7);
+    }
+    else {
+      pid = USB_SOF;
+      field = trig_integer("trig_frame", 2047);
+    }
+    var bits = usb_bits_lsb_first(0x80, 8).concat(usb_bits_lsb_first(pid, 8),
+      usb_bits_lsb_first(field, 11), usb_bits_lsb_first(usb_crc5(field), 5));
+    steps = trig_packet_steps(bits, true);
+  }
+
+  for (var i = 0; i < steps.length; i++) {
+    var s = steps[i];
+    var t_min = (s.t_min == undefined) ? -1 : s.t_min;
+    var t_max = (s.t_max == undefined) ? -1 : s.t_max;
+    ScanaStudio.flexitrig_append(trig_step(trig, s), (i == 0) ? -1 : t_min, (i == 0) ? -1 : t_max);
+  }
+
+  //The edges of a packet, half a bit either side of where its bits put them. They are looked
+  //for after the end of an SE0 (EOP or reset), so that a payload copying them cannot match.
+  function trig_packet_steps(bits, until_eop) {
+    var line = usb_line_states(bits);
+    var out = [{ j: "R", k: "0" }];
+    var last_edge = -1;
+    for (var b = 0; b < line.length; b++) {
+      var previous = (b == 0) ? "J" : line[b - 1];
+      if (line[b] != previous) {
+        var step = { j: (line[b] == "K") ? "F" : "R" };
+        if (last_edge >= 0) {
+          step.t_min = (b - last_edge - 0.5) * trig.bit;
+          step.t_max = (b - last_edge + 0.5) * trig.bit;
+        }
+        out.push(step);
+        last_edge = b;
+      }
+    }
+    if (until_eop) {
+      //the SE0 of the EOP starts right after the last bit: whichever line is high goes low
+      var step = (line[line.length - 1] == "J") ? { j: "F" } : { k: "F" };
+      step.t_min = (line.length - last_edge - 0.5) * trig.bit;
+      step.t_max = (line.length - last_edge + 0.5) * trig.bit;
+      out.push(step);
+    }
+    return out;
+  }
+
+  function trig_step(trig, s) {
+    var step = "";
+    for (var c = 0; c < ScanaStudio.get_device_channels_count(); c++) {
+      var cell = "X";
+      if ((c == trig.j_line) && (s.j != undefined)) {
+        cell = s.j;
+      }
+      else if ((c == trig.k_line) && (s.k != undefined)) {
+        cell = s.k;
+      }
+      step = cell + step;
+    }
+    return step;
+  }
 }
+
+/*
+ * Packet encoding, shared by the trigger and the demo signals
+*/
+
+function usb_bits_lsb_first(value, count){
+  var bits = [];
+  for (var i = 0; i < count; i++) {
+    bits.push((value >> i) & 1);
+  }
+  return bits;
+}
+
+//Bits as they are sent from SYNC on: a 0 is stuffed after six 1s, then NRZI from the idle J
+function usb_line_states(bits){
+  var states = [];
+  var state = "J";
+  var ones = 0;
+  for (var i = 0; i < bits.length; i++) {
+    if (bits[i] == 0) {
+      state = (state == "J") ? "K" : "J";
+      ones = 0;
+    }
+    else {
+      ones++;
+    }
+    states.push(state);
+    if (ones == 6) {
+      state = (state == "J") ? "K" : "J";
+      states.push(state);
+      ones = 0;
+    }
+  }
+  return states;
+}
+
+function usb_crc5(field){
+  var crc = 0x1F;
+  for (var i = 0; i < 11; i++) {
+    var bit = (field >> i) & 1;
+    crc = ((crc ^ bit) & 1) ? ((crc >> 1) ^ 0x14) : (crc >> 1);
+  }
+  return (~crc) & 0x1F;
+}
+
+function usb_crc16(bytes){
+  var crc = 0xFFFF;
+  for (var i = 0; i < bytes.length; i++) {
+    for (var b = 0; b < 8; b++) {
+      var bit = (bytes[i] >> b) & 1;
+      crc = ((crc ^ bit) & 1) ? ((crc >> 1) ^ 0xA001) : (crc >> 1);
+    }
+  }
+  return (~crc) & 0xFFFF;
+}
+
+/*
+ * Demo signals: a device being enumerated, then polled
+*/
+
+function on_build_demo_signals(){
+  var builder = ScanaStudio.BuilderObject;
+  var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
+  var low_speed = (ScanaStudio.gui_get_value("is_low_speed") == 1);
+  builder.config(ScanaStudio.gui_get_value("dp"), ScanaStudio.gui_get_value("dm"),
+    ScanaStudio.builder_get_sample_rate(), low_speed);
+
+  var frame = 0;
+  var toggle = 0;
+  var suspended = false;
+  builder.put_idle(200);
+  builder.put_reset(10e-6);
+  builder.put_idle(40);
+  while ((builder.samples_acc() < samples_to_build) && !ScanaStudio.abort_is_requested()) {
+    var frame_start = builder.samples_acc();
+    if (low_speed) {
+      builder.put_eop(); //keep-alive
+    }
+    else {
+      builder.put_packet(builder.token(USB_SOF, frame & 0x7FF));
+    }
+    builder.put_idle(20);
+    switch (frame) {
+      case 0: //GET_DESCRIPTOR (device), first try NAKed
+        builder.put_transaction(builder.token(USB_SETUP, 0), builder.data(USB_DATA0, [0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 0x40, 0x00]), USB_ACK);
+        builder.put_transaction(builder.token(USB_IN, 0), null, USB_NACK);
+        break;
+      case 1:
+        builder.put_transaction(builder.token(USB_IN, 0), builder.data(USB_DATA1,
+          [0x12, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x08]), USB_ACK);
+        builder.put_transaction(builder.token(USB_OUT, 0), builder.data(USB_DATA1, []), USB_ACK);
+        break;
+      case 2: //SET_ADDRESS 5
+        builder.put_transaction(builder.token(USB_SETUP, 0), builder.data(USB_DATA0, [0x00, 0x05, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00]), USB_ACK);
+        builder.put_transaction(builder.token(USB_IN, 0), builder.data(USB_DATA1, []), USB_ACK);
+        break;
+      default: //the device at address 5: polled on EP1 IN, written on EP2 OUT, EP3 stalled
+        if (frame % 3 == 0) {
+          builder.put_transaction(builder.token(USB_IN, 5 | (1 << 7)), null, USB_NACK);
+        }
+        else {
+          builder.put_transaction(builder.token(USB_IN, 5 | (1 << 7)),
+            builder.data(toggle ? USB_DATA1 : USB_DATA0, [frame & 0xFF, 0x80, 0x00, 0xFF]), USB_ACK);
+          toggle ^= 1;
+        }
+        builder.put_transaction(builder.token(USB_OUT, 5 | (2 << 7)), builder.data(USB_DATA0, [0x01, 0x02, 0x03, frame & 0xFF]), USB_ACK);
+        if (frame % 5 == 0) {
+          builder.put_transaction(builder.token(USB_IN, 5 | (3 << 7)), null, USB_STALL);
+        }
+        break;
+    }
+    frame++;
+    //one frame per millisecond; once, the bus is suspended then resumed if there is room for it
+    if (!suspended && (frame == 6) && (builder.samples_left(samples_to_build) > builder.samples_for(6e-3))) {
+      builder.put_idle_time(3.5e-3);
+      builder.put_resume(1.5e-3);
+      builder.put_idle(40);
+      suspended = true;
+    }
+    else {
+      builder.put_idle_until(frame_start + builder.samples_for(1e-3));
+    }
+  }
+}
+
+//Builder object that can be shared to other scripts: whole packets on D+ and D-
+ScanaStudio.BuilderObject = {
+  config: function(ch_dp, ch_dm, sample_rate, low_speed){
+    this.ch_dp = ch_dp;
+    this.ch_dm = ch_dm;
+    this.sample_rate = sample_rate;
+    this.low_speed = low_speed;
+    this.samples_per_bit = sample_rate / (low_speed ? 1500000 : 12000000);
+    this.position = 0; //in samples, fractional
+    this.written = 0;  //in samples, as written
+  },
+  samples_acc: function(){
+    return this.written;
+  },
+  samples_for: function(seconds){
+    return Math.round(seconds * this.sample_rate);
+  },
+  samples_left: function(total){
+    return total - this.written;
+  },
+  //state: "J", "K" or "SE0", held for a number of bits (fractional allowed)
+  put_state: function(state, bits){
+    this.position += bits * this.samples_per_bit;
+    var n = Math.round(this.position) - this.written;
+    if (n <= 0) {
+      return;
+    }
+    var dp_level = 0, dm_level = 0;
+    if (state != "SE0") {
+      var j = (state == "J");
+      dp_level = (j != this.low_speed) ? 1 : 0;
+      dm_level = 1 - dp_level;
+    }
+    ScanaStudio.builder_add_samples(this.ch_dp, dp_level, n);
+    ScanaStudio.builder_add_samples(this.ch_dm, dm_level, n);
+    this.written += n;
+  },
+  put_idle: function(bits){
+    this.put_state("J", bits);
+  },
+  put_idle_time: function(seconds){
+    this.put_state("J", seconds * this.sample_rate / this.samples_per_bit);
+  },
+  put_idle_until: function(sample){
+    if (sample > this.written) {
+      this.put_state("J", (sample - this.position) / this.samples_per_bit);
+    }
+  },
+  put_reset: function(seconds){
+    this.put_state("SE0", seconds * this.sample_rate / this.samples_per_bit);
+  },
+  put_eop: function(){
+    this.put_state("SE0", 2);
+    this.put_state("J", 1);
+  },
+  //K held by the host, ended by a low speed EOP
+  put_resume: function(seconds){
+    this.put_state("K", seconds * this.sample_rate / this.samples_per_bit);
+    this.put_state("SE0", 2 * this.samples_per_bit_ls() / this.samples_per_bit);
+    this.put_state("J", 1);
+  },
+  samples_per_bit_ls: function(){
+    return this.sample_rate / 1500000;
+  },
+  token: function(pid, field){
+    var crc = 0x1F;
+    for (var i = 0; i < 11; i++) {
+      var bit = (field >> i) & 1;
+      crc = ((crc ^ bit) & 1) ? ((crc >> 1) ^ 0x14) : (crc >> 1);
+    }
+    crc = (~crc) & 0x1F;
+    return [pid, field & 0xFF, ((field >> 8) & 0x07) | (crc << 3)];
+  },
+  data: function(pid, bytes){
+    var crc = 0xFFFF;
+    for (var i = 0; i < bytes.length; i++) {
+      for (var b = 0; b < 8; b++) {
+        var bit = (bytes[i] >> b) & 1;
+        crc = ((crc ^ bit) & 1) ? ((crc >> 1) ^ 0xA001) : (crc >> 1);
+      }
+    }
+    crc = (~crc) & 0xFFFF;
+    return [pid].concat(bytes, [crc & 0xFF, crc >> 8]);
+  },
+  //SYNC, the bytes LSB first with bit stuffing, NRZI, then the EOP
+  put_packet: function(bytes){
+    var state = "J";
+    var ones = 0;
+    var all = [0x80].concat(bytes);
+    for (var i = 0; i < all.length; i++) {
+      for (var b = 0; b < 8; b++) {
+        if ((all[i] >> b) & 1) {
+          ones++;
+        }
+        else {
+          state = (state == "J") ? "K" : "J";
+          ones = 0;
+        }
+        this.put_state(state, 1);
+        if (ones == 6) {
+          state = (state == "J") ? "K" : "J";
+          this.put_state(state, 1);
+          ones = 0;
+        }
+      }
+    }
+    this.put_eop();
+  },
+  put_transaction: function(token, data, handshake){
+    this.put_packet(token);
+    this.put_idle(4);
+    if (data != null) {
+      this.put_packet(data);
+      this.put_idle(4);
+    }
+    this.put_packet([handshake]);
+    this.put_idle(30);
+  }
+};
 
 function format_float(fl){
   return Math.round(fl*1000)/1000;
