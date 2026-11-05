@@ -3,13 +3,14 @@
 <DESCRIPTION>
 gray code support for ScanaStudio.
 </DESCRIPTION>
-<VERSION> 0.4 </VERSION>
-<AUTHOR_NAME>	Juille Neil, Ibrahim KAMAL	</AUTHOR_NAME>
+<VERSION> 0.5 </VERSION>
+<AUTHOR_NAME>	Juille Neil, Ibrahim KAMAL, Nicolas BASTIT	</AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/ </HELP_URL>
 <COPYRIGHT> Copyright 2019 Ikalogic SAS </COPYRIGHT>
 <LICENSE>	This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.5: Decoding, demo, trigger and CSV fixed. Position, velocity and acceleration graphs.
 V0.4: Fixed the on_build_demo_signals, on_decode_signals and added a trigger. Also added a table in the GUI in order to help users.
 V0.3: Added dec_item_end() for each dec_item_new().
 V0.2: Added CSV plotting option
@@ -18,6 +19,7 @@ V0.1: Initial release and create builder demo
 */
 
 var ENCODING = "UTF-8";
+var DEFAULT_BITS = 4;
 
 //Decoder GUI
 function on_draw_gui_decoder()
@@ -25,10 +27,10 @@ function on_draw_gui_decoder()
 	for (var i = 0; i < ScanaStudio.get_device_channels_count(); i++)
 	{
 		ScanaStudio.gui_add_combo_box("ch_b"+i.toString(),"Bit " + i.toString() + " Channel");
-		ScanaStudio.gui_add_item_to_combo_box("Not used",false);
+		ScanaStudio.gui_add_item_to_combo_box("Not used",i >= DEFAULT_BITS);
 		for (var c = 0; c < ScanaStudio.get_device_channels_count(); c++)
 		{
-			if (c==i)
+			if ((c==i) && (i < DEFAULT_BITS))
 			{
 				ScanaStudio.gui_add_item_to_combo_box("Ch "+(c+1).toString(),true);
 			}
@@ -50,19 +52,25 @@ function on_draw_gui_decoder()
 	ScanaStudio.gui_end_container();
 	ScanaStudio.gui_end_selectable_containers_group();
 
-	ScanaStudio.gui_add_new_tab("CSV plotting options",false);
-	ScanaStudio.gui_add_info_label(" Select a file where decoded values should be saved."
-	+ "\nClear this field if you don't want to save to file."
-);
-ScanaStudio.gui_add_file_save("csv_dest","Target CSV file","*.csv");
-ScanaStudio.gui_add_check_box("write_file_position","Write position values to file",false);
-ScanaStudio.gui_add_check_box("write_file_velocity","Write velocity values to file",false);
-ScanaStudio.gui_add_check_box("write_file_acceleration","Write acceleration values to file",false);
+	ScanaStudio.gui_add_new_tab("Graphs",false);
+	ScanaStudio.gui_add_info_label("Each graph is a virtual analog channel, with a point at each code change.");
+	ScanaStudio.gui_add_check_box("display_position","Display the position (angle or distance)",true);
+	ScanaStudio.gui_add_check_box("display_velocity","Display the velocity",false);
+	ScanaStudio.gui_add_check_box("display_acceleration","Display the acceleration",false);
+	ScanaStudio.gui_end_tab();
 
-ScanaStudio.gui_add_combo_box("decimal_point","Decimal point character");
-ScanaStudio.gui_add_item_to_combo_box("Dot (12.3)",true);
-ScanaStudio.gui_add_item_to_combo_box("Comma (12,3)",false);
-ScanaStudio.gui_end_tab();
+	ScanaStudio.gui_add_new_tab("CSV plotting options",false);
+	ScanaStudio.gui_add_info_label("Select a file where decoded values should be saved, one line per code change."
+		+ "\nClear this field if you don't want to save to file.");
+	ScanaStudio.gui_add_file_save("csv_dest","Target CSV file","*.csv");
+	ScanaStudio.gui_add_check_box("write_file_position","Write position values to file",false);
+	ScanaStudio.gui_add_check_box("write_file_velocity","Write velocity values to file",false);
+	ScanaStudio.gui_add_check_box("write_file_acceleration","Write acceleration values to file",false);
+
+	ScanaStudio.gui_add_combo_box("decimal_point","Decimal point character");
+	ScanaStudio.gui_add_item_to_combo_box("Dot (12.3)",true);
+	ScanaStudio.gui_add_item_to_combo_box("Comma (12,3)",false);
+	ScanaStudio.gui_end_tab();
 }
 
 //Evaluate decoder GUI
@@ -141,42 +149,52 @@ function get_used_gray_channels_list()
 
 //Global variables
 var sampling_rate;
-var state_machine;
-var lagging_channel;
-var lagging_sample;
 var ch_list = [];
 var ch_display;
 var trs = [];
-var prev_trs = [];
-var start_sample;
+var trs_pending = [];
+var levels = [];
+var level_known = [];
+var decoding_started;
+var code_start;
+var code_warning;
 var gray_code;
 var binary_code;
-var all_channels_ready;
 var gray_bits_count;
-var prev_binary_code;
 var gray_max_value;
 var direction_text,direction_short_text,encoder_value_text;
 var gray_type;
 var increment_step;
 var encoder_value;
 var show_encoder_count;
+var display_position, display_velocity, display_acceleration;
 var file_handle;
+var csv_enabled;
 var write_file_position;
 var write_file_velocity;
 var write_file_acceleration;
 var decimal_chr;
 var rot_enc_ratio;
 var lin_enc_step;
+//Motion between code changes, in samples: velocity is an average over the last step, placed at its middle
+var prev_change_time, prev_velocity_time; //samples
+var velocity, acceleration, velocity_known, acceleration_known;
+
+var VAC_POSITION = 0;
+var VAC_VELOCITY = 1;
+var VAC_ACCELERATION = 2;
 
 function on_decode_signals(resume)
 {
 	if (!resume) //If resume == false, it's the first call to this function.
 	{
-		state_machine = 0;
 		ch_list = get_used_gray_channels_list();
 		gray_type = ScanaStudio.gui_get_value("gray_type");
 		sampling_rate = ScanaStudio.get_capture_sample_rate();
 		show_encoder_count = ScanaStudio.gui_get_value("show_encoder_count");
+		display_position = ScanaStudio.gui_get_value("display_position");
+		display_velocity = ScanaStudio.gui_get_value("display_velocity");
+		display_acceleration = ScanaStudio.gui_get_value("display_acceleration");
 		write_file_position = ScanaStudio.gui_get_value("write_file_position");
 		write_file_velocity = ScanaStudio.gui_get_value("write_file_velocity");
 		write_file_acceleration = ScanaStudio.gui_get_value("write_file_acceleration");
@@ -190,14 +208,8 @@ function on_decode_signals(resume)
 		{
 			decimal_chr = ",";
 		}
-		trs = [];
-		start_sample = 0;
-		lagging_channel = 0;
-		lagging_sample = 0;
-		prev_binary_code = -1;
 		gray_bits_count = ch_list.length;
 		gray_max_value = (Math.pow(2,ch_list.length)-1);
-		encoder_value = 0;
 
 		if (gray_type == 0) //Rotary
 		{
@@ -210,129 +222,299 @@ function on_decode_signals(resume)
 
 		ch_display = ch_list[0];
 
-		//Reset iterators
+		trs = [];
+		trs_pending = [];
+		levels = [];
+		level_known = [];
 		for (var i = 0 ; i < gray_bits_count; i++)
 		{
-			ScanaStudio.trs_reset(ch_list[i]);
-			trs.push(ScanaStudio.trs_get_next(ch_list[i]));
+			trs.push(null);
+			trs_pending.push(false);
+			levels.push(0);
+			level_known.push(false);
 		}
+		decoding_started = false;
+		code_start = -1; //No item before the first code change
 
+		prev_change_time = -1;
+		prev_velocity_time = -1;
+		velocity = 0;
+		acceleration = 0;
+		velocity_known = false;
+		acceleration_known = false;
+
+		create_vacs();
+
+		csv_enabled = false;
 		file_handle = ScanaStudio.file_system_open("csv_dest","w");
-
 		if (file_handle >= 0)
 		{
-			append_header_to_file();
+			csv_enabled = true;
+			write_csv_header();
+			ScanaStudio.file_system_close(file_handle);
 		}
 	}
 
+	if (!decoding_started)
+	{
+		if (!read_initial_levels())
+		{
+			return; //Waits for more data
+		}
+		decoding_started = true;
+		read_code();
+		encoder_value = wrap_position(binary_code * increment_step); //An absolute encoder knows where it starts
+		if (display_position)
+		{
+			ScanaStudio.vac_append_sample(VAC_POSITION, 0, encoder_value);
+		}
+	}
+
+	file_handle = csv_enabled ? ScanaStudio.file_system_open("csv_dest","a") : -1;
+
 	while (ScanaStudio.abort_is_requested() == false)
 	{
-		if (is_all_last_trs())
+		var change_sample = next_change_sample();
+		if (change_sample < 0)
 		{
-			break;
+			break; //Waits for more data
 		}
 
-		switch (state_machine)
+		if (code_start >= 0)
 		{
-			case 0: //Advance to first transition on all channels
-			all_channels_ready = true;
-			for (var i = 0; i < gray_bits_count; i++)
-			{
-				if (trs[i].sample_index == 0)
-				{
-					all_channels_ready = false;
-					prev_trs[i] = trs[i];
-					trs[i] = ScanaStudio.trs_get_next(ch_list[i]);
-				}
-			}
-			if (all_channels_ready == true)
-			{
-				state_machine++;
-			}
-			break;
-
-			case 1: //Advance lagging channel only
-			lagging_channel = get_lagging_channel(); //Find lagging channel
-			start_sample = trs[lagging_channel].sample_index;
-			prev_trs[lagging_channel] = trs[lagging_channel];
-			trs[lagging_channel] = ScanaStudio.trs_get_next(ch_list[lagging_channel]);
-			lagging_sample = trs[lagging_channel].sample_index;
-
-			if (trs[lagging_channel].sample_index > 0)
-			{
-				lagging_channel = get_lagging_channel(); //Update lagging channel number
-				//build gray code
-				gray_code = 0;
-				for (var i = 0; i < gray_bits_count; i++)
-				{
-					gray_code |= ((prev_trs[i].value) << i);
-				}
-
-				//Convert to binary code
-				binary_code = (gray_code);
-
-				//Add dec item
-				ScanaStudio.dec_item_new(ch_display,start_sample,trs[lagging_channel].sample_index);
-				if (prev_binary_code == -1)
-				{
-					direction_text = " Direction ?"; //unknown direction (yet)
-					direction_short_text = " "; //unknown direction (yet)
-				}
-				else if (((prev_binary_code + 1) & gray_max_value) == binary_code)
-				{
-					direction_text = " +";
-					direction_short_text = "+";
-					encoder_increment();
-				}
-				else if (((prev_binary_code - 1) & gray_max_value) == binary_code)
-				{
-					direction_text = " -";
-					direction_short_text = "-";
-					encoder_decrement();
-				}
-				else
-				{
-					ScanaStudio.dec_item_emphasize_warning();
-				}
-
-				if (show_encoder_count == true)
-				{
-					if (gray_type == 0)
-					{
-						encoder_value_text = " Count = " + encoder_value.toString(10) + "°";
-					}
-					else
-					{
-						encoder_value_text = " Count = " + ScanaStudio.engineering_notation(encoder_value,3) + "m";
-					}
-				}
-				else
-				{
-					encoder_value_text = "";
-				}
-
-				ScanaStudio.dec_item_add_content(binary_code.toString(10) + direction_text + encoder_value_text);
-				ScanaStudio.dec_item_add_content(binary_code.toString(10) + direction_text);
-				ScanaStudio.dec_item_add_content(binary_code.toString(10) + direction_short_text);
-				ScanaStudio.dec_item_end();
-
-				if (file_handle >= 0)
-				{
-					append_new_line_to_file(start_sample/sampling_rate);
-				}
-
-				prev_binary_code = binary_code;
-				break;
-			}
-			default: //we should never arrive here...
-			state_machine = 0;
+			add_code_item(code_start, change_sample);
 		}
+
+		//Transitions at the same sample make a single code change
+		for (var i = 0; i < gray_bits_count; i++)
+		{
+			if (trs_pending[i] && (trs[i].sample_index == change_sample))
+			{
+				levels[i] = trs[i].value;
+				trs_pending[i] = false;
+			}
+		}
+		var prev_binary_code = binary_code;
+		read_code();
+		var steps = update_direction(prev_binary_code);
+		update_motion(change_sample, steps);
+		if (file_handle >= 0)
+		{
+			write_csv_line(change_sample/sampling_rate);
+		}
+		code_start = change_sample;
 	}
 
 	if (file_handle >= 0)
 	{
 		ScanaStudio.file_system_close(file_handle);
 	}
+}
+
+//The transitions at sample 0 give a channel's initial level. A channel that holds no
+//transition yet reads as a value that is neither 0 nor 1 (ScanaStudio 3): it is read again later.
+//Returns true once every channel's initial level is known.
+function read_initial_levels()
+{
+	var all_known = true;
+	for (var i = 0; i < gray_bits_count; i++)
+	{
+		if (level_known[i])
+		{
+			continue;
+		}
+		ScanaStudio.trs_reset(ch_list[i]);
+		trs[i] = ScanaStudio.trs_get_next(ch_list[i]);
+		if ((trs[i].value != 0) && (trs[i].value != 1))
+		{
+			all_known = false;
+			continue;
+		}
+		levels[i] = (trs[i].sample_index == 0) ? trs[i].value : 1 - trs[i].value;
+		trs_pending[i] = (trs[i].sample_index > 0);
+		while (!trs_pending[i] && ScanaStudio.trs_is_not_last(ch_list[i]))
+		{
+			trs[i] = ScanaStudio.trs_get_next(ch_list[i]);
+			if (trs[i].sample_index == 0)
+			{
+				levels[i] = trs[i].value;
+			}
+			else
+			{
+				trs_pending[i] = true;
+			}
+		}
+		level_known[i] = true;
+	}
+	return all_known;
+}
+
+//Sample of the earliest transition not decoded yet, or -1 when there is none (yet)
+function next_change_sample()
+{
+	var first = -1;
+	for (var i = 0; i < gray_bits_count; i++)
+	{
+		if (!trs_pending[i] && ScanaStudio.trs_is_not_last(ch_list[i]))
+		{
+			trs[i] = ScanaStudio.trs_get_next(ch_list[i]);
+			trs_pending[i] = true;
+		}
+		if (trs_pending[i] && ((first < 0) || (trs[i].sample_index < first)))
+		{
+			first = trs[i].sample_index;
+		}
+	}
+	return first;
+}
+
+function read_code()
+{
+	gray_code = 0;
+	for (var i = 0; i < gray_bits_count; i++)
+	{
+		gray_code |= (levels[i] << i);
+	}
+	binary_code = gray_to_binary(gray_code);
+}
+
+//Returns the number of steps moved, the shortest way round when steps were skipped
+function update_direction(prev_binary_code)
+{
+	var positions = gray_max_value + 1;
+	var steps = (binary_code - prev_binary_code + positions) % positions;
+	if (steps > positions / 2)
+	{
+		steps -= positions;
+	}
+
+	code_warning = false;
+	if (steps == 1)
+	{
+		direction_text = " +";
+		direction_short_text = "+";
+	}
+	else if (steps == -1)
+	{
+		direction_text = " -";
+		direction_short_text = "-";
+	}
+	else //Steps were skipped
+	{
+		direction_text = " Direction ?";
+		direction_short_text = " ";
+		code_warning = true;
+	}
+	encoder_value = wrap_position(encoder_value + steps * increment_step);
+
+	if (show_encoder_count == true)
+	{
+		encoder_value_text = " Count = " + format_position(encoder_value);
+	}
+	else
+	{
+		encoder_value_text = "";
+	}
+	return steps;
+}
+
+function wrap_position(value)
+{
+	if (gray_type == 0) //The angle wraps at 360°
+	{
+		value = value % 360;
+		if (value < 0)
+		{
+			value += 360;
+		}
+	}
+	return value;
+}
+
+function format_position(value)
+{
+	if (gray_type == 0)
+	{
+		//Enough decimals to tell two steps apart
+		var decimals = Math.min(6, Math.max(1, Math.ceil(-Math.log(increment_step) / Math.LN10) + 2));
+		return Number(value.toFixed(decimals)).toString() + "°";
+	}
+	return ScanaStudio.engineering_notation(value,3) + "m";
+}
+
+function update_motion(change_sample, steps)
+{
+	if (prev_change_time >= 0 && change_sample > prev_change_time)
+	{
+		var velocity_time = (prev_change_time + change_sample) / 2;
+		var new_velocity = steps * increment_step * sampling_rate / (change_sample - prev_change_time);
+		acceleration_known = velocity_known && (velocity_time > prev_velocity_time);
+		if (acceleration_known)
+		{
+			acceleration = (new_velocity - velocity) * sampling_rate / (velocity_time - prev_velocity_time);
+			if (display_acceleration)
+			{
+				ScanaStudio.vac_append_sample(VAC_ACCELERATION, Math.round((prev_velocity_time + velocity_time) / 2), acceleration);
+			}
+		}
+		velocity = new_velocity;
+		velocity_known = true;
+		prev_velocity_time = velocity_time;
+		if (display_velocity)
+		{
+			ScanaStudio.vac_append_sample(VAC_VELOCITY, Math.round(velocity_time), velocity);
+		}
+	}
+	prev_change_time = change_sample;
+	if (display_position)
+	{
+		ScanaStudio.vac_append_sample(VAC_POSITION, change_sample, encoder_value);
+	}
+}
+
+function create_vacs()
+{
+	var unit = (gray_type == 0) ? "°" : "m";
+	if (display_position)
+	{
+		ScanaStudio.vac_create_channel(VAC_POSITION, unit, "#118c8c", (gray_type == 0) ? "Angle" : "Position");
+		ScanaStudio.vac_set_size(VAC_POSITION, 3);
+	}
+	else
+	{
+		ScanaStudio.vac_remove_channel(VAC_POSITION);
+	}
+	if (display_velocity)
+	{
+		ScanaStudio.vac_create_channel(VAC_VELOCITY, unit + "/s", "#8c6d11", "Velocity");
+		ScanaStudio.vac_set_size(VAC_VELOCITY, 3);
+	}
+	else
+	{
+		ScanaStudio.vac_remove_channel(VAC_VELOCITY);
+	}
+	if (display_acceleration)
+	{
+		ScanaStudio.vac_create_channel(VAC_ACCELERATION, unit + "/s²", "#8c118c", "Acceleration");
+		ScanaStudio.vac_set_size(VAC_ACCELERATION, 3);
+	}
+	else
+	{
+		ScanaStudio.vac_remove_channel(VAC_ACCELERATION);
+	}
+}
+
+function add_code_item(start, end)
+{
+	ScanaStudio.dec_item_new(ch_display,start,end);
+	if (code_warning)
+	{
+		ScanaStudio.dec_item_emphasize_warning();
+	}
+	ScanaStudio.dec_item_add_content(binary_code.toString(10) + direction_text + encoder_value_text);
+	ScanaStudio.dec_item_add_content(binary_code.toString(10) + direction_text);
+	ScanaStudio.dec_item_add_content(binary_code.toString(10) + direction_short_text);
+	ScanaStudio.dec_item_end();
 }
 
 // GUI trigger
@@ -344,74 +526,68 @@ function on_draw_gui_trigger()
 	ScanaStudio.gui_add_item_to_combo_box("Trig only on counter-clockwise rotation", false);
 	ScanaStudio.gui_add_new_selectable_containers_group("trig","Select the format of the data you want to trig on");
 	ScanaStudio.gui_add_new_container("Trigger on a specific gray value", true);
-	ScanaStudio.gui_add_text_input("gray_value","Gray value to trig on","");
-	ScanaStudio.gui_add_info_label("The value entered will be converted in integer before traitment. The following table gives you an example of some value :");
+	ScanaStudio.gui_add_text_input("gray_value","Gray value to trig on","0");
+	ScanaStudio.gui_add_info_label("Gray value: the position of the encoder, 0 being the first one.");
 	ScanaStudio.gui_end_container();
 	ScanaStudio.gui_add_new_container("Trigger on a specific angle value", false);
-	ScanaStudio.gui_add_text_input("angle_value","Angle value to trig on","");
+	ScanaStudio.gui_add_text_input("angle_value","Angle value to trig on","0");
 	ScanaStudio.gui_add_info_label("Write a value between 0 and 360 degrees, no angle value in radian.");
 	ScanaStudio.gui_end_container();
 	ScanaStudio.gui_add_new_container("Trigger on a specific integer value", false);
-	ScanaStudio.gui_add_text_input("integer_value","Integer value to trig on","");
-	ScanaStudio.gui_add_info_label("Be careful ! If you use this option, you already know the waveform in graycode of the integer you want to trig on. You can use the following table :");
+	ScanaStudio.gui_add_text_input("integer_value","Integer value to trig on","0");
+	ScanaStudio.gui_add_info_label("Integer value: the levels of the channels read as a binary number, bit 0 being the \"Bit 0\" channel.");
 	ScanaStudio.gui_end_container();
 	ScanaStudio.gui_end_selectable_containers_group()
-	ScanaStudio.gui_add_info_label(""
-	+ "Graycode base 2     Gray code base 10     integer base 10 \n"
-	+ "     0  0  0  0                         0                            0        \n"
-	+ "     0  0  0  1                         1                            1        \n"
-	+ "     0  0  1  1                         2                            3        \n"
-	+ "     0  0  1  0                         3                            2        \n"
-	+ "     0  1  1  0                         4                            6        \n"
-	+ "     0  1  1  1                         5                            7        \n"
-	+ "     0  1  0  1                         6                            5        \n"
-	+ "     0  1  0  0                         7                            4        \n"
-	+ "     1  1  0  0                         8                           12       \n"
-	+ "     1  1  0  1                         9                           13       \n"
-	+ "     1  1  1  1                        10                          15       \n"
-	+ "     1  1  1  0                        11                          14       \n"
-	+ "     1  0  1  0                        12                          10       \n"
-	+ "     1  0  1  1                        13                          11       \n"
-	+ "     1  0  0  1                        14                           9        \n"
-	+ "     1  0  0  0                        13                           8        ");
+	var table = "Example with 4 bits\nChannels (bit 3 to 0) : Gray value / Integer value";
+	for (var position = 0; position < 16; position++)
+	{
+		var levels_value = binary_to_gray(position);
+		var bits = "";
+		for (var b = 3; b >= 0; b--)
+		{
+			bits += ((levels_value >> b) & 1).toString();
+		}
+		table += "\n" + bits + " : " + position.toString() + " / " + levels_value.toString();
+	}
+	ScanaStudio.gui_add_info_label(table);
 }
 
 //Evaluate trigger GUI
 function on_eval_gui_trigger()
 {
-	gray_value = ScanaStudio.gui_get_value("gray_value");
-	angle_value = ScanaStudio.gui_get_value("angle_value");
-	integer_value = ScanaStudio.gui_get_value("integer_value");
+	ch_list = get_used_gray_channels_list();
+	gray_max_value = (Math.pow(2,ch_list.length)-1);
+	var trig = ScanaStudio.gui_get_value("trig");
+	var value;
 
-	if (isNaN(gray_value))
+	if (trig == 0)
 	{
-		return "Please write only in gray code format";
+		value = ScanaStudio.gui_get_value("gray_value");
 	}
-	if (isNaN(angle_value))
+	else if (trig == 1)
 	{
-		return "Please write a value between 0 and 360° ";
+		value = ScanaStudio.gui_get_value("angle_value");
 	}
-	if (isNaN(integer_value))
+	else
 	{
-		return "Please write only an integer";
-	}
-	if (angle_value < 0 && angle_value > 360)
-	{
-		return "Please write a value between 0 and 360 degrees";
-	}
-	if (gray_value 	  > (Math.pow(2,ch_list.length)-1) ||
-		integer_value > (Math.pow(2,ch_list.length)-1))
-	{
-		return "Be careful, there is not enough channel to code the value entered";
+		value = ScanaStudio.gui_get_value("integer_value");
 	}
 
-	for (i = 0; i < ch_list.length; i++)
+	if ((String(value).trim() == "") || isNaN(value))
 	{
-		if ((gray_value >> (ch_list.length-i) && 0x01) != 0 ||
-		(gray_value >> (ch_list.length-i) && 0x01) != 1)
+		return "Please write a number";
+	}
+	value = Number(value);
+	if (trig == 1)
+	{
+		if ((value < 0) || (value > 360))
 		{
-			return "Please write only 0 or 1";
+			return "Please write a value between 0 and 360 degrees";
 		}
+	}
+	else if ((value < 0) || (value > gray_max_value) || (Math.floor(value) != value))
+	{
+		return "Please write an integer between 0 and " + gray_max_value.toString() + " (" + ch_list.length.toString() + " bits)";
 	}
 	return ""; //All good.
 }
@@ -438,18 +614,18 @@ function on_build_trigger()
 		increment_step = lin_enc_step;
 	}
 
-
+	//int_to_trig_on is the levels of the channels (the integer column of the table)
 	if (trig == 0)//gray value
 	{
-		int_to_trig_on = gray_to_int(parseInt(ScanaStudio.gui_get_value("gray_value")));
+		int_to_trig_on = binary_to_gray(parseInt(ScanaStudio.gui_get_value("gray_value")) & gray_max_value);
 	}
 	else if (trig == 1)//angle value
 	{
-		int_to_trig_on = gray_to_int(parseInt(ScanaStudio.gui_get_value("angle_value")) / increment_step) ;
+		int_to_trig_on = binary_to_gray(Math.round(parseFloat(ScanaStudio.gui_get_value("angle_value")) / increment_step) & gray_max_value);
 	}
 	else//integer value
 	{
-		int_to_trig_on = parseInt(ScanaStudio.gui_get_value("integer_value"));
+		int_to_trig_on = parseInt(ScanaStudio.gui_get_value("integer_value")) & gray_max_value;
 	}
 
 	if (rotation_sense == 0)//no matter
@@ -458,12 +634,12 @@ function on_build_trigger()
 	}
 	else if (rotation_sense == 1)//clockwise
 	{
-		pre_trig = gray_to_int(int_to_gray(int_to_trig_on) - 1);
+		pre_trig = binary_to_gray((gray_to_binary(int_to_trig_on) - 1) & gray_max_value);
 		ScanaStudio.flexitrig_append(int_to_step(pre_trig), -1, -1);
 	}
 	else //counter-clockwise
 	{
-		pre_trig = gray_to_int(int_to_gray(int_to_trig_on) + 1);
+		pre_trig = binary_to_gray((gray_to_binary(int_to_trig_on) + 1) & gray_max_value);
 		ScanaStudio.flexitrig_append(int_to_step(pre_trig), -1, -1);
 	}
 
@@ -490,7 +666,6 @@ function int_to_step(int)//return a step composed of 0, 1 and X and with as much
 		}
 		if (is_ch_used)
 		{
-			var bit_val = (int>>(temp_j)) & 0x01;
 			if (((int >> temp_j) & 0x01) == 0)// bit i du word
 			{
 				step = "0" + step;
@@ -508,173 +683,67 @@ function int_to_step(int)//return a step composed of 0, 1 and X and with as much
 	return step;
 }
 
-//Helper functions (Inspired from silentmatt's code https://gist.github.com/silentmatt/136599)
-function gray_to_int(gray)
+function binary_to_gray(n)
 {
-	return gray ^ (gray >>> 1);
+	return n ^ (n >>> 1);
 }
 
-function int_to_gray(int)
+function gray_to_binary(gray)
 {
-	var g = int.toString(2).split("");
-	var b = [];
-	b[0] = g[0];
-	for (var i = 1; i < g.length; i++) {
-		b[i] = g[i] ^ b[i - 1];
-	}
-	return parseInt(b.join(""), 2);
-}
-
-//Decoder helper function
-function is_all_last_trs()
-{
-	var last_trs = true;
-	for (var i = 0; i < gray_bits_count; i++)
+	var binary = gray;
+	for (var shift = gray >>> 1; shift != 0; shift >>>= 1)
 	{
-		if (ScanaStudio.trs_is_not_last(ch_list[i])) //retun last_trs = true only if every channels have reached there last transition;
-		{
-			last_trs = false;
-			break;
-		}
+		binary ^= shift;
 	}
-	return last_trs;
+	return binary;
 }
 
-function get_lagging_channel()
+//CSV: ";" separated, one line per code change, ASCII units so any spreadsheet reads them
+function write_csv_header()
 {
-	var lag_ch = 0;
-	var lag_s = trs[0].sample_index;
-
-	for (var i = 0; i < gray_bits_count; i++)
-	{
-		if( (trs[i].sample_index < lag_s) && (ScanaStudio.trs_is_not_last(ch_list[i])))
-		{
-			lag_ch = i;
-			lag_s = trs[i].sample_index;
-		}
-	}
-	return lag_ch;
-}
-
-function encoder_increment()
-{
-	encoder_value += increment_step;
-	if (gray_type == 0)
-	{
-		if (encoder_value >= 360)
-		{
-			encoder_value -= 360;
-		}
-	}
-}
-
-function encoder_decrement()
-{
-	encoder_value -= increment_step;
-	if (gray_type == 0)
-	{
-		if (encoder_value < 0)
-		{
-			encoder_value += 360;
-		}
-	}
-}
-
-function append_header_to_file()
-{
-	ScanaStudio.file_system_write_text(file_handle,"Time [s]",ENCODING);
-	ScanaStudio.file_system_write_text(file_handle,";",ENCODING);
-	ScanaStudio.file_system_write_text(file_handle,"Gray code [dec]",ENCODING);
-	ScanaStudio.file_system_write_text(file_handle,";",ENCODING);
-	ScanaStudio.file_system_write_text(file_handle,"Decimal code [dec]",ENCODING);
-	ScanaStudio.file_system_write_text(file_handle,";",ENCODING);
-
+	var unit = (gray_type == 0) ? "deg" : "m";
+	var columns = ["Time [s]", "Integer value", "Gray value"];
 	if (write_file_position)
 	{
-		ScanaStudio.file_system_write_text(file_handle,"Position ",ENCODING);
-		if (gray_type == 0)
-		{
-			ScanaStudio.file_system_write_text(file_handle,"[Deg.]",ENCODING);
-		}
-		else
-		{
-			ScanaStudio.file_system_write_text(file_handle,"[m]",ENCODING);
-		}
-		ScanaStudio.file_system_write_text(file_handle,";",ENCODING);
+		columns.push("Position [" + unit + "]");
 	}
-
 	if (write_file_velocity)
 	{
-		ScanaStudio.file_system_write_text(file_handle,"velocity ",ENCODING);
-		if (gray_type == 0)
-		{
-			ScanaStudio.file_system_write_text(file_handle,"[°/s]",ENCODING);
-		}
-		else
-		{
-			ScanaStudio.file_system_write_text(file_handle,"[m/s]",ENCODING);
-		}
-		ScanaStudio.file_system_write_text(file_handle,";",ENCODING);
+		columns.push("Velocity [" + unit + "/s]");
 	}
-
 	if (write_file_acceleration)
 	{
-		ScanaStudio.file_system_write_text(file_handle,"Acceleration",ENCODING);
-		if (gray_type == 0)
-		{
-			ScanaStudio.file_system_write_text(file_handle,"[°/s²]",ENCODING);
-		}
-		else
-		{
-			ScanaStudio.file_system_write_text(file_handle,"[m/s²]",ENCODING);
-		}
-		ScanaStudio.file_system_write_text(file_handle,";",ENCODING);
+		columns.push("Acceleration [" + unit + "/s2]");
 	}
-	ScanaStudio.file_system_write_text(file_handle,"\n",ENCODING);
+	ScanaStudio.file_system_write_text(file_handle, columns.join(";") + "\n", ENCODING);
 }
 
-var prev_enc_value = -1;
-var prev_velocity = -1;
-function append_new_line_to_file(time_s)
+function write_csv_line(time_s)
 {
-	var velocity = 0;
-	var acc = 0;
-	ScanaStudio.file_system_write_text(file_handle,time_s.toString().replace(".",decimal_chr).replace(",",decimal_chr),ENCODING);
-	ScanaStudio.file_system_write_text(file_handle,";",ENCODING);
-	ScanaStudio.file_system_write_text(file_handle,gray_code.toString(10),ENCODING);
-	ScanaStudio.file_system_write_text(file_handle,";",ENCODING);
-	ScanaStudio.file_system_write_text(file_handle,binary_code.toString(10),ENCODING);
-	ScanaStudio.file_system_write_text(file_handle,";",ENCODING);
-
+	var columns = [csv_number(time_s), gray_code.toString(10), binary_code.toString(10)];
 	if (write_file_position)
 	{
-		ScanaStudio.file_system_write_text(file_handle,encoder_value.toString().replace(".",decimal_chr).replace(",",decimal_chr),ENCODING);
-		ScanaStudio.file_system_write_text(file_handle,";",ENCODING);
+		columns.push(csv_number(encoder_value));
 	}
-
 	if (write_file_velocity)
 	{
-		if  (prev_enc_value >= 0)
-		{
-			velocity = (encoder_value - prev_enc_value)/time_s;
-		}
-		ScanaStudio.file_system_write_text(file_handle,velocity.toString().replace(".",decimal_chr).replace(",",decimal_chr),ENCODING);
-		ScanaStudio.file_system_write_text(file_handle,";",ENCODING);
+		columns.push(velocity_known ? csv_number(velocity) : ""); //Unknown before the second code change
 	}
-
 	if (write_file_acceleration)
 	{
-		if  (prev_velocity >= 0)
-		{
-			acc = (velocity - prev_velocity)/time_s;
-		}
-		ScanaStudio.file_system_write_text(file_handle,acc.toString().replace(".",decimal_chr).replace(",",decimal_chr),ENCODING);
-		ScanaStudio.file_system_write_text(file_handle,";",ENCODING);
+		columns.push(acceleration_known ? csv_number(acceleration) : ""); //Unknown before the third code change
 	}
+	ScanaStudio.file_system_write_text(file_handle, columns.join(";") + "\n", ENCODING);
+}
 
-	prev_enc_value = encoder_value;
-	prev_velocity = velocity;
-	ScanaStudio.file_system_write_text(file_handle,"\n",ENCODING);
+function csv_number(value)
+{
+	var parts = value.toPrecision(12).split("e");
+	if (parts[0].indexOf(".") >= 0)
+	{
+		parts[0] = parts[0].replace(/\.?0+$/, ""); //Drops the trailing zeros
+	}
+	return parts.join("e").replace(".", decimal_chr);
 }
 
 //Function called to generate demo signals (when no physical device is attached)
@@ -688,36 +757,21 @@ function on_build_demo_signals()
 	gray_builder.config(ch_list);
 	gray_max_value = (Math.pow(2,ch_list.length)-1);
 
-	var gray_code_counter = 0;
-	var max_period = Math.floor(samples_to_build / (gray_max_value*0.75));
-	if(max_period<100)
-	{
-		max_period = 100;
-	}
-	var min_period = Math.floor(max_period / 100);
-	var period = Math.floor((max_period+min_period)/2);
-	var step = min_period;
+	//Two full turns within the capture, the speed swinging by +/-50% around its mean
+	var steps_count = 2 * (gray_max_value + 1);
+	var mean_period = Math.max(2, Math.floor(samples_to_build * 0.95 / steps_count));
+	var step_index = 0;
 
 	while (ScanaStudio.builder_get_samples_acc(ch_list[0]) < samples_to_build)
 	{
-
 		if (ScanaStudio.abort_is_requested())
 		{
 			break;
 		}
 
-		period += step;
-		if ((period >= max_period) || (period <= min_period))
-		{
-			step = -step;
-		}
-		gray_code_counter++;
-		if (gray_code_counter > gray_max_value)
-		{
-			gray_code_counter = 0;
-		}
-
-		gray_builder.put_integer(gray_code_counter,period);
+		var period = Math.max(1, Math.round(mean_period * (1 + 0.5 * Math.sin(2 * Math.PI * step_index / steps_count))));
+		gray_builder.put_integer(step_index & gray_max_value, period);
+		step_index++;
 	}
 }
 
@@ -733,7 +787,7 @@ ScanaStudio.BuilderObject = {
 	put_integer : function(decimal_value,period_samples)
 	{
 
-		var gray = int_to_gray(decimal_value);
+		var gray = decimal_value ^ (decimal_value >>> 1);
 
 		var i = 0;
 
