@@ -3,13 +3,14 @@
 <DESCRIPTION>
 The LPC protocol is a low-pin-count bus developed by Intel to replace older, bulkier interfaces like the ISA bus in PCs.
 </DESCRIPTION>
-<VERSION> 0.1 </VERSION>
-<AUTHOR_NAME> Ibrahim KAMAL </AUTHOR_NAME>
+<VERSION> 0.2 </VERSION>
+<AUTHOR_NAME> Ibrahim KAMAL, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.2:  Decoding fixed. Demo signals, trigger and Memory View.
 V0.1:  Initial release. Partially tested.
 </RELEASE_NOTES>
 */
@@ -142,10 +143,11 @@ function LPCFrame() {
     this.process_ctdir_idsel = function (ctdir_idsel, clk_rize) {
         if (this.start == StartEncoding.MEMORY) {
             var ct = (ctdir_idsel >> 2) & 0x3;
-            if ((this.ctdir & 0x2) == 0x0) {
+            this.cycle_type = ct;
+            if ((ctdir_idsel & 0x2) == 0x0) {
                 this.dir = DirType.READ;
             }
-            else if ((this.ctdir & 0x2) == 0x2) {
+            else {
                 this.dir = DirType.WRITE;
             }
             this.ctdir = ctdir_idsel;
@@ -188,6 +190,7 @@ function LPCFrame() {
             else if (ct == 3) //Invalid
             {
                 this.new_dec_item("Invalid CTDIR", "Invalid", "X", ctdir_idsel, clk_rize, true, "#C00000");
+                return false;
             }
         }
         else if ((this.start == StartEncoding.FW_READ) || (this.start == StartEncoding.FW_WRITE)) {
@@ -197,8 +200,10 @@ function LPCFrame() {
             this.address_size = 7;
         }
         else {
-            throw "Unhandled START message";
+            this.new_dec_item("Unexpected field", "Unexpected", "?", ctdir_idsel, clk_rize, true, PacketColor.err);
+            return false;
         }
+        return true;
     };
 
     this.process_channel = function (d, clk_rize) {
@@ -226,7 +231,8 @@ function LPCFrame() {
                 break;
         }
         this.data_size = bits / 4;
-        this.new_dec_item("Size (Bytes)", "Size (B)", "S", d, clk_rize, false, PacketColor.control);
+        this.new_dec_item("Size (Bytes)", "Size (B)", "S", d, clk_rize, bits == 0, PacketColor.control);
+        return bits > 0;
     }
 
     this.process_msize = function (msize, clk_rize) {
@@ -248,6 +254,7 @@ function LPCFrame() {
                 this.data_size = 128 * 2;
                 break;
             default:
+                this.new_dec_item("Memory Size (Bytes)", "Size (B)", "S", msize, clk_rize, true, PacketColor.control);
                 return false;
         }
         this.new_dec_item("Memory Size (Bytes)", "Size (B)", "S", msize, clk_rize, false, PacketColor.control);
@@ -291,7 +298,7 @@ function LPCFrame() {
     };
 
     this.push_address_nib = function (a, clk_rize) {
-        this.address = (this.address << 4) | a;
+        this.address = ((this.address << 4) | a) >>> 0; //unsigned: memory addresses use all 32 bits
         this.address_nibs[this.curr_addr_nib] = a;
         this.address_sample_point[this.curr_addr_nib] = clk_rize;
         this.curr_addr_nib++;
@@ -329,7 +336,7 @@ function LPCFrame() {
     };
 
     this.push_data_nib = function (d, clk_rize) {
-        this.cur_data_byte |= (d << (this.cur_data_nib * 4));
+        this.cur_data_byte |= (d << ((this.cur_data_nib % 2) * 4)); //low nibble first
         this.cur_data_nib++;
         this.new_nib_item(d, clk_rize);
 
@@ -357,11 +364,38 @@ function LPCFrame() {
                 PacketColor.data /* string */,
                 PacketColor.data /* string */);
 
+            this.add_to_mem_view(this.cur_data_byte);
             this.cur_data_byte = 0;
             this.data_counter++;
         }
         this.data_sample_point = clk_rize;
     };
+
+    //Read or written, a byte is what the target holds at that address: the last one seen wins
+    this.add_to_mem_view = function (byte) {
+        var shown;
+        if (this.is_dma) {
+            shown = false; //no address
+        }
+        else if ((this.start == StartEncoding.FW_READ) || (this.start == StartEncoding.FW_WRITE)) {
+            shown = (mem_view_cycles == MemViewCycles.MEMORY_AND_FIRMWARE) || (mem_view_cycles == MemViewCycles.FIRMWARE);
+        }
+        else if (this.cycle_type == 1) {
+            shown = (mem_view_cycles == MemViewCycles.MEMORY_AND_FIRMWARE) || (mem_view_cycles == MemViewCycles.MEMORY);
+        }
+        else {
+            shown = (this.cycle_type == 0) && (mem_view_cycles == MemViewCycles.IO);
+        }
+        if (!shown) {
+            return;
+        }
+        var address = (this.address + this.data_counter) >>> 0;
+        if (!mem_view_base_set) {
+            ScanaStudio.mem_view_set_base(address);
+            mem_view_base_set = true;
+        }
+        ScanaStudio.mem_view_add_bytes(address, [byte]);
+    }
 
     this.process_stop = function (clk_rize) {
         formatted_value = format(0xF, 1, 4);
@@ -461,6 +495,15 @@ var decoder_state;
 var data_width = 4;
 var lsb_first = true;
 var lpc_abort = false;
+const MemViewCycles = {
+    MEMORY_AND_FIRMWARE: 0,
+    MEMORY: 1,
+    FIRMWARE: 2,
+    IO: 3,
+    NOTHING: 4
+};
+var mem_view_cycles = MemViewCycles.NOTHING;
+var mem_view_base_set = false;
 function on_draw_gui_decoder() {
 
     ScanaStudio.gui_add_ch_selector("ch_clk" /* string */,
@@ -482,7 +525,16 @@ function on_draw_gui_decoder() {
             2 + i /* int [default = -1] */);
     }
 
-    ScanaStudio.gui_add_new_tab("Reserved START varlues" /* string */, false /* bool */)
+    if (memory_view_exists()) {
+        ScanaStudio.gui_add_combo_box("mem_view_cycles", "Memory View shows the data of");
+        ScanaStudio.gui_add_item_to_combo_box("Memory and firmware cycles", true);
+        ScanaStudio.gui_add_item_to_combo_box("Memory cycles", false);
+        ScanaStudio.gui_add_item_to_combo_box("Firmware cycles", false);
+        ScanaStudio.gui_add_item_to_combo_box("I/O cycles", false);
+        ScanaStudio.gui_add_item_to_combo_box("Nothing", false);
+    }
+
+    ScanaStudio.gui_add_new_tab("Reserved START values" /* string */, false /* bool */)
     ScanaStudio.gui_add_info_label("Decide how the decoder deals with reserved Start values" /* string */);
 
     for (var i = 0; i < reserved_start_values.length; i++) {
@@ -497,6 +549,18 @@ function on_draw_gui_decoder() {
 
 //Evaluate decoder GUI
 function on_eval_gui_decoder() {
+    read_gui_values();
+    var channels = [ch_clk, ch_lframe, ch_lad[0], ch_lad[1], ch_lad[2], ch_lad[3]];
+    for (var i = 0; i < channels.length; i++) {
+        if ((channels[i] < 0) || (channels[i] >= ScanaStudio.get_device_channels_count())) {
+            return "LPC needs 6 channels: LCLK, LFRAME# and LAD 0 to 3";
+        }
+        for (var j = 0; j < i; j++) {
+            if (channels[i] == channels[j]) {
+                return "LCLK, LFRAME# and LAD 0 to 3 must be 6 different channels";
+            }
+        }
+    }
     return ""; //All good.
 }
 
@@ -510,6 +574,12 @@ function read_gui_values() {
         const value = reserved_start_values[i];
         reserved_start_as_memory[i] = ScanaStudio.gui_get_value("reserved_" + value);
     }
+    mem_view_cycles = memory_view_exists() ? ScanaStudio.gui_get_value("mem_view_cycles") : MemViewCycles.NOTHING;
+}
+
+//The Memory View exists in ScanaStudio 6 only: ScanaStudio 3 has no mem_view_* functions
+function memory_view_exists() {
+    return typeof ScanaStudio.mem_view_add_bytes == "function";
 }
 
 function end_of_samples() {
@@ -537,6 +607,7 @@ function on_decode_signals(resume) {
         sampling_rate = ScanaStudio.get_capture_sample_rate();
         // read GUI values using ScanaStudio.gui_get_value("ID");
         read_gui_values();
+        mem_view_base_set = false;
         decoder_state = DecoderState.IDLE;
         //reset iterators for all channels
         ScanaStudio.trs_reset(ch_clk);
@@ -584,9 +655,13 @@ function on_decode_signals(resume) {
                 trs_lframe = ScanaStudio.trs_get_next(ch_lframe);
                 if (trs_lframe.value == lframe_active_edge) {
                     frame = new LPCFrame();
+                    start_valid = false; //until a START field is read in this frame
                     //frame.lframe_start_samples = trs_lframe.sample_index;
                     decoder_state = DecoderState.START;
                     trs_lclk = ScanaStudio.trs_get_before(ch_clk, trs_lframe.sample_index);
+                    if (trs_lclk.value != clk_active_edge) {
+                        last_clk_fall = trs_lclk.sample_index; //measures this frame's clock, not an old one
+                    }
                 }
                 break;
             case DecoderState.START:
@@ -608,8 +683,10 @@ function on_decode_signals(resume) {
                 }
                 break;
             case DecoderState.CTDIR_IDSEL:
-                frame.process_ctdir_idsel(captured_data, trs_lclk.sample_index);
-                if (frame.is_dma) {
+                if (!frame.process_ctdir_idsel(captured_data, trs_lclk.sample_index)) {
+                    decoder_state = DecoderState.IDLE;
+                }
+                else if (frame.is_dma) {
                     decoder_state = DecoderState.CHANNEL;
                 } else {
                     decoder_state = DecoderState.ADDRESS;
@@ -620,8 +697,10 @@ function on_decode_signals(resume) {
                 decoder_state = DecoderState.SIZE;
                 break;
             case DecoderState.SIZE: //DMA
-                frame.process_size(captured_data, trs_lclk.sample_index);
-                if (frame.dir == DmaType.Host_to_perif) {
+                if (!frame.process_size(captured_data, trs_lclk.sample_index)) {
+                    decoder_state = DecoderState.IDLE;
+                }
+                else if (frame.dir == DmaType.Host_to_perif) {
                     decoder_state = DecoderState.DATA;
                 } else {
                     decoder_state = DecoderState.TAR1;
@@ -645,8 +724,10 @@ function on_decode_signals(resume) {
                 }
                 break;
             case DecoderState.MSIZE:
-                frame.process_msize(captured_data, trs_lclk.sample_index);
-                if (frame.dir == DirType.READ) {
+                if (!frame.process_msize(captured_data, trs_lclk.sample_index)) {
+                    decoder_state = DecoderState.IDLE;
+                }
+                else if (frame.dir == DirType.READ) {
                     decoder_state = DecoderState.TAR1;
                 } else {
                     decoder_state = DecoderState.DATA;
@@ -690,7 +771,10 @@ function on_decode_signals(resume) {
                 break;
             case DecoderState.STOP:
                 //Wait for the end of the abort cycle
-                frame.process_stop(trs_lframe.sample_index);
+                frame.process_stop(trs_lclk.sample_index);
+                //One item per abort: the next frame starts after this LFRAME# low period
+                lpc_abort = false;
+                trs_lframe = ScanaStudio.trs_get_before(ch_lframe, trs_lclk.sample_index);
                 decoder_state = DecoderState.IDLE;
                 break;
             case DecoderState.END:
@@ -728,24 +812,232 @@ function capture_data_at(target_sample) {
 
 //Function called to generate demo siganls (when no physical device is attached)
 function on_build_demo_signals() {
-    //Use the function below to get the number of samples to be built
     var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
-    //Todo: build the demo signals
+    read_gui_values();
+    var builder = ScanaStudio.BuilderObject;
+    //LCLK at 33 MHz, or slower when the sample rate cannot show it
+    builder.config(ch_clk, ch_lframe, ch_lad, ScanaStudio.builder_get_sample_rate(), 33e6);
+
+    var frame_index = 0;
+    builder.put_idle(4);
+    while ((ScanaStudio.builder_get_samples_acc(ch_clk) < samples_to_build) && !ScanaStudio.abort_is_requested()) {
+        var data = (frame_index * 0x35 + 0x12) & 0xFF;
+        var round = Math.floor(frame_index / 7); //consecutive addresses fill the Memory View without holes
+        switch (frame_index % 7) {
+            case 0: builder.put_io(false, 0x0080 + round % 16, data, 2); break;
+            case 1: builder.put_io(true, 0x03F8, data, 1); break;
+            case 2: builder.put_memory(false, 0xFFFF0000 + round, data, 3); break;
+            case 3: builder.put_memory(true, 0x000C0000 + round, data, 0); break;
+            case 4: builder.put_firmware(false, 0, 0x0FF0000 + round * 2, [data, data ^ 0xFF], 2); break;
+            case 5: builder.put_firmware(true, 1, 0x0001000 + round * 4, [data, data + 1, data + 2, data + 3], 1); break;
+            case 6: builder.put_abort(0x000A0000 + round); break;
+        }
+        builder.put_idle(3 + frame_index % 5);
+        frame_index++;
+    }
 }
+
+//Builder object that can be shared to other scripts. One call = one LCLK cycle per field:
+//LFRAME# and LAD change on the falling edge, the host samples them on the rising edge.
+ScanaStudio.BuilderObject = {
+    config: function (ch_clk, ch_lframe, ch_lad, sample_rate, lclk_frequency) {
+        this.ch_clk = ch_clk;
+        this.ch_lframe = ch_lframe;
+        this.ch_lad = ch_lad;
+        this.half_period = Math.max(2, Math.round(sample_rate / lclk_frequency / 2));
+    },
+    put_cycle: function (lframe, lad) {
+        ScanaStudio.builder_add_samples(this.ch_clk, 0, this.half_period);
+        ScanaStudio.builder_add_samples(this.ch_clk, 1, this.half_period);
+        ScanaStudio.builder_add_samples(this.ch_lframe, lframe, 2 * this.half_period);
+        for (var i = 0; i < 4; i++) {
+            ScanaStudio.builder_add_samples(this.ch_lad[i], (lad >> i) & 1, 2 * this.half_period);
+        }
+    },
+    put_idle: function (cycles) {
+        for (var i = 0; i < cycles; i++) {
+            this.put_cycle(1, 0xF);
+        }
+    },
+    put_start: function (start) {
+        this.put_cycle(0, start);
+    },
+    put_nibbles_msb_first: function (value, count) {
+        for (var i = count - 1; i >= 0; i--) {
+            this.put_cycle(1, (value >>> (i * 4)) & 0xF);
+        }
+    },
+    put_bytes: function (bytes) {
+        for (var i = 0; i < bytes.length; i++) {
+            this.put_cycle(1, bytes[i] & 0xF);
+            this.put_cycle(1, (bytes[i] >> 4) & 0xF);
+        }
+    },
+    put_turnaround: function () {
+        this.put_cycle(1, 0xF);
+        this.put_cycle(1, 0xF);
+    },
+    put_sync: function (wait_states) {
+        for (var i = 0; i < wait_states; i++) {
+            this.put_cycle(1, 0x5); //short wait
+        }
+        this.put_cycle(1, 0x0); //ready
+    },
+    //I/O (16 bit address) or memory (32 bit address) cycle of one byte
+    put_target_cycle: function (cycle_type, write, address, address_nibbles, data, wait_states) {
+        this.put_start(0x0);
+        this.put_cycle(1, (cycle_type << 2) | (write ? 0x2 : 0x0));
+        this.put_nibbles_msb_first(address, address_nibbles);
+        if (write) {
+            this.put_bytes([data]);
+            this.put_turnaround();
+            this.put_sync(wait_states);
+        }
+        else {
+            this.put_turnaround();
+            this.put_sync(wait_states);
+            this.put_bytes([data]);
+        }
+        this.put_turnaround();
+    },
+    put_io: function (write, address, data, wait_states) {
+        this.put_target_cycle(0, write, address, 4, data, wait_states);
+    },
+    put_memory: function (write, address, data, wait_states) {
+        this.put_target_cycle(1, write, address, 8, data, wait_states);
+    },
+    //Firmware memory cycle: 28 bit address, 1, 2 or 4 bytes
+    put_firmware: function (write, idsel, address, bytes, wait_states) {
+        var msize = (bytes.length == 4) ? 2 : (bytes.length == 2) ? 1 : 0;
+        this.put_start(write ? 0xE : 0xD);
+        this.put_cycle(1, idsel & 0xF);
+        this.put_nibbles_msb_first(address, 7);
+        this.put_cycle(1, msize);
+        if (write) {
+            this.put_bytes(bytes);
+            this.put_turnaround();
+            this.put_sync(wait_states);
+        }
+        else {
+            this.put_turnaround();
+            this.put_sync(wait_states);
+            this.put_bytes(bytes);
+        }
+        this.put_turnaround();
+    },
+    //A memory read the host aborts: LFRAME# low with LAD = 1111 for 4 cycles
+    put_abort: function (address) {
+        this.put_start(0x0);
+        this.put_cycle(1, 0x4);
+        this.put_nibbles_msb_first(address, 8);
+        this.put_turnaround();
+        this.put_cycle(1, 0x5);
+        this.put_cycle(1, 0x5);
+        for (var i = 0; i < 4; i++) {
+            this.put_cycle(0, 0xF);
+        }
+    }
+};
+
+//What the trigger can look for: the START field, then the CTDIR field on the next LCLK,
+//then the address nibbles (MSB first) on the following ones. LAD patterns are LAD3..LAD0.
+const TrigTypes = [
+    { label: "Any I/O, memory or DMA cycle (START = 0000)", start: "0000" },
+    { label: "I/O read", start: "0000", ctdir: "000X", address_nibbles: 4 },
+    { label: "I/O write", start: "0000", ctdir: "001X", address_nibbles: 4 },
+    { label: "Memory read", start: "0000", ctdir: "010X", address_nibbles: 8 },
+    { label: "Memory write", start: "0000", ctdir: "011X", address_nibbles: 8 },
+    { label: "DMA cycle", start: "0000", ctdir: "10XX" },
+    { label: "Firmware read (START = 1101)", start: "1101", ctdir: "XXXX", address_nibbles: 7 },
+    { label: "Firmware write (START = 1110)", start: "1110", ctdir: "XXXX", address_nibbles: 7 },
+    { label: "Cycle aborted by the host (LFRAME# low, LAD = 1111)", start: "1111" }
+];
 
 //Trigger sequence GUI
 function on_draw_gui_trigger() {
-    //Add gui functions...
+    ScanaStudio.gui_add_combo_box("trig_type", "Trigger on");
+    for (var i = 0; i < TrigTypes.length; i++) {
+        ScanaStudio.gui_add_item_to_combo_box(TrigTypes[i].label, i == 0);
+    }
+    ScanaStudio.gui_add_check_box("trig_address_enable", "Only at a given address (I/O, memory and firmware cycles)", false);
+    ScanaStudio.gui_add_text_input("trig_address", "Address (decimal, or hex with 0x)", "0x0");
+    ScanaStudio.gui_add_engineering_form_input_box("trig_lclk", "LCLK frequency", 1e3, 100e6, "33e6", "Hz");
+    ScanaStudio.gui_add_info_label("Each field is sampled on a rising edge of LCLK. The fields after the first one must follow each other, one LCLK period apart.");
 }
 
 //Evaluate trigger GUI
 function on_eval_gui_trigger() {
+    var type = TrigTypes[ScanaStudio.gui_get_value("trig_type")];
+    if (ScanaStudio.gui_get_value("trig_address_enable")) {
+        if (type.address_nibbles == undefined) {
+            return "\"" + type.label + "\" has no address to compare";
+        }
+        var address = parse_trig_address();
+        var max = Math.pow(16, type.address_nibbles) - 1;
+        if (isNaN(address) || (address < 0) || (address > max) || (Math.floor(address) != address)) {
+            return "The address must be an integer between 0 and 0x" + max.toString(16).toUpperCase();
+        }
+    }
     return ""; //All good.
+}
+
+function parse_trig_address() {
+    var text = String(ScanaStudio.gui_get_value("trig_address")).trim();
+    return (text == "") ? NaN : Number(text);
 }
 
 //Build trigger sequence
 function on_build_trigger() {
-    //Add trigger steps here...
+    read_gui_values();
+    var type = TrigTypes[ScanaStudio.gui_get_value("trig_type")];
+    var lclk_period = 1 / Number(ScanaStudio.gui_get_value("trig_lclk"));
+
+    var fields = [{ lframe: "0", lad: type.start }];
+    if (type.ctdir != undefined) {
+        fields.push({ lframe: "1", lad: type.ctdir });
+    }
+    if (ScanaStudio.gui_get_value("trig_address_enable") && (type.address_nibbles != undefined)) {
+        var address = parse_trig_address();
+        for (var n = type.address_nibbles - 1; n >= 0; n--) {
+            fields.push({ lframe: "1", lad: nibble_pattern((address / Math.pow(16, n)) & 0xF) });
+        }
+    }
+
+    ScanaStudio.flexitrig_append(trig_step(fields[0].lframe, fields[0].lad), -1, -1);
+    for (var i = 1; i < fields.length; i++) {
+        ScanaStudio.flexitrig_append(trig_step(fields[i].lframe, fields[i].lad), lclk_period * 0.5, lclk_period * 1.5);
+    }
+}
+
+function nibble_pattern(nibble) {
+    var pattern = "";
+    for (var b = 3; b >= 0; b--) {
+        pattern += ((nibble >> b) & 1).toString();
+    }
+    return pattern;
+}
+
+//One flexitrig step: a rising edge of LCLK while LFRAME# and LAD hold the given levels
+function trig_step(lframe, lad) {
+    var step = "";
+    for (var i = 0; i < ScanaStudio.get_device_channels_count(); i++) {
+        var c = "X";
+        if (i == ch_clk) {
+            c = "R";
+        }
+        else if (i == ch_lframe) {
+            c = lframe;
+        }
+        else {
+            for (var k = 0; k < 4; k++) {
+                if (i == ch_lad[k]) {
+                    c = lad.charAt(3 - k);
+                }
+            }
+        }
+        step = c + step;
+    }
+    return step;
 }
 
 function format(value, format, width, add_prefix) {
