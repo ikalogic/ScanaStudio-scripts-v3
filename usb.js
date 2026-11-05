@@ -3,13 +3,14 @@
 <DESCRIPTION>
 USB 1.5 and 12 Mbps decoder
 </DESCRIPTION>
-<VERSION> 0.2 </VERSION>
+<VERSION> 0.3 </VERSION>
 <AUTHOR_NAME> Hristo Gochkov, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> hristo.gochkov@bitsbg.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Hristo Gochkov </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.3:  Demo signals over the whole capture, built in a few seconds.
 V0.2:  Full Speed by default. Demo signals and trigger. The last packet and a remote wakeup are decoded.
 V0.1:  Initial release.
 </RELEASE_NOTES>
@@ -1372,20 +1373,28 @@ function usb_crc16(bytes){
  * Demo signals: a device being enumerated, then polled
 */
 
+var DEMO_MAX_FRAMES = 40;
+
 function on_build_demo_signals(){
   var builder = ScanaStudio.BuilderObject;
-  var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
+  var samples_requested = ScanaStudio.builder_get_maximum_samples_count();
   var low_speed = (ScanaStudio.gui_get_value("is_low_speed") == 1);
   builder.config(ScanaStudio.gui_get_value("dp"), ScanaStudio.gui_get_value("dm"),
     ScanaStudio.builder_get_sample_rate(), low_speed);
+  //A SOF (a keep-alive at low speed) every millisecond for the whole capture, but at most
+  //DEMO_MAX_FRAMES frames with transactions, spread evenly: a long capture built bit by
+  //bit would keep the demo device configuring for hours
+  var frames_requested = Math.floor(samples_requested / builder.samples_for(1e-3));
+  var busy_every = Math.max(1, Math.floor(frames_requested / DEMO_MAX_FRAMES));
 
   var frame = 0;
+  var step = 0; //frames with transactions so far
   var toggle = 0;
   var suspended = false;
   builder.put_idle(200);
   builder.put_reset(10e-6);
   builder.put_idle(40);
-  while ((builder.samples_acc() < samples_to_build) && !ScanaStudio.abort_is_requested()) {
+  while ((builder.samples_acc() < samples_requested) && !ScanaStudio.abort_is_requested()) {
     var frame_start = builder.samples_acc();
     if (low_speed) {
       builder.put_eop(); //keep-alive
@@ -1394,45 +1403,49 @@ function on_build_demo_signals(){
       builder.put_packet(builder.token(USB_SOF, frame & 0x7FF));
     }
     builder.put_idle(20);
-    switch (frame) {
-      case 0: //GET_DESCRIPTOR (device), first try NAKed
-        builder.put_transaction(builder.token(USB_SETUP, 0), builder.data(USB_DATA0, [0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 0x40, 0x00]), USB_ACK);
-        builder.put_transaction(builder.token(USB_IN, 0), null, USB_NACK);
-        break;
-      case 1:
-        builder.put_transaction(builder.token(USB_IN, 0), builder.data(USB_DATA1,
-          [0x12, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x08]), USB_ACK);
-        builder.put_transaction(builder.token(USB_OUT, 0), builder.data(USB_DATA1, []), USB_ACK);
-        break;
-      case 2: //SET_ADDRESS 5
-        builder.put_transaction(builder.token(USB_SETUP, 0), builder.data(USB_DATA0, [0x00, 0x05, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00]), USB_ACK);
-        builder.put_transaction(builder.token(USB_IN, 0), builder.data(USB_DATA1, []), USB_ACK);
-        break;
-      default: //the device at address 5: polled on EP1 IN, written on EP2 OUT, EP3 stalled
-        if (frame % 3 == 0) {
-          builder.put_transaction(builder.token(USB_IN, 5 | (1 << 7)), null, USB_NACK);
-        }
-        else {
-          builder.put_transaction(builder.token(USB_IN, 5 | (1 << 7)),
-            builder.data(toggle ? USB_DATA1 : USB_DATA0, [frame & 0xFF, 0x80, 0x00, 0xFF]), USB_ACK);
-          toggle ^= 1;
-        }
-        builder.put_transaction(builder.token(USB_OUT, 5 | (2 << 7)), builder.data(USB_DATA0, [0x01, 0x02, 0x03, frame & 0xFF]), USB_ACK);
-        if (frame % 5 == 0) {
-          builder.put_transaction(builder.token(USB_IN, 5 | (3 << 7)), null, USB_STALL);
-        }
-        break;
+    var busy = (frame % busy_every == 0);
+    if (busy) {
+      switch (step) {
+        case 0: //GET_DESCRIPTOR (device), first try NAKed
+          builder.put_transaction(builder.token(USB_SETUP, 0), builder.data(USB_DATA0, [0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 0x40, 0x00]), USB_ACK);
+          builder.put_transaction(builder.token(USB_IN, 0), null, USB_NACK);
+          break;
+        case 1:
+          builder.put_transaction(builder.token(USB_IN, 0), builder.data(USB_DATA1,
+            [0x12, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x08]), USB_ACK);
+          builder.put_transaction(builder.token(USB_OUT, 0), builder.data(USB_DATA1, []), USB_ACK);
+          break;
+        case 2: //SET_ADDRESS 5
+          builder.put_transaction(builder.token(USB_SETUP, 0), builder.data(USB_DATA0, [0x00, 0x05, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00]), USB_ACK);
+          builder.put_transaction(builder.token(USB_IN, 0), builder.data(USB_DATA1, []), USB_ACK);
+          break;
+        default: //the device at address 5: polled on EP1 IN, written on EP2 OUT, EP3 stalled
+          if (step % 3 == 0) {
+            builder.put_transaction(builder.token(USB_IN, 5 | (1 << 7)), null, USB_NACK);
+          }
+          else {
+            builder.put_transaction(builder.token(USB_IN, 5 | (1 << 7)),
+              builder.data(toggle ? USB_DATA1 : USB_DATA0, [step & 0xFF, 0x80, 0x00, 0xFF]), USB_ACK);
+            toggle ^= 1;
+          }
+          builder.put_transaction(builder.token(USB_OUT, 5 | (2 << 7)), builder.data(USB_DATA0, [0x01, 0x02, 0x03, step & 0xFF]), USB_ACK);
+          if (step % 5 == 0) {
+            builder.put_transaction(builder.token(USB_IN, 5 | (3 << 7)), null, USB_STALL);
+          }
+          break;
+      }
+      step++;
     }
     frame++;
-    //one frame per millisecond; once, the bus is suspended then resumed if there is room for it
-    if (!suspended && (frame == 6) && (builder.samples_left(samples_to_build) > builder.samples_for(6e-3))) {
+    //once, the bus is suspended then resumed if there is room for it
+    if (busy && !suspended && (step == 6) && (builder.samples_left(samples_requested) > builder.samples_for(6e-3))) {
       builder.put_idle_time(3.5e-3);
       builder.put_resume(1.5e-3);
       builder.put_idle(40);
       suspended = true;
     }
     else {
-      builder.put_idle_until(frame_start + builder.samples_for(1e-3));
+      builder.put_idle_until(Math.min(frame_start + builder.samples_for(1e-3), samples_requested));
     }
   }
 }
