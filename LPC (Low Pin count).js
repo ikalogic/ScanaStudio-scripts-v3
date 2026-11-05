@@ -3,13 +3,14 @@
 <DESCRIPTION>
 The LPC protocol is a low-pin-count bus developed by Intel to replace older, bulkier interfaces like the ISA bus in PCs.
 </DESCRIPTION>
-<VERSION> 0.2 </VERSION>
+<VERSION> 0.3 </VERSION>
 <AUTHOR_NAME> Ibrahim KAMAL, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.3:  Demo signals over the whole capture, built in a few seconds.
 V0.2:  Decoding fixed. Demo signals, trigger and Memory View.
 V0.1:  Initial release. Partially tested.
 </RELEASE_NOTES>
@@ -811,16 +812,32 @@ function capture_data_at(target_sample) {
 
 
 //Function called to generate demo siganls (when no physical device is attached)
+var DEMO_MAX_CYCLES = 700000;
+var DEMO_BURSTS = 40;
+
 function on_build_demo_signals() {
-    var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
+    var samples_requested = ScanaStudio.builder_get_maximum_samples_count();
     read_gui_values();
     var builder = ScanaStudio.BuilderObject;
     //LCLK at 33 MHz, or slower when the sample rate cannot show it
     builder.config(ch_clk, ch_lframe, ch_lad, ScanaStudio.builder_get_sample_rate(), 33e6);
+    //At most DEMO_MAX_CYCLES LCLK cycles of traffic, in DEMO_BURSTS bursts spread over the
+    //whole capture with the bus at rest between them: a long capture built cycle by cycle
+    //would keep the demo device configuring for hours
+    var traffic = Math.min(samples_requested, DEMO_MAX_CYCLES * 2 * builder.half_period);
+    var burst_length = traffic / DEMO_BURSTS;
+    var gap_length = (samples_requested - traffic) / DEMO_BURSTS;
+    var burst_end = burst_length;
+    var all_lines = [ch_clk, ch_lframe, ch_lad[0], ch_lad[1], ch_lad[2], ch_lad[3]];
 
     var frame_index = 0;
     builder.put_idle(4);
-    while ((ScanaStudio.builder_get_samples_acc(ch_clk) < samples_to_build) && !ScanaStudio.abort_is_requested()) {
+    while ((ScanaStudio.builder_get_samples_acc(ch_clk) < samples_requested) && !ScanaStudio.abort_is_requested()) {
+        if ((gap_length > 0) && (ScanaStudio.builder_get_samples_acc(ch_clk) >= burst_end)) {
+            demo_rest(all_lines, ScanaStudio.builder_get_samples_acc(ch_clk) + gap_length);
+            burst_end = ScanaStudio.builder_get_samples_acc(ch_clk) + burst_length;
+            builder.put_idle(4);
+        }
         var data = (frame_index * 0x35 + 0x12) & 0xFF;
         var round = Math.floor(frame_index / 7); //consecutive addresses fill the Memory View without holes
         switch (frame_index % 7) {
@@ -834,6 +851,17 @@ function on_build_demo_signals() {
         }
         builder.put_idle(3 + frame_index % 5);
         frame_index++;
+    }
+    demo_rest(all_lines, samples_requested);
+}
+
+//Every line high, LCLK stopped, up to the given sample
+function demo_rest(lines, until) {
+    for (var r = 0; r < lines.length; r++) {
+        var left = until - ScanaStudio.builder_get_samples_acc(lines[r]);
+        if (left > 0) {
+            ScanaStudio.builder_add_samples(lines[r], 1, left);
+        }
     }
 }
 
