@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Adressable RGB LED chipsets (WS281x, SK68xx, APA104, Wurth WL-ICLED, ...)
 </DESCRIPTION>
-<VERSION> 0.10 </VERSION>
-<AUTHOR_NAME>  Vladislav Kosinov </AUTHOR_NAME>
+<VERSION> 0.11 </VERSION>
+<AUTHOR_NAME>  Vladislav Kosinov, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright 2019 Ikalogic SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.11: Settings of a wizard page never shown (decoder added from the demo device) fall back to their defaults instead of failing.
 v0.10: Clocked end frame is now DATA-high (per WL-ICLED datasheet). Rewrote clocked framing (start frame = 32 consecutive zeros, short zero runs flushed into the word) which removes the start/LED and end/start packet overlaps and the data-high end-frame handling. Generator end frame holds data high.
 v0.9: Decoder GUI is now a 3-step wizard. Step 3 lets the user enable "Plot LED current" and only shows the plot options when enabled.
 v0.8: Two-step GUI wizard (interface choice on step 1 conditions step 2). Added per-bit sample-point dots (1/0) on decoded items. Fixed clocked decoding desync after the first frame (start frame = >=32 zeros terminated by the first '1').
@@ -199,9 +200,25 @@ String.prototype.pad = function(size)
     return s;
 };
 
+// v3 builds a wizard page only when it is shown: until then its items do not
+// exist and gui_get_value() throws (v6 returns undefined)
+function gui_value_or (id, default_value)
+{
+    var v;
+    try
+    {
+        v = ScanaStudio.gui_get_value(id);
+    }
+    catch (e)
+    {
+        return default_value;
+    }
+    return (v === undefined) ? default_value : v;
+}
+
 function get_current_chip()
 {
-    var user_chip_id = Number(ScanaStudio.gui_get_value("chip_id"));
+    var user_chip_id = Number(gui_value_or("chip_id", 0));
     var c = null;
 
     for (var i in CHIPSETS_TABLE)
@@ -217,7 +234,7 @@ function get_current_chip()
 
 function update_current_chip (updated_chip)
 {
-    var user_chip_id = Number(ScanaStudio.gui_get_value("chip_id"));
+    var user_chip_id = Number(gui_value_or("chip_id", 0));
 
     for (var i in CHIPSETS_TABLE)
     {
@@ -362,23 +379,22 @@ function on_draw_gui_decoder(page_number)
 }
 
 // Read all decoder settings from the GUI and apply them. Called at decode time
-// (and from the demo builder) when every page's items are committed. Only reads
-// the items that exist for the selected interface, so it never references a
-// missing GUI item.
+// (and from the demo builder). Items of a page never shown fall back to their
+// defaults.
 function read_decoder_settings()
 {
     disp_format = Number(ScanaStudio.gui_get_value("disp_format")) ? 16 : 10;
     interface_mode = Number(ScanaStudio.gui_get_value("interface"));
 
     // Step 3: "plot_current" container 0 = off, 1 = plot per-LED current.
-    if (Number(ScanaStudio.gui_get_value("plot_current")) == 1)
+    if (Number(gui_value_or("plot_current", 0)) == 1)
     {
         current_trace_mode = 1;
         // max_led_graphs combo: 0->4, 1->8, 2->16, 3->32, 4->all(-1).
-        var sel = Number(ScanaStudio.gui_get_value("max_led_graphs"));
+        var sel = Number(gui_value_or("max_led_graphs", 1));
         var caps = [4, 8, 16, 32, -1];
         max_led_graphs = (sel >= 0 && sel < caps.length) ? caps[sel] : 8;
-        i_max = Number(ScanaStudio.gui_get_value("i_max"));
+        i_max = Number(gui_value_or("i_max", 0.0145));
     }
     else
     {
@@ -387,35 +403,35 @@ function read_decoder_settings()
 
     if (interface_mode == 1)
     {
-        clocked_chip = clocked_chips_in_order()[Number(ScanaStudio.gui_get_value("chip_clocked"))];
+        clocked_chip = clocked_chips_in_order()[Number(gui_value_or("chip_clocked", 0))];
         return;
     }
 
     var c = get_current_chip();
 
-    c.rst_time = Number(ScanaStudio.gui_get_value(c.str + "_rst_time"));
+    c.rst_time = Number(gui_value_or(c.str + "_rst_time", c.rst_time));
 
     if (c.bit_time > 0)
     {
-        c.bit_time = Number(ScanaStudio.gui_get_value(c.str + "_bit_time"));
+        c.bit_time = Number(gui_value_or(c.str + "_bit_time", c.bit_time));
     }
 
     if (c.bit_var > 0)
     {
-        c.bit_var = Number(ScanaStudio.gui_get_value(c.str + "_bit_var"));
+        c.bit_var = Number(gui_value_or(c.str + "_bit_var", c.bit_var));
     }
 
-    c.t0h = Number(ScanaStudio.gui_get_value(c.str + "_t0h"));
-    c.t0l = Number(ScanaStudio.gui_get_value(c.str + "_t0l"));
-    c.t1h = Number(ScanaStudio.gui_get_value(c.str + "_t1h"));
-    c.t1l = Number(ScanaStudio.gui_get_value(c.str + "_t1l"));
+    c.t0h = Number(gui_value_or(c.str + "_t0h", c.t0h));
+    c.t0l = Number(gui_value_or(c.str + "_t0l", c.t0l));
+    c.t1h = Number(gui_value_or(c.str + "_t1h", c.t1h));
+    c.t1l = Number(gui_value_or(c.str + "_t1l", c.t1l));
 
     if (c.t_var > 0)
     {
-        c.t_var = Number(ScanaStudio.gui_get_value(c.str + "_t_var"));
+        c.t_var = Number(gui_value_or(c.str + "_t_var", c.t_var));
     }
 
-    var clr_id = Number(ScanaStudio.gui_get_value(c.str + "_clr_order"));
+    var clr_id = Number(gui_value_or(c.str + "_clr_order", CLR_ORDER_TABLE[c.clr_order].clr_id));
 
     for (var i in CLR_ORDER_TABLE)
     {
@@ -490,7 +506,7 @@ function on_decode_signals (resume)
     {
         state_machine = 0;
         sample_rate = ScanaStudio.get_capture_sample_rate();
-        ch = Number(ScanaStudio.gui_get_value("ch"));
+        ch = Number(gui_value_or("ch", 0));
         bit_object = new BitObject(0, 0, 0);
 
         word_cnt = 0;
@@ -973,8 +989,8 @@ function decode_signals_clocked (resume)
     if (!resume)
     {
         sample_rate = ScanaStudio.get_capture_sample_rate();
-        ch = Number(ScanaStudio.gui_get_value("ch"));
-        ch_clk = Number(ScanaStudio.gui_get_value("ch_clk"));
+        ch = Number(gui_value_or("ch", 0));
+        ch_clk = Number(gui_value_or("ch_clk", 1));
 
         clk_zero_start_sample = 0;
         clk_pending = [];
@@ -1213,7 +1229,7 @@ function on_build_demo_signals()
     var builder = ScanaStudio.BuilderObject;
     var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
     var sample_rate = ScanaStudio.builder_get_sample_rate();
-    var ch = Number(ScanaStudio.gui_get_value("ch"));
+    var ch = Number(gui_value_or("ch", 0));
     var iface = Number(ScanaStudio.gui_get_value("interface"));
 
     // Default demo routine: a rolling rainbow over a short chain, so the decoded
@@ -1226,8 +1242,8 @@ function on_build_demo_signals()
 
     if (iface == 1) // Two-wire (clocked)
     {
-        var ch_clk = Number(ScanaStudio.gui_get_value("ch_clk"));
-        var clk_chip = clocked_chips_in_order()[Number(ScanaStudio.gui_get_value("chip_clocked"))];
+        var ch_clk = Number(gui_value_or("ch_clk", 1));
+        var clk_chip = clocked_chips_in_order()[Number(gui_value_or("chip_clocked", 0))];
         var clk_freq = sample_rate / 20; // -> 10 samples per half clock
         var gain = 31;
 
