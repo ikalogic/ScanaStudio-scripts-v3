@@ -4,7 +4,7 @@
 This protocol can decode FDX-B Animal Identification signals. Refer to ISO 11784/5 for more information.
 </DESCRIPTION>
 <VERSION> 0.3 </VERSION>
-<AUTHOR_NAME>  Victor Canoz </AUTHOR_NAME>
+<AUTHOR_NAME>  Victor Canoz, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> v.canoz@ikalogic.com</AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Victor Canoz </COPYRIGHT>

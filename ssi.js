@@ -4,7 +4,7 @@
 Synchronous Serial Interface analyzer
 </DESCRIPTION>
 <VERSION> 0.4 </VERSION>
-<AUTHOR_NAME>  Ibrahim Kamal </AUTHOR_NAME>
+<AUTHOR_NAME>  Ibrahim Kamal, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim Kamal </COPYRIGHT>

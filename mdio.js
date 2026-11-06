@@ -4,13 +4,14 @@
 IEEE 802.3 MDIO (Management Data Input/Output) decoder with Clause 22 and Clause 45 support.
 (Clause 45 is untested, please report any issues you may find)
 </DESCRIPTION>
-<VERSION> 1.1 </VERSION>
-<AUTHOR_NAME> Ibrahim KAMAL </AUTHOR_NAME>
+<VERSION> 1.2 </VERSION>
+<AUTHOR_NAME> Ibrahim KAMAL, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v1.2: Fixed live decoding losing a preamble or a frame cut at the end of the received samples.
 v1.1: Fixed read timing to comply with IEEE 802.3 specification - PHY-driven data now sampled on falling edge of MDC.
 v1.0: Initial release with Clause 22 decoding, Packet View, demo builder and trigger helper.
 </RELEASE_NOTES>
@@ -141,6 +142,18 @@ var sampling_rate;
 
 var mdio_bits_buffer;
 
+//Start detection state, kept across calls: data may end in the middle of a preamble
+var fs_prev_info, fs_run_start, fs_run_count, fs_last_run;
+//A start already found whose frame is not complete yet
+var mdio_pending_start;
+
+function mdio_reset_find_start() {
+    fs_prev_info = null;
+    fs_run_start = -1;
+    fs_run_count = 0;
+    fs_last_run = null;
+}
+
 function reload_dec_gui_values() {
     ch_mdio = ScanaStudio.gui_get_value("ch_mdio");
     ch_mdc = ScanaStudio.gui_get_value("ch_mdc");
@@ -168,6 +181,8 @@ function on_decode_signals(resume) {
         reload_dec_gui_values();
         sampling_rate = ScanaStudio.get_capture_sample_rate();
         mdio_bits_buffer = [];
+        mdio_reset_find_start();
+        mdio_pending_start = null;
         ScanaStudio.trs_reset(ch_mdio);
         ScanaStudio.trs_reset(ch_mdc);
     }
@@ -182,10 +197,14 @@ function on_decode_signals(resume) {
 }
 
 function mdio_fetch_frame() {
-    var start_info = mdio_find_start();
+    var start_info = mdio_pending_start;
     if (start_info == null) {
-        return null;
+        start_info = mdio_find_start();
+        if (start_info == null) {
+            return null;
+        }
     }
+    mdio_pending_start = null;
 
     var bit_infos = start_info.start_bits.slice(0);
 
@@ -195,7 +214,7 @@ function mdio_fetch_frame() {
     for (var i = 0; i < control_bits_needed; i++) {
         var info = mdio_fetch_next_bit(false); // Rising edge
         if (info == null) {
-            return null;
+            return mdio_wait_frame(start_info, bit_infos);
         }
         bit_infos.push(info);
     }
@@ -227,7 +246,7 @@ function mdio_fetch_frame() {
             bit_infos.push(data_infos[d]);
         }
     } else {
-        return null;
+        return mdio_wait_frame(start_info, bit_infos);
     }
 
     // Handle optional CRC field (always use same edge as data)
@@ -237,18 +256,22 @@ function mdio_fetch_frame() {
             for (var c = 0; c < crc_infos.length; c++) {
                 bit_infos.push(crc_infos[c]);
             }
+        } else {
+            return mdio_wait_frame(start_info, bit_infos);
         }
     }
 
     return mdio_parse_frame(start_info, bit_infos);
 }
 
-function mdio_find_start() {
-    var prev_info = null;
-    var current_run_start = -1;
-    var current_run_count = 0;
-    var last_run = null;
+// The frame is cut by the end of the samples: put its bits back and retry on the next call
+function mdio_wait_frame(start_info, bit_infos) {
+    mdio_pushback_bits(bit_infos.slice(start_info.start_bits.length));
+    mdio_pending_start = start_info;
+    return null;
+}
 
+function mdio_find_start() {
     while (ScanaStudio.abort_is_requested() == false) {
         var info = mdio_fetch_next_bit(false); // Always use rising edge for start detection
         if (info == null) {
@@ -256,23 +279,25 @@ function mdio_find_start() {
         }
 
         if (info.bit == 1) {
-            if (current_run_count == 0) {
-                current_run_start = info.sample_index;
+            if (fs_run_count == 0) {
+                fs_run_start = info.sample_index;
             }
-            current_run_count++;
+            fs_run_count++;
         }
         else {
-            if (current_run_count > 0) {
-                last_run = {
-                    start_sample: current_run_start,
-                    end_sample: prev_info.sample_index,
-                    count: current_run_count
+            if (fs_run_count > 0) {
+                fs_last_run = {
+                    start_sample: fs_run_start,
+                    end_sample: fs_prev_info.sample_index,
+                    count: fs_run_count
                 };
             }
-            current_run_count = 0;
+            fs_run_count = 0;
         }
 
-        if (prev_info != null) {
+        if (fs_prev_info != null) {
+            var prev_info = fs_prev_info;
+            var last_run = fs_last_run;
             var start_code = (prev_info.bit << 1) | info.bit;
             var clause_detected = -1;
 
@@ -290,6 +315,7 @@ function mdio_find_start() {
                 }
 
                 if (has_valid_preamble) {
+                    mdio_reset_find_start();
                     return {
                         clause: clause_detected,
                         preamble: last_run,
@@ -308,7 +334,7 @@ function mdio_find_start() {
             }
         }
 
-        prev_info = info;
+        fs_prev_info = info;
     }
 
     return null;
