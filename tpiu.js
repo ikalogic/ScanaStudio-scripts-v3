@@ -3,13 +3,14 @@
 <DESCRIPTION>
 This script decodes ARM trace TPIU bus. TRACE CTRL is currently not supported.
 </DESCRIPTION>
-<VERSION> 0.2 </VERSION>
-<AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
+<VERSION> 0.3 </VERSION>
+<AUTHOR_NAME>  Ibrahim KAMAL, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.3:  Added demo signals. Fixed live decoding reading inverted data bits, and the first frame of a capture.
 v0.2:  Faster decoding, fixed bug that caused freeze at the end of decoding, fixed bug that caused wrong TPIU packet decoding, added more advanced options to decoder GUI
 V0.1:  Initial release.
 </RELEASE_NOTES>
@@ -175,8 +176,8 @@ function on_decode_signals(resume)
       {
         //ScanaStudio.console_info_msg("partial_word_counter = " + partial_word_counter + ", tpiu data = 0x" + tpiu_word.toString(16),trs_clk.sample_index);
         //Push two bytes into tpiu_frame
-        tpiu_frame.push(new TpiuByteCtor((tpiu_word & 0xFF),clk_edge_fifo[31-(16/tpiu_data_channel.length)]+1,clk_edge_fifo[31-(8/tpiu_data_channel.length)]-1));
-        tpiu_frame.push(new TpiuByteCtor(((tpiu_word >>> 8) & 0xFF),clk_edge_fifo[31-(8/tpiu_data_channel.length)]+1,clk_edge_fifo[31]-1));
+        tpiu_frame.push(new TpiuByteCtor((tpiu_word & 0xFF),clk_edge_back(16/tpiu_data_channel.length)+1,clk_edge_back(8/tpiu_data_channel.length)-1));
+        tpiu_frame.push(new TpiuByteCtor(((tpiu_word >>> 8) & 0xFF),clk_edge_back(8/tpiu_data_channel.length)+1,clk_edge_back(0)-1));
         if (tpiu_frame.length >= 16)
         {
           //ScanaStudio.console_info_msg("tpiu_frame[0]="+tpiu_frame[0].data);
@@ -188,6 +189,12 @@ function on_decode_signals(resume)
 
     }
   }
+}
+
+//The clock edge `back` edges before the latest one (the FIFO is short at the start of a capture)
+function clk_edge_back(back)
+{
+  return clk_edge_fifo[Math.max(0, clk_edge_fifo.length - 1 - back)];
 }
 
 function TpiuByteCtor(data,start_sample,end_sample)
@@ -202,7 +209,10 @@ function build_tpiu_bits()
   var bits = 0;
   for (var i = 0; i < tpiu_data_channel.length; i++)
   {
-      bits |= ((~trs_data[i].value) & 0x1) << i;
+      //trs_data[i] is the first transition after the clock edge, or the last one
+      //before it when none follows yet (live data, end of capture)
+      var level = (trs_data[i].sample_index > trs_clk.sample_index) ? ~trs_data[i].value : trs_data[i].value;
+      bits |= (level & 0x1) << i;
   }
   return bits;
 }
@@ -343,4 +353,91 @@ function pad (num_str, size)
 {
     while (num_str.length < size) num_str = "0" + num_str;
     return num_str;
+}
+
+//Function called to generate demo signals (when no physical device is attached)
+function on_build_demo_signals()
+{
+  parse_gui();
+  var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
+  var quarter = Math.max(1, Math.floor(ScanaStudio.builder_get_sample_rate() / 4e6)); //1 MHz trace clock
+  var text = "Hello from the TPIU demo! ";
+  var text_idx = 0;
+  var counter = 0;
+  var frame_count = 0;
+  var clk_level = 0;
+  var data_bits = 0;
+
+  //Lead-in: no clock, data lines low
+  demo_tpiu_hold(clk_level, data_bits, 40 * quarter);
+  while (ScanaStudio.builder_get_samples_acc(tpiu_clk_channel) < samples_to_build)
+  {
+    if (ScanaStudio.abort_is_requested()) break;
+    var bytes = [];
+    if ((frame_count % 4) == 0)
+    {
+      bytes = bytes.concat([0xFF, 0xFF, 0xFF, 0x7F]); //full synchronization packet
+    }
+    var payload = [];
+    for (var k = 0; k < 14; k++)
+    {
+      if ((frame_count % 2) == 0)
+      {
+        payload.push(text.charCodeAt(text_idx));
+        text_idx = (text_idx + 1) % text.length;
+      }
+      else
+      {
+        payload.push(counter);
+        counter = (counter + 1) % 0x7F; //never 0xFF: no false synchronization
+      }
+    }
+    bytes = bytes.concat(demo_tpiu_frame(((frame_count % 2) == 0) ? 0x01 : 0x02, payload));
+    for (var b = 0; b < bytes.length; b++)
+    {
+      //LSB first, one nibble per clock edge (both edges)
+      for (var n = 0; n < 2; n++)
+      {
+        demo_tpiu_hold(clk_level, (bytes[b] >> (4 * n)) & 0xF, quarter);
+        clk_level ^= 1;
+        demo_tpiu_hold(clk_level, (bytes[b] >> (4 * n)) & 0xF, quarter);
+      }
+    }
+    frame_count++;
+    if ((frame_count % 8) == 0)
+    {
+      demo_tpiu_hold(clk_level, 0, Math.floor(samples_to_build / 40)); //trace clock stopped
+    }
+  }
+}
+
+function demo_tpiu_hold(clk_level, nibble, samples)
+{
+  ScanaStudio.builder_add_samples(tpiu_clk_channel, clk_level, samples);
+  for (var i = 0; i < tpiu_data_channel.length; i++)
+  {
+    ScanaStudio.builder_add_samples(tpiu_data_channel[i], (nibble >> i) & 0x1, samples);
+  }
+}
+
+//A 16-byte formatter frame: an immediate ID change, 14 data bytes, the auxiliary byte
+function demo_tpiu_frame(id, payload)
+{
+  var frame = [(id << 1) | 0x1];
+  var aux = 0;
+  for (var i = 0; i < 14; i++)
+  {
+    var pos = i + 1;
+    if (pos % 2) //odd position: plain data byte
+    {
+      frame.push(payload[i]);
+    }
+    else //even position: bit 0 travels in the auxiliary byte
+    {
+      frame.push(payload[i] & 0xFE);
+      aux |= (payload[i] & 0x1) << (pos / 2);
+    }
+  }
+  frame.push(aux);
+  return frame;
 }
