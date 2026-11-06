@@ -3,13 +3,14 @@
 <DESCRIPTION>
 This protocol can decode FDX-B Animal Identification signals. Refer to ISO 11784/5 for more information.
 </DESCRIPTION>
-<VERSION> 0.2 </VERSION>
+<VERSION> 0.3 </VERSION>
 <AUTHOR_NAME>  Victor Canoz </AUTHOR_NAME>
 <AUTHOR_URL> v.canoz@ikalogic.com</AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Victor Canoz </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.3: Fixed live decoding re-reading bits already decoded. Added demo signals.
 V0.2: Added dec_item_end() for each dec_item_new().
 V0.1: Initial release.
 </RELEASE_NOTES>
@@ -83,6 +84,9 @@ var override_extended_data_bit;
 //items
 var tag_number_and_country_idx;
 var biphase_items
+var biphase_idx; //next biphase item to read, kept across calls
+var ok;
+var data_to_check;
 
 function array_to_int(array) {
   var buf = 0;
@@ -132,13 +136,13 @@ function on_decode_signals(resume) {
     last_11_bits = 0;
     header_cnt = 0;
     biphase_items = [];
+    biphase_idx = 0;
     state_machine = "reset";
   }
   //var biphase_items_dec = ScanaStudio.pre_decode("biphase_encoding.js", resume);
   biphase_items = biphase_items.concat(ScanaStudio.pre_decode("biphase_encoding.js", resume));
-  if (biphase_items.length < 2+14*9) return;
 
-  var i = 0;
+  var i = biphase_idx;
   while (i < biphase_items.length) {
     switch (state_machine) {
       case "reset":
@@ -187,7 +191,7 @@ function on_decode_signals(resume) {
         break;
 
       case "checking":
-        var ok = true;
+        ok = true;
         //Checking control bits and remove them
         for (j = 0; j < data_len; j++) {
           if ((j % 9 == 0) || (j == 0)) {
@@ -224,7 +228,7 @@ function on_decode_signals(resume) {
 
         //Check CRC
         if (ok) {
-          var data_to_check = bytes.slice(0, 8);
+          data_to_check = bytes.slice(0, 8);
           var computed_crc = crc16(data_to_check);
           var read_crc = (bytes[8] << 8) | (bytes[9]);
 
@@ -368,4 +372,77 @@ function on_decode_signals(resume) {
         break;
     }
   }
+  if ((state_machine == "waiting_header") && (i > 10)) {
+    //A header ends at i or later, so it starts at i - 10 or later
+    biphase_items = biphase_items.slice(i - 10, biphase_items.length);
+    i = 10;
+  }
+  biphase_idx = i;
+}
+
+//Function called to generate demo signals (when no physical device is attached)
+function on_build_demo_signals() {
+  var demo_ch = ScanaStudio.gui_get_value("ch");
+  var samples_to_build = ScanaStudio.builder_get_maximum_samples_count();
+  var samples_per_bit = ScanaStudio.builder_get_sample_rate() / (134.2e3 / 32);
+  var countries = [250, 276, 826, 840];
+  var level = 0;
+  var bit_end = 10 * samples_per_bit; //idle lead-in
+  var frame = 0;
+
+  ScanaStudio.builder_add_samples(demo_ch, level, Math.round(bit_end));
+  while (ScanaStudio.builder_get_samples_acc(demo_ch) < samples_to_build) {
+    if (ScanaStudio.abort_is_requested()) break;
+    var extended = (frame % 2) == 1;
+    var bits = demo_frame_bits(250000000 + 4321 * frame, countries[frame % 4], extended,
+      0x00ABCD + frame, (frame % 5) == 4);
+    if (frame == 0) bits = [0, 0, 0, 0, 0, 0, 0, 0].concat(bits); //lets the biphase decoder lock
+    for (var n = 0; n < bits.length; n++) {
+      //Biphase: an edge at every bit boundary, plus one mid-bit for a 0
+      var bit_start = bit_end;
+      bit_end += samples_per_bit;
+      if (bits[n] == 0) {
+        demo_add_level(demo_ch, level, bit_start + samples_per_bit / 2);
+        level ^= 1;
+      }
+      demo_add_level(demo_ch, level, bit_end);
+      level ^= 1;
+    }
+    frame++;
+  }
+}
+
+function demo_add_level(demo_ch, level, until_sample) {
+  var count = Math.round(until_sample) - ScanaStudio.builder_get_samples_acc(demo_ch);
+  if (count > 0) ScanaStudio.builder_add_samples(demo_ch, level, count);
+}
+
+//128 bits as transmitted: header, then 13 bytes each led by a control bit
+function demo_frame_bits(id, country, extended, extended_value, bad_crc) {
+  //64-bit tag code, LSB first: ID (38 bits), country (10 bits), data block flag, animal flag
+  var code = [];
+  var k;
+  for (k = 0; k < 64; k++) code[k] = 0;
+  for (k = 0; k < 38; k++) code[k] = Math.floor(id / Math.pow(2, k)) % 2;
+  for (k = 0; k < 10; k++) code[38 + k] = (country >> k) & 1;
+  code[48] = extended ? 1 : 0;
+  code[63] = 1;
+
+  var bytes = [];
+  for (k = 0; k < 8; k++) {
+    var received = 0;
+    for (var m = 0; m < 8; m++) received |= code[8 * k + m] << (7 - m);
+    bytes[k] = received;
+  }
+  var crc = crc16(bytes) ^ (bad_crc ? 0x0001 : 0);
+  bytes[8] = (crc >> 8) & 0xFF;
+  bytes[9] = crc & 0xFF;
+  for (k = 0; k < 3; k++) bytes[10 + k] = byte_reverse((extended_value >> (8 * k)) & 0xFF);
+
+  var bits = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+  for (k = 0; k < bytes.length; k++) {
+    bits.push(1);
+    for (var m2 = 7; m2 >= 0; m2--) bits.push((bytes[k] >> m2) & 1);
+  }
+  return bits;
 }
