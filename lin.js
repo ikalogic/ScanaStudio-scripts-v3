@@ -3,13 +3,14 @@
 <DESCRIPTION>
 LIN (Local Interconnect Network) protocol analyzer
 </DESCRIPTION>
-<VERSION> 0.7 </VERSION>
-<AUTHOR_NAME>  Ibrahim KAMAL, Vladislav Kosinov </AUTHOR_NAME>
+<VERSION> 0.8 </VERSION>
+<AUTHOR_NAME>  Ibrahim KAMAL, Vladislav Kosinov, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL, Vladislav Kosinov </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.8: Decodes while the capture is running.
 v0.7: Fixed bug (error in SYNC field interpretation)
 v0.6: Added more information about invlid sync fields
 V0.5: Added hex and packet views
@@ -80,7 +81,6 @@ function on_eval_gui_decoder()
 var sampling_rate;
 var state_machine;
 var chksum_bytes = [];
-var finished = false;
 
 function on_decode_signals (resume)
 {
@@ -111,7 +111,7 @@ function on_decode_signals (resume)
 
 	while (ScanaStudio.trs_is_not_last(ch_lin))
 	{
-		if ((ScanaStudio.abort_is_requested() == true) || finished)
+		if ((ScanaStudio.abort_is_requested() == true))
 		{
 			return;
 		}
@@ -358,7 +358,7 @@ function on_decode_signals (resume)
 			    }
 			    else
 			    {
-			    	finished = true;
+			    	return; //the rest of the byte is not received yet
 			    }
 			break;
 
@@ -494,7 +494,7 @@ function on_decode_signals (resume)
 				}
 				else
 				{
-					finished = true;
+					return; //the rest of the byte is not received yet
 				}
 			break;
 
