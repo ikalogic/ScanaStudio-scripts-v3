@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Synchronous Serial Interface analyzer
 </DESCRIPTION>
-<VERSION> 0.3 </VERSION>
+<VERSION> 0.4 </VERSION>
 <AUTHOR_NAME>  Ibrahim Kamal </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim Kamal </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.4: Fixed an endless loop when one line has no transition left
 V0.3: Added hex view
 V0.2: Added dec_item_end() for each dec_item_new()
 V0.1: Initial release
@@ -66,14 +67,13 @@ function on_decode_signals(resume)
 
   while (ScanaStudio.abort_is_requested() == false)
   {
-    if ((!ScanaStudio.trs_is_not_last(ch_data)) && (!ScanaStudio.trs_is_not_last(ch_clock)))
-    {
-      break;
-    }
-
     switch (state_machine)
     {
       case 0: //detect clock falling edge
+        if (!ScanaStudio.trs_is_not_last(ch_clock))
+        {
+          return; //No clock edge left (yet): wait for more samples
+        }
         trs_clock = ScanaStudio.trs_get_next(ch_clock);
         if (trs_clock.value == 0)
         {
@@ -99,6 +99,11 @@ function on_decode_signals(resume)
         if (trs_data.sample_index <= trs_clock.sample_index)
         {
           data_bit = trs_data.value;
+          if (!ScanaStudio.trs_is_not_last(ch_data))
+          {
+            state_machine++; //DATA holds its last value up to the end of the samples
+            break;
+          }
           trs_data = ScanaStudio.trs_get_next(ch_data);
         }
         else
