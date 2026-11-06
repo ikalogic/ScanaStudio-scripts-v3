@@ -4,13 +4,14 @@
 SW-DP decoder according to the ARM Debug Interface Architecture Specification ADIv6.0.
 About the APACC, it can decode the MEM-AP and the JTAG-AP, others are consider unknown.
 </DESCRIPTION>
-<VERSION> 1.1 </VERSION>
-<AUTHOR_NAME> Corentin Maravat </AUTHOR_NAME>
+<VERSION> 1.2 </VERSION>
+<AUTHOR_NAME> Corentin Maravat, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ikalogic SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V1.2:  Decodes while the capture is running.
 V1.1:  Bug fix : variable declaration.
 V1.0:  Initial release.
 </RELEASE_NOTES>
@@ -179,6 +180,198 @@ const   SWD_PROTOCOL_VERSION_2 = 0,
         SWD_PROTOCOL_VERSION_1 = 1;
 
 
+//Variables a decoding pass keeps from one call to the next
+var BASEPTR0_PTR, BASEPTR1_PTR, DAR_nb, DPIDR, IDR, IDR_DPIDR, IDR_IDR, MINDP, SDeviceEn, TARGETIDL_DPIDR, TARGETID_IDR, TARGETSEL_DPIDR, TARGETSEL_IDR, ack_item, byte_nb, data_size, end_data, end_idle, end_protocol_error, end_request, end_reset, end_reset_search, nb_trs, packet_string, protocol_error_end, protocol_error_start, reset_sequence, start_data, start_idle, start_idle_cycles, start_item, start_request, start_reset, start_search, swd_simple, swd_value, test, tmp_trs_sample_index, trs_clk, trs_io, trs_start;
+var PASS_VARIABLES = ["BASEPTR0_PTR", "BASEPTR1_PTR", "DAR_nb", "DPIDR", "IDR", "IDR_DPIDR", "IDR_IDR", "MINDP", "SDeviceEn", "TARGETIDL_DPIDR", "TARGETID_IDR", "TARGETSEL_DPIDR", "TARGETSEL_IDR", "ack_item", "byte_nb", "data_size", "end_data", "end_idle", "end_protocol_error", "end_request", "end_reset", "end_reset_search", "nb_trs", "packet_string", "protocol_error_end", "protocol_error_start", "reset_sequence", "start_data", "start_idle", "start_idle_cycles", "start_item", "start_request", "start_reset", "start_search", "swd_simple", "swd_value", "test", "tmp_trs_sample_index", "trs_clk", "trs_io", "trs_start"];
+var iterators_started = false;
+
+function reset_pass_variables()
+{
+    for (var i = 0; i < PASS_VARIABLES.length; i++)
+    {
+        GLOBAL_SCOPE[PASS_VARIABLES[i]] = undefined;
+    }
+    held_output = [];
+    wait_available = -1;
+}
+
+//Each channel's cursor on its first edge, past the start-of-capture marker at sample 0
+function start_iterators()
+{
+    trs_clk = ScanaStudio.trs_reset(ch_clk);
+    trs_clk = ScanaStudio.trs_get_next(ch_clk);
+    tmp_trs_sample_index;
+    tmp_trs_sample_index = trs_clk.sample_index;
+    while( (tmp_trs_sample_index == trs_clk.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+    {
+        trs_clk = ScanaStudio.trs_get_next(ch_clk);
+    }
+    trs_io = ScanaStudio.trs_reset(ch_io);
+    trs_io = ScanaStudio.trs_get_next(ch_io);
+    tmp_trs_sample_index = trs_io.sample_index;
+    while( (tmp_trs_sample_index == trs_io.sample_index) && (ScanaStudio.trs_is_not_last(ch_io) == true) )
+    {
+        trs_io = ScanaStudio.trs_get_next(ch_io);
+    }
+    // ScanaStudio.console_info_msg("trs_io.smaple_index",trs_io.sample_index);
+    //init global variables
+    swd_simple = sync_decode_v2(io_channel,trs_clk.sample_index + 1,5);
+}
+
+/*
+ * Decoding while the capture runs: one pass of the main loop is a transaction.
+ * Its items are held; when the data runs out halfway, the pass is undone and done
+ * again at the next call, with more data. Only ScanaStudio 3 and 6 trs_* calls are used.
+*/
+var GLOBAL_SCOPE = (function () { return this; })();
+var held_output = [];
+var pass_snapshot = null;
+var wait_available = -1; //samples there when a pass last waited
+var PASS_WAIT = "SWD pass waiting for more data";
+var PASS_EXCLUDED = ["PASS_WAIT", "wait_available", "held_output", "pass_snapshot", "GLOBAL_SCOPE", "PASS_EXCLUDED", "PASS_VARIABLES", "HELD_CALLS", "held"];
+var HELD_CALLS = ["dec_item_new", "dec_item_add_content", "dec_item_add_sample_point", "dec_item_emphasize_error",
+    "dec_item_emphasize_warning", "dec_item_emphasize_success", "dec_item_end", "packet_view_add_packet", "hex_view_add_byte"];
+var held = {};
+for (var held_i = 0; held_i < HELD_CALLS.length; held_i++)
+{
+    held[HELD_CALLS[held_i]] = make_held_call(HELD_CALLS[held_i]);
+}
+
+function make_held_call(name)
+{
+    return function ()
+    {
+        held_output.push([name, Array.prototype.slice.call(arguments)]);
+        return 1;
+    };
+}
+
+//Data only: the API objects and the functions are not part of the decoder's state
+function is_plain_data(value)
+{
+    if (typeof value == "function")
+    {
+        return false;
+    }
+    if ((typeof value == "object") && (value !== null))
+    {
+        for (var key in value)
+        {
+            if (typeof value[key] == "function")
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+function pass_begin()
+{
+    held_output = [];
+    last_trans = false;
+    pass_snapshot = {};
+    for (var name in GLOBAL_SCOPE)
+    {
+        if (PASS_EXCLUDED.indexOf(name) >= 0)
+        {
+            continue;
+        }
+        var value = GLOBAL_SCOPE[name];
+        if (!is_plain_data(value))
+        {
+            continue;
+        }
+        pass_snapshot[name] = ((typeof value == "object") && (value !== null)) ? JSON.parse(JSON.stringify(value)) : value;
+    }
+}
+
+function pass_commit()
+{
+    for (var i = 0; i < held_output.length; i++)
+    {
+        var name = held_output[i][0];
+        var a = held_output[i][1];
+        switch (a.length)
+        {
+            case 0: ScanaStudio[name](); break;
+            case 1: ScanaStudio[name](a[0]); break;
+            case 2: ScanaStudio[name](a[0], a[1]); break;
+            case 3: ScanaStudio[name](a[0], a[1], a[2]); break;
+            case 4: ScanaStudio[name](a[0], a[1], a[2], a[3]); break;
+            case 5: ScanaStudio[name](a[0], a[1], a[2], a[3], a[4]); break;
+            case 6: ScanaStudio[name](a[0], a[1], a[2], a[3], a[4], a[5]); break;
+            case 7: ScanaStudio[name](a[0], a[1], a[2], a[3], a[4], a[5], a[6]); break;
+            default: ScanaStudio[name](a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]); break;
+        }
+    }
+    held_output = [];
+}
+
+//ScanaStudio.trs_is_not_last within a pass: while the capture runs, no next transition
+//means none received yet, so the pass waits; at the end of the capture it is the answer
+function is_not_last(channel)
+{
+    if (ScanaStudio.trs_is_not_last(channel))
+    {
+        return true;
+    }
+    if (wait_for_more_data())
+    {
+        throw PASS_WAIT;
+    }
+    return false;
+}
+
+//ScanaStudio.trs_get_next within a pass, which waits for a transition not received yet
+function next_trs(channel)
+{
+    is_not_last(channel);
+    return ScanaStudio.trs_get_next(channel);
+}
+
+//The pass needs samples that are not there yet: back to where it started, and true.
+//ScanaStudio calls once more when the samples stop. With no new sample since the last
+//wait AND no clock edge left to come, this is the end of the capture: the pass keeps
+//what it decoded, and false.
+function wait_for_more_data()
+{
+    var available = ScanaStudio.get_available_samples(ch_clk);
+    if ((available == wait_available) && !clock_edge_to_come(available))
+    {
+        pass_commit();
+        return false;
+    }
+    wait_available = available;
+    held_output = [];
+    for (var name in pass_snapshot)
+    {
+        GLOBAL_SCOPE[name] = pass_snapshot[name];
+    }
+    //the iterators back on the transitions the pass started from
+    put_iterator_on(ch_io, trs_io);
+    put_iterator_on(ch_clk, trs_clk);
+    return true;
+}
+
+//While the capture runs, the clock goes on after the last edge received
+function clock_edge_to_come(available)
+{
+    ScanaStudio.trs_get_before(ch_clk, available);
+    var to_come = ScanaStudio.trs_is_not_last(ch_clk);
+    put_iterator_on(ch_clk, trs_clk);
+    return to_come;
+}
+
+function put_iterator_on(channel, trs)
+{
+    if ((trs != undefined) && (trs.sample_index != undefined))
+    {
+        ScanaStudio.trs_get_before(channel, trs.sample_index);
+    }
+}
+
+
 function on_decode_signals(resume)
 {
   if (!resume) //If resume == false, it's the first call to this function.
@@ -186,25 +379,9 @@ function on_decode_signals(resume)
       //initialization code goes here, ex:
       sampling_rate = ScanaStudio.get_capture_sample_rate();
       reload_dec_gui_values();
-      io_channel.push(ch_io);
-      var trs_clk = ScanaStudio.trs_reset(ch_clk);
-      trs_clk = ScanaStudio.trs_get_next(ch_clk);
-      var tmp_trs_sample_index;
-      tmp_trs_sample_index = trs_clk.sample_index;
-      while( (tmp_trs_sample_index == trs_clk.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
-      {
-          trs_clk = ScanaStudio.trs_get_next(ch_clk);
-      }
-      trs_io = ScanaStudio.trs_reset(ch_io);
-      trs_io = ScanaStudio.trs_get_next(ch_io);
-      tmp_trs_sample_index = trs_io.sample_index;
-      while( (tmp_trs_sample_index == trs_io.sample_index) && (ScanaStudio.trs_is_not_last(ch_io) == true) )
-      {
-          trs_io = ScanaStudio.trs_get_next(ch_io);
-      }
-      // ScanaStudio.console_info_msg("trs_io.smaple_index",trs_io.sample_index);
-      //init global variables
-      swd_simple = sync_decode_v2(io_channel,trs_clk.sample_index + 1,5);
+      reset_pass_variables();
+      io_channel = [ch_io];
+      iterators_started = false;
       state_machine = ENUM_STATE_REQUEST;
       DP_BANK_SEL = 0;
       AP_Adress = 0;
@@ -214,6 +391,29 @@ function on_decode_signals(resume)
       //ScanaStudio.console_info_msg("Decoding resumed");
   }
 
+    if (!iterators_started)
+    {
+        if (ScanaStudio.get_available_samples(ch_clk) <= 0)
+        {
+            return; //no sample yet: the start-of-capture marker could not be skipped
+        }
+        pass_begin();
+        try
+        {
+            start_iterators();
+        }
+        catch (e)
+        {
+            if (e === PASS_WAIT)
+            {
+                return;
+            }
+            throw e;
+        }
+        pass_commit();
+        iterators_started = true;
+    }
+
     while (ScanaStudio.abort_is_requested() == false)
     {
         // ScanaStudio.console_info_msg(".");
@@ -222,6 +422,9 @@ function on_decode_signals(resume)
             break;
         }
         // ScanaStudio.console_info_msg("Protocol_State : " + Protocol_State + ", state_machine : " + state_machine , swd_simple.end_sample);
+        pass_begin();
+        try
+        {
         switch(state_machine)
         {
             case ENUM_STATE_REQUEST : // Request to read/Write an AP/DP register of the target
@@ -247,29 +450,29 @@ function on_decode_signals(resume)
                         }
                         if (reset == true)
                         {
-                            ScanaStudio.dec_item_new(ch_io,reset_sequence.start_sample + 1,reset_sequence.end_sample - 1);
-                            ScanaStudio.dec_item_add_content("Reset Sequence, go back to normal state");
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_new(ch_io,reset_sequence.start_sample + 1,reset_sequence.end_sample - 1);
+                            held.dec_item_add_content("Reset Sequence, go back to normal state");
+                            held.dec_item_end();
                             //Packet View
-                            ScanaStudio.packet_view_add_packet(true,ch_io,reset_sequence.start_sample,reset_sequence.end_sample,"RESET SEQUENCE","50 clocks with SWDIOTMS HIGH",ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
+                            held.packet_view_add_packet(true,ch_io,reset_sequence.start_sample,reset_sequence.end_sample,"RESET SEQUENCE","50 clocks with SWDIOTMS HIGH",ScanaStudio.PacketColors.Preamble.Title, ScanaStudio.PacketColors.Preamble.Content);
                             // Idle cycle
                             trs_io = ScanaStudio.trs_get_before(ch_io,reset_sequence.start_sample);
                             tmp_trs_sample_index = trs_io.sample_index;
-                            while( (tmp_trs_sample_index == trs_io.sample_index) && (ScanaStudio.trs_is_not_last(ch_io) == true) )
+                            while( (tmp_trs_sample_index == trs_io.sample_index) && (is_not_last(ch_io) == true) )
                             {
-                                trs_io = ScanaStudio.trs_get_next(ch_io);
+                                trs_io = next_trs(ch_io);
                             }
-                            var start_idle_cycles = trs_io.sample_index;
-                            trs_io = ScanaStudio.trs_get_next(ch_io); // rising edge because the last one was a falling
-                            ScanaStudio.dec_item_new(ch_io,start_idle_cycles + 1,trs_io.sample_index - 1);
-                            ScanaStudio.dec_item_add_content("Idle Cycles");
-                            ScanaStudio.dec_item_end();
+                            start_idle_cycles = trs_io.sample_index;
+                            trs_io = next_trs(ch_io); // rising edge because the last one was a falling
+                            held.dec_item_new(ch_io,start_idle_cycles + 1,trs_io.sample_index - 1);
+                            held.dec_item_add_content("Idle Cycles");
+                            held.dec_item_end();
                             // Display the driver on the clk line
-                            ScanaStudio.dec_item_new(ch_clk,reset_sequence.start_sample + 1,trs_io.sample_index - 1);
-                            ScanaStudio.dec_item_add_content("Driver : Host");
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_new(ch_clk,reset_sequence.start_sample + 1,trs_io.sample_index - 1);
+                            held.dec_item_add_content("Driver : Host");
+                            held.dec_item_end();
                             //Packet View
-                            ScanaStudio.packet_view_add_packet(false,ch_io,start_idle_cycles,trs_io.sample_index - 1,"RESET SEQUENCE","IDLE CYCLES",ScanaStudio.PacketColors.Misc.Title, ScanaStudio.PacketColors.Misc.Content);
+                            held.packet_view_add_packet(false,ch_io,start_idle_cycles,trs_io.sample_index - 1,"RESET SEQUENCE","IDLE CYCLES",ScanaStudio.PacketColors.Misc.Title, ScanaStudio.PacketColors.Misc.Content);
                             Protocol_State = "Reset";
                             DP_BANK_SEL = 0;
                             Turnaround_period = 1;
@@ -283,27 +486,27 @@ function on_decode_signals(resume)
                             if (swd_simple.unsigned_words == 165) // Correct DPIDR Request
                             {
                                 tmp_trs_sample_index = trs_clk.sample_index;
-                                while( (tmp_trs_sample_index == trs_clk.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+                                while( (tmp_trs_sample_index == trs_clk.sample_index) && (is_not_last(ch_clk) == true) )
                                 {
-                                    trs_clk = ScanaStudio.trs_get_next(ch_clk);
+                                    trs_clk = next_trs(ch_clk);
                                 }
-                                var protocol_error_end = trs_clk.sample_index;
+                                protocol_error_end = trs_clk.sample_index;
                                 // Display protocol error
-                                ScanaStudio.dec_item_new(ch_io,protocol_error_start + 1, protocol_error_end - 1);
-                                ScanaStudio.dec_item_add_content("Protocol error");
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_new(ch_io,protocol_error_start + 1, protocol_error_end - 1);
+                                held.dec_item_add_content("Protocol error");
+                                held.dec_item_end();
                                 // Display that we found a correct DPIDR and we go
-                                var end_protocol_error = dec_item_new_v2 (ch_io, swd_simple)[1];
-                                ScanaStudio.dec_item_add_content("Correct DPIDR Request, go back to normal state");
+                                end_protocol_error = dec_item_new_v2 (ch_io, swd_simple)[1];
+                                held.dec_item_add_content("Correct DPIDR Request, go back to normal state");
                                 display_sample(swd_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 // Display the driver on the clk line
-                                ScanaStudio.dec_item_new(ch_clk,protocol_error_start + 1,end_protocol_error - 1)
+                                held.dec_item_new(ch_clk,protocol_error_start + 1,end_protocol_error - 1)
                                 dec_item_new_v2 (ch_clk, swd_simple);
-                                ScanaStudio.dec_item_add_content("Driver : Host");
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_add_content("Driver : Host");
+                                held.dec_item_end();
                                 // Packet view
-                                ScanaStudio.packet_view_add_packet(true,ch_io,protocol_error_start,protocol_error_end,"REQUEST","Read, DP, DPIDR",ScanaStudio.get_channel_color(ch_io),ScanaStudio.get_channel_color(ch_io));
+                                held.packet_view_add_packet(true,ch_io,protocol_error_start,protocol_error_end,"REQUEST","Read, DP, DPIDR",ScanaStudio.get_channel_color(ch_io),ScanaStudio.get_channel_color(ch_io));
                                 // Update variables
                                 Protocol_State = "Transfer";
                                 Register_name = "DPIDR";
@@ -334,23 +537,23 @@ function on_decode_signals(resume)
                             }
                             if (reset == true)
                             {
-                                ScanaStudio.dec_item_new(ch_io,reset_sequence.start_sample + 1,reset_sequence.end_sample - 1);
-                                ScanaStudio.dec_item_add_content("Reset Sequence, go back to normal state");
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_new(ch_io,reset_sequence.start_sample + 1,reset_sequence.end_sample - 1);
+                                held.dec_item_add_content("Reset Sequence, go back to normal state");
+                                held.dec_item_end();
                                 // Packet view
-                                ScanaStudio.packet_view_add_packet(true,ch_io,reset_sequence.start_sample,reset_sequence.end_sample,"RESET SEQUENCE","50 clocks with SWDIOTMS HIGH",ScanaStudio.PacketColors.Preamble.Title,ScanaStudio.PacketColors.Preamble.Content);
+                                held.packet_view_add_packet(true,ch_io,reset_sequence.start_sample,reset_sequence.end_sample,"RESET SEQUENCE","50 clocks with SWDIOTMS HIGH",ScanaStudio.PacketColors.Preamble.Title,ScanaStudio.PacketColors.Preamble.Content);
                                 // Idle cycle
-                                trs_io = ScanaStudio.trs_get_next(ch_io); // falling edge because the last one was a rising
-                                var start_idle_cycles = trs_io.sample_index;
-                                trs_io = ScanaStudio.trs_get_next(ch_io); // rising edge because the last one was a falling
-                                ScanaStudio.dec_item_new(ch_io,start_idle_cycles + 1,trs_io.sample_index - 1);
-                                ScanaStudio.dec_item_add_content("Idle Cycles");
-                                ScanaStudio.dec_item_end();
+                                trs_io = next_trs(ch_io); // falling edge because the last one was a rising
+                                start_idle_cycles = trs_io.sample_index;
+                                trs_io = next_trs(ch_io); // rising edge because the last one was a falling
+                                held.dec_item_new(ch_io,start_idle_cycles + 1,trs_io.sample_index - 1);
+                                held.dec_item_add_content("Idle Cycles");
+                                held.dec_item_end();
                                 // Display the driver on the clk line
-                                var test = ScanaStudio.dec_item_new(ch_io,reset_sequence.start_sample,trs_io.sample_index - 1);
-                                ScanaStudio.dec_item_add_content("Driver : Host");
-                                ScanaStudio.dec_item_end();
-                                ScanaStudio.packet_view_add_packet(false,ch_io,start_idle_cycles,trs_io.sample_index - 1,"RESET SEQUENCE","IDLE CYCLES",ScanaStudio.PacketColors.Misc.Title,ScanaStudio.PacketColors.Misc.Content);
+                                test = held.dec_item_new(ch_io,reset_sequence.start_sample,trs_io.sample_index - 1);
+                                held.dec_item_add_content("Driver : Host");
+                                held.dec_item_end();
+                                held.packet_view_add_packet(false,ch_io,start_idle_cycles,trs_io.sample_index - 1,"RESET SEQUENCE","IDLE CYCLES",ScanaStudio.PacketColors.Misc.Title,ScanaStudio.PacketColors.Misc.Content);
                                 Protocol_State = "Reset";
                                 DP_BANK_SEL = 0;
                                 Turnaround_period = 1;
@@ -365,42 +568,42 @@ function on_decode_signals(resume)
                                 {
                                     trs_io = ScanaStudio.trs_get_before(ch_io,idle_cycles.start_sample + 1); // falling edge
                                     tmp_trs_sample_index = trs_io.sample_index;
-                                    while( (tmp_trs_sample_index == trs_io.sample_index) && (ScanaStudio.trs_is_not_last(ch_io) == true) )
+                                    while( (tmp_trs_sample_index == trs_io.sample_index) && (is_not_last(ch_io) == true) )
                                     {
-                                        trs_io = ScanaStudio.trs_get_next(ch_io); // rising edge
+                                        trs_io = next_trs(ch_io); // rising edge
                                     }
                                     trs_clk = ScanaStudio.trs_get_before(ch_clk,idle_cycles.start_sample - 1); //falling edge
-                                    var start_item = trs_clk.sample_index;
-                                    var nb_trs = 0;
+                                    start_item = trs_clk.sample_index;
+                                    nb_trs = 0;
                                     while (trs_clk.sample_index <= trs_io.sample_index - 1)
                                     {
                                         tmp_trs_sample_index = trs_clk.sample_index;
-                                        while( (tmp_trs_sample_index == trs_clk.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+                                        while( (tmp_trs_sample_index == trs_clk.sample_index) && (is_not_last(ch_clk) == true) )
                                         {
-                                            trs_clk = ScanaStudio.trs_get_next(ch_clk);
+                                            trs_clk = next_trs(ch_clk);
                                         }
                                         nb_trs++;
                                     }
                                     if (nb_trs >= 16)
                                     {
-                                        ScanaStudio.dec_item_new(ch_io,start_item + 1,trs_io.sample_index - 1);
-                                        ScanaStudio.dec_item_add_content("Idles Cycles : the clock can be stopped");
-                                        ScanaStudio.dec_item_add_content("Idles Cycles");
-                                        ScanaStudio.dec_item_end();
+                                        held.dec_item_new(ch_io,start_item + 1,trs_io.sample_index - 1);
+                                        held.dec_item_add_content("Idles Cycles : the clock can be stopped");
+                                        held.dec_item_add_content("Idles Cycles");
+                                        held.dec_item_end();
                                     }
                                     else
                                     {
-                                        ScanaStudio.dec_item_new(ch_io,start_item + 1,trs_io.sample_index - 1);
-                                        ScanaStudio.dec_item_add_content("Idles Cycles before another packet header");
-                                        ScanaStudio.dec_item_add_content("Idles Cycles");
-                                        ScanaStudio.dec_item_end();
+                                        held.dec_item_new(ch_io,start_item + 1,trs_io.sample_index - 1);
+                                        held.dec_item_add_content("Idles Cycles before another packet header");
+                                        held.dec_item_add_content("Idles Cycles");
+                                        held.dec_item_end();
                                     }
                                     // Display the driver
-                                    ScanaStudio.dec_item_new(ch_clk,start_item + 1,trs_io.sample_index - 1);
-                                    ScanaStudio.dec_item_add_content("Driver : Host");
-                                    ScanaStudio.dec_item_end();
+                                    held.dec_item_new(ch_clk,start_item + 1,trs_io.sample_index - 1);
+                                    held.dec_item_add_content("Driver : Host");
+                                    held.dec_item_end();
                                     // Packet view
-                                    ScanaStudio.packet_view_add_packet(false,ch_io,start_item + 1,trs_io.sample_index - 1,"Idles Cycles","Idles Cycles",ScanaStudio.PacketColors.Misc.Title,ScanaStudio.PacketColors.Misc.Content);
+                                    held.packet_view_add_packet(false,ch_io,start_item + 1,trs_io.sample_index - 1,"Idles Cycles","Idles Cycles",ScanaStudio.PacketColors.Misc.Title,ScanaStudio.PacketColors.Misc.Content);
                                     swd_simple.end_sample = trs_io.sample_index;
                                     // Check if there is a line reset
                                     trs_clk  = ScanaStudio.trs_get_before(ch_clk, trs_io.sample_index + 1);
@@ -416,29 +619,29 @@ function on_decode_signals(resume)
                                     }
                                     if (reset == true)
                                     {
-                                        ScanaStudio.dec_item_new(ch_io,reset_sequence.start_sample + 1,reset_sequence.end_sample - 1);
-                                        ScanaStudio.dec_item_add_content("Reset Sequence, go back to normal state");
-                                        ScanaStudio.dec_item_end();
+                                        held.dec_item_new(ch_io,reset_sequence.start_sample + 1,reset_sequence.end_sample - 1);
+                                        held.dec_item_add_content("Reset Sequence, go back to normal state");
+                                        held.dec_item_end();
                                         //Packet View
-                                        ScanaStudio.packet_view_add_packet(true,ch_io,reset_sequence.start_sample,reset_sequence.end_sample,"RESET SEQUENCE","50 clocks with SWDIOTMS HIGH",ScanaStudio.PacketColors.Preamble.Title,ScanaStudio.PacketColors.Preamble.Content);
+                                        held.packet_view_add_packet(true,ch_io,reset_sequence.start_sample,reset_sequence.end_sample,"RESET SEQUENCE","50 clocks with SWDIOTMS HIGH",ScanaStudio.PacketColors.Preamble.Title,ScanaStudio.PacketColors.Preamble.Content);
                                         // Idle cycle
                                         trs_io = ScanaStudio.trs_get_before(ch_io,reset_sequence.start_sample);
                                         tmp_trs_sample_index = trs_io.sample_index;
-                                        while( (tmp_trs_sample_index == trs_io.sample_index) && (ScanaStudio.trs_is_not_last(ch_io) == true) )
+                                        while( (tmp_trs_sample_index == trs_io.sample_index) && (is_not_last(ch_io) == true) )
                                         {
-                                            trs_io = ScanaStudio.trs_get_next(ch_io);
+                                            trs_io = next_trs(ch_io);
                                         }
-                                        var start_idle_cycles = trs_io.sample_index;
-                                        trs_io = ScanaStudio.trs_get_next(ch_io); // rising edge because the last one was a falling
-                                        ScanaStudio.dec_item_new(ch_io,start_idle_cycles + 1,trs_io.sample_index - 1);
-                                        ScanaStudio.dec_item_add_content("Idle Cycles");
-                                        ScanaStudio.dec_item_end();
+                                        start_idle_cycles = trs_io.sample_index;
+                                        trs_io = next_trs(ch_io); // rising edge because the last one was a falling
+                                        held.dec_item_new(ch_io,start_idle_cycles + 1,trs_io.sample_index - 1);
+                                        held.dec_item_add_content("Idle Cycles");
+                                        held.dec_item_end();
                                         // Display the driver on the clk line
-                                        ScanaStudio.dec_item_new(ch_clk,reset_sequence.start_sample + 1,trs_io.sample_index - 1);
-                                        ScanaStudio.dec_item_add_content("Driver : Host");
-                                        ScanaStudio.dec_item_end();
+                                        held.dec_item_new(ch_clk,reset_sequence.start_sample + 1,trs_io.sample_index - 1);
+                                        held.dec_item_add_content("Driver : Host");
+                                        held.dec_item_end();
                                         //Packet View
-                                        ScanaStudio.packet_view_add_packet(false,ch_io,start_idle_cycles,trs_io.sample_index - 1,"RESET SEQUENCE","IDLE CYCLES",ScanaStudio.PacketColors.Misc.Title,ScanaStudio.PacketColors.Misc.Content);
+                                        held.packet_view_add_packet(false,ch_io,start_idle_cycles,trs_io.sample_index - 1,"RESET SEQUENCE","IDLE CYCLES",ScanaStudio.PacketColors.Misc.Title,ScanaStudio.PacketColors.Misc.Content);
                                         Protocol_State = "Reset";
                                         DP_BANK_SEL = 0;
                                         Turnaround_period = 1;
@@ -461,29 +664,29 @@ function on_decode_signals(resume)
                                     }
                                     if (reset == true)
                                     {
-                                        ScanaStudio.dec_item_new(ch_io,reset_sequence.start_sample + 1,reset_sequence.end_sample - 1);
-                                        ScanaStudio.dec_item_add_content("Reset Sequence, go back to normal state");
-                                        ScanaStudio.dec_item_end();
+                                        held.dec_item_new(ch_io,reset_sequence.start_sample + 1,reset_sequence.end_sample - 1);
+                                        held.dec_item_add_content("Reset Sequence, go back to normal state");
+                                        held.dec_item_end();
                                         //Packet View
-                                        ScanaStudio.packet_view_add_packet(true,ch_io,reset_sequence.start_sample,reset_sequence.end_sample,"RESET SEQUENCE","50 clocks with SWDIOTMS HIGH",ScanaStudio.PacketColors.Preamble.Title,ScanaStudio.PacketColors.Preamble.Content);
+                                        held.packet_view_add_packet(true,ch_io,reset_sequence.start_sample,reset_sequence.end_sample,"RESET SEQUENCE","50 clocks with SWDIOTMS HIGH",ScanaStudio.PacketColors.Preamble.Title,ScanaStudio.PacketColors.Preamble.Content);
                                         // Idle cycle
                                         trs_io = ScanaStudio.trs_get_before(ch_io,reset_sequence.start_sample);
                                         tmp_trs_sample_index = trs_io.sample_index;
-                                        while( (tmp_trs_sample_index == trs_io.sample_index) && (ScanaStudio.trs_is_not_last(ch_io) == true) )
+                                        while( (tmp_trs_sample_index == trs_io.sample_index) && (is_not_last(ch_io) == true) )
                                         {
-                                            trs_io = ScanaStudio.trs_get_next(ch_io);
+                                            trs_io = next_trs(ch_io);
                                         }
-                                        var start_idle_cycles = trs_io.sample_index;
-                                        trs_io = ScanaStudio.trs_get_next(ch_io); // rising edge because the last one was a falling
-                                        ScanaStudio.dec_item_new(ch_io,start_idle_cycles + 1,trs_io.sample_index - 1);
-                                        ScanaStudio.dec_item_add_content("Idle Cycles");
-                                        ScanaStudio.dec_item_end();
+                                        start_idle_cycles = trs_io.sample_index;
+                                        trs_io = next_trs(ch_io); // rising edge because the last one was a falling
+                                        held.dec_item_new(ch_io,start_idle_cycles + 1,trs_io.sample_index - 1);
+                                        held.dec_item_add_content("Idle Cycles");
+                                        held.dec_item_end();
                                         // Display the driver on the clk line
-                                        ScanaStudio.dec_item_new(ch_clk,reset_sequence.start_sample + 1,trs_io.sample_index - 1);
-                                        ScanaStudio.dec_item_add_content("Driver : Host");
-                                        ScanaStudio.dec_item_end();
+                                        held.dec_item_new(ch_clk,reset_sequence.start_sample + 1,trs_io.sample_index - 1);
+                                        held.dec_item_add_content("Driver : Host");
+                                        held.dec_item_end();
                                         //Packet View
-                                        ScanaStudio.packet_view_add_packet(false,ch_io,start_idle_cycles,trs_io.sample_index - 1,"RESET SEQUENCE","IDLE CYCLES",ScanaStudio.PacketColors.Misc.Title,ScanaStudio.PacketColors.Misc.Content);
+                                        held.packet_view_add_packet(false,ch_io,start_idle_cycles,trs_io.sample_index - 1,"RESET SEQUENCE","IDLE CYCLES",ScanaStudio.PacketColors.Misc.Title,ScanaStudio.PacketColors.Misc.Content);
                                         Protocol_State = "Reset";
                                         DP_BANK_SEL = 0;
                                         Turnaround_period = 1;
@@ -503,27 +706,27 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 dec_item_new_v2(ch_io, swd_simple);
-                                ScanaStudio.dec_item_add_content("Start");
-                                ScanaStudio.dec_item_add_content("S");
-                                ScanaStudio.dec_item_add_sample_point(swd_simple.start_sample,"P")
-                                ScanaStudio.dec_item_emphasize_error();
+                                held.dec_item_add_content("Start");
+                                held.dec_item_add_content("S");
+                                held.dec_item_add_sample_point(swd_simple.start_sample,"P")
+                                held.dec_item_emphasize_error();
                                 state_machine = ENUM_STATE_REQUEST;
                                 trs_io.value = -1;
                                 item_display = [];
                                 parity_array = [];
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
-                                ScanaStudio.packet_view_add_packet(true,ch_io,swd_simple.start_sample,swd_simple.end_sample,"SWD","CH_IO",ScanaStudio.get_channel_color(ch_io),ScanaStudio.get_channel_color(ch_io));
+                                held.packet_view_add_packet(true,ch_io,swd_simple.start_sample,swd_simple.end_sample,"SWD","CH_IO",ScanaStudio.get_channel_color(ch_io),ScanaStudio.get_channel_color(ch_io));
                                 break;
                             }
                             //Packet View
-                            ScanaStudio.packet_view_add_packet(true,ch_io,swd_simple.start_sample,swd_simple.end_sample,"SWD","CH_IO",ScanaStudio.get_channel_color(ch_io),ScanaStudio.get_channel_color(ch_io));
-                            var start_request = dec_item_new_v2 (ch_io, swd_simple)[0];
+                            held.packet_view_add_packet(true,ch_io,swd_simple.start_sample,swd_simple.end_sample,"SWD","CH_IO",ScanaStudio.get_channel_color(ch_io),ScanaStudio.get_channel_color(ch_io));
+                            start_request = dec_item_new_v2 (ch_io, swd_simple)[0];
                             dec_item_new_v2 (ch_io, swd_simple);
-                            ScanaStudio.dec_item_add_content("Start");
-                            ScanaStudio.dec_item_add_content("S");
+                            held.dec_item_add_content("Start");
+                            held.dec_item_add_content("S");
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             packet_view_add_packet_v2(ch_io,swd_simple,"Start","Request","Wrap");
                             trs_io.value = -1;
                             //Read APnDP bit
@@ -542,20 +745,20 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "AP (Access Port Register)";
                                 APnDP = "AP";
-                                ScanaStudio.dec_item_add_content("APnDP : AP (Access Port Register)");
-                                ScanaStudio.dec_item_add_content("APnDP : AP");
-                                ScanaStudio.dec_item_add_content("AP");
+                                held.dec_item_add_content("APnDP : AP (Access Port Register)");
+                                held.dec_item_add_content("APnDP : AP");
+                                held.dec_item_add_content("AP");
                             }
                             else
                             {
                                 packet_string = "DP (Debug Port Register)";
                                 APnDP = "DP";
-                                ScanaStudio.dec_item_add_content("APnDP : DP (Debug Port Register)");
-                                ScanaStudio.dec_item_add_content("APnDP : DP");
-                                ScanaStudio.dec_item_add_content("DP");
+                                held.dec_item_add_content("APnDP : DP (Debug Port Register)");
+                                held.dec_item_add_content("APnDP : DP");
+                                held.dec_item_add_content("DP");
                             }
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"APnDP",packet_string,"Data");
                             //Read RnW bit
@@ -573,18 +776,18 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "Read";
                                 RnW = "Read";
-                                ScanaStudio.dec_item_add_content("RnW : Read");
-                                ScanaStudio.dec_item_add_content("Read");
+                                held.dec_item_add_content("RnW : Read");
+                                held.dec_item_add_content("Read");
                             }
                             else
                             {
                                 packet_string = "Write";
                                 RnW = "Write";
-                                ScanaStudio.dec_item_add_content("RnW : Write");
-                                ScanaStudio.dec_item_add_content("Write");
+                                held.dec_item_add_content("RnW : Write");
+                                held.dec_item_add_content("Write");
                             }
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"RnW",packet_string,"Data");
                             //Read A[2:3] bit
@@ -601,10 +804,10 @@ function on_decode_signals(resume)
                             item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                             dec_item_new_v2(ch_io,swd_simple);
                             display_register_name();
-                            ScanaStudio.dec_item_add_content("Adress field : 0x" + Adress);
-                            ScanaStudio.dec_item_add_content("0x" + pad(Adress.toString(16),1));
+                            held.dec_item_add_content("Adress field : 0x" + Adress);
+                            held.dec_item_add_content("0x" + pad(Adress.toString(16),1));
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"A[2:3]",packet_string,"Data");
                             //Read parity bit
@@ -623,8 +826,8 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "OK";
                                 types = "Check";
-                                ScanaStudio.dec_item_add_content("Parity bit OK");
-                                ScanaStudio.dec_item_add_content("OK");
+                                held.dec_item_add_content("Parity bit OK");
+                                held.dec_item_add_content("OK");
                             }
                             else
                             {
@@ -638,12 +841,12 @@ function on_decode_signals(resume)
                                 {
                                     Protocol_State = "Error";
                                 }
-                                ScanaStudio.dec_item_add_content("Parity bit NOT OK");
-                                ScanaStudio.dec_item_add_content("NOT OK");
-                                ScanaStudio.dec_item_emphasize_error();
+                                held.dec_item_add_content("Parity bit NOT OK");
+                                held.dec_item_add_content("NOT OK");
+                                held.dec_item_emphasize_error();
                             }
                             display_sample_0_1(swd_simple, item_display);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"Parity bit",packet_string,types);
                             //Read Stop bit
@@ -660,8 +863,8 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "Stop";
                                 types = "Wrap";
-                                ScanaStudio.dec_item_add_content("Stop");
-                                ScanaStudio.dec_item_add_content("S");
+                                held.dec_item_add_content("Stop");
+                                held.dec_item_add_content("S");
                             }
                             else
                             {
@@ -675,12 +878,12 @@ function on_decode_signals(resume)
                                 {
                                     Protocol_State = "Error";
                                 }
-                                ScanaStudio.dec_item_add_content("Stop");
-                                ScanaStudio.dec_item_add_content("S");
-                                ScanaStudio.dec_item_emphasize_error();
+                                held.dec_item_add_content("Stop");
+                                held.dec_item_add_content("S");
+                                held.dec_item_emphasize_error();
                             }
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"Stop",packet_string,types);
                             //Read Park bit
@@ -692,13 +895,13 @@ function on_decode_signals(resume)
                                 break;
                             }
                             swd_value = Number(swd_simple.unsigned_words);
-                            var protocol_error_start = dec_item_new_v2(ch_io,swd_simple)[1]; // protocol_error start take the value of the sample of the end of this item
+                            protocol_error_start = dec_item_new_v2(ch_io,swd_simple)[1]; // protocol_error start take the value of the sample of the end of this item
                             if (swd_value == 1)
                             {
                                 packet_string = "Park bit";
                                 types = "Wrap";
-                                ScanaStudio.dec_item_add_content("Park bit");
-                                ScanaStudio.dec_item_add_content("P");
+                                held.dec_item_add_content("Park bit");
+                                held.dec_item_add_content("P");
                             }
                             else
                             {
@@ -712,26 +915,26 @@ function on_decode_signals(resume)
                                 {
                                     Protocol_State = "Error";
                                 }
-                                ScanaStudio.dec_item_add_content("Park bit should be HIGH");
-                                ScanaStudio.dec_item_add_content("P");
-                                ScanaStudio.dec_item_emphasize_error();
+                                held.dec_item_add_content("Park bit should be HIGH");
+                                held.dec_item_add_content("P");
+                                held.dec_item_emphasize_error();
                             }
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"Park bit",packet_string,types);
-                            var end_request = protocol_error_start;
+                            end_request = protocol_error_start;
                             // Display the driver
-                            ScanaStudio.dec_item_new(ch_clk,start_request + 1,end_request - 1);
-                            ScanaStudio.dec_item_add_content("Driver : Host");
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_new(ch_clk,start_request + 1,end_request - 1);
+                            held.dec_item_add_content("Driver : Host");
+                            held.dec_item_end();
                             while (trs_io.sample_index < swd_simple.end_sample)
                             {
-                                if (!ScanaStudio.trs_is_not_last(ch_io))
+                                if (!is_not_last(ch_io))
                                 {
                                     break;
                                 }
-                                trs_io = ScanaStudio.trs_get_next(ch_io);
+                                trs_io = next_trs(ch_io);
                             }
                             if (Protocol_State == "Reset" && Register_name == "DPIDR")
                             {
@@ -787,23 +990,23 @@ function on_decode_signals(resume)
                                 }
                                 if (reset == true)
                                 {
-                                    ScanaStudio.dec_item_new(ch_io,reset_sequence.start_sample + 1,reset_sequence.end_sample - 1);
-                                    ScanaStudio.dec_item_add_content("Reset Sequence, go back to normal state");
-                                    ScanaStudio.dec_item_end();
+                                    held.dec_item_new(ch_io,reset_sequence.start_sample + 1,reset_sequence.end_sample - 1);
+                                    held.dec_item_add_content("Reset Sequence, go back to normal state");
+                                    held.dec_item_end();
                                     // Packet view
-                                    ScanaStudio.packet_view_add_packet(true,ch_io,reset_sequence.start_sample,reset_sequence.end_sample,"RESET SEQUENCE","50 clocks with SWDIOTMS HIGH",ScanaStudio.PacketColors.Preamble.Title,ScanaStudio.PacketColors.Preamble.Content);
+                                    held.packet_view_add_packet(true,ch_io,reset_sequence.start_sample,reset_sequence.end_sample,"RESET SEQUENCE","50 clocks with SWDIOTMS HIGH",ScanaStudio.PacketColors.Preamble.Title,ScanaStudio.PacketColors.Preamble.Content);
                                     // Idle cycle
-                                    trs_io = ScanaStudio.trs_get_next(ch_io); // falling edge because the last one was a rising
-                                    var start_idle_cycles = trs_io.sample_index;
-                                    trs_io = ScanaStudio.trs_get_next(ch_io); // rising edge because the last one was a falling
-                                    ScanaStudio.dec_item_new(ch_io,start_idle_cycles + 1,trs_io.sample_index - 1);
-                                    ScanaStudio.dec_item_add_content("Idle Cycles");
-                                    ScanaStudio.dec_item_end();
+                                    trs_io = next_trs(ch_io); // falling edge because the last one was a rising
+                                    start_idle_cycles = trs_io.sample_index;
+                                    trs_io = next_trs(ch_io); // rising edge because the last one was a falling
+                                    held.dec_item_new(ch_io,start_idle_cycles + 1,trs_io.sample_index - 1);
+                                    held.dec_item_add_content("Idle Cycles");
+                                    held.dec_item_end();
                                     // Display the driver on the clk line
-                                    var test = ScanaStudio.dec_item_new(ch_io,reset_sequence.start_sample,trs_io.sample_index - 1);
-                                    ScanaStudio.dec_item_add_content("Driver : Host");
-                                    ScanaStudio.dec_item_end();
-                                    ScanaStudio.packet_view_add_packet(false,ch_io,start_idle_cycles,trs_io.sample_index - 1,"RESET SEQUENCE","IDLE CYCLES",ScanaStudio.PacketColors.Misc.Title,ScanaStudio.PacketColors.Misc.Content);
+                                    test = held.dec_item_new(ch_io,reset_sequence.start_sample,trs_io.sample_index - 1);
+                                    held.dec_item_add_content("Driver : Host");
+                                    held.dec_item_end();
+                                    held.packet_view_add_packet(false,ch_io,start_idle_cycles,trs_io.sample_index - 1,"RESET SEQUENCE","IDLE CYCLES",ScanaStudio.PacketColors.Misc.Title,ScanaStudio.PacketColors.Misc.Content);
                                     Protocol_State = "Reset";
                                     DP_BANK_SEL = 0;
                                     Turnaround_period = 1;
@@ -822,27 +1025,27 @@ function on_decode_signals(resume)
                                 if (swd_value == 0)
                                 {
                                     dec_item_new_v2(ch_io, swd_simple);
-                                    ScanaStudio.dec_item_add_content("Start");
-                                    ScanaStudio.dec_item_add_content("S");
-                                    ScanaStudio.dec_item_add_sample_point(swd_simple.start_sample,"P")
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("Start");
+                                    held.dec_item_add_content("S");
+                                    held.dec_item_add_sample_point(swd_simple.start_sample,"P")
+                                    held.dec_item_emphasize_error();
                                     state_machine = ENUM_STATE_REQUEST;
                                     trs_io.value = -1;
                                     item_display = [];
                                     parity_array = [];
-                                    ScanaStudio.dec_item_end();
+                                    held.dec_item_end();
                                     //Packet View
-                                    ScanaStudio.packet_view_add_packet(true,ch_io,swd_simple.start_sample,swd_simple.end_sample,"SWD","CH_IO",ScanaStudio.get_channel_color(ch_io),ScanaStudio.get_channel_color(ch_io));
+                                    held.packet_view_add_packet(true,ch_io,swd_simple.start_sample,swd_simple.end_sample,"SWD","CH_IO",ScanaStudio.get_channel_color(ch_io),ScanaStudio.get_channel_color(ch_io));
                                     break;
                                 }
                                 //Packet View
-                                ScanaStudio.packet_view_add_packet(true,ch_io,swd_simple.start_sample,swd_simple.end_sample,"SWD","CH_IO",ScanaStudio.get_channel_color(ch_io),ScanaStudio.get_channel_color(ch_io));
-                                var start_request = dec_item_new_v2 (ch_io, swd_simple)[0];
+                                held.packet_view_add_packet(true,ch_io,swd_simple.start_sample,swd_simple.end_sample,"SWD","CH_IO",ScanaStudio.get_channel_color(ch_io),ScanaStudio.get_channel_color(ch_io));
+                                start_request = dec_item_new_v2 (ch_io, swd_simple)[0];
                                 dec_item_new_v2 (ch_io, swd_simple);
-                                ScanaStudio.dec_item_add_content("Start");
-                                ScanaStudio.dec_item_add_content("S");
+                                held.dec_item_add_content("Start");
+                                held.dec_item_add_content("S");
                                 display_sample(swd_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 packet_view_add_packet_v2(ch_io,swd_simple,"Start","Request","Wrap");
                                 trs_io.value = -1;
                                 //Read APnDP bit
@@ -860,20 +1063,20 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "AP (Access Port Register)";
                                     APnDP = "AP";
-                                    ScanaStudio.dec_item_add_content("APnDP : AP (Access Port Register)");
-                                    ScanaStudio.dec_item_add_content("APnDP : AP");
-                                    ScanaStudio.dec_item_add_content("AP");
+                                    held.dec_item_add_content("APnDP : AP (Access Port Register)");
+                                    held.dec_item_add_content("APnDP : AP");
+                                    held.dec_item_add_content("AP");
                                 }
                                 else
                                 {
                                     packet_string = "DP (Debug Port Register)";
                                     APnDP = "DP";
-                                    ScanaStudio.dec_item_add_content("APnDP : DP (Debug Port Register)");
-                                    ScanaStudio.dec_item_add_content("APnDP : DP");
-                                    ScanaStudio.dec_item_add_content("DP");
+                                    held.dec_item_add_content("APnDP : DP (Debug Port Register)");
+                                    held.dec_item_add_content("APnDP : DP");
+                                    held.dec_item_add_content("DP");
                                 }
                                 display_sample(swd_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_io,swd_simple,"APnDP",packet_string,"Data");
                                 //Read RnW bit
@@ -891,18 +1094,18 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "Read";
                                     RnW = "Read";
-                                    ScanaStudio.dec_item_add_content("RnW : Read");
-                                    ScanaStudio.dec_item_add_content("Read");
+                                    held.dec_item_add_content("RnW : Read");
+                                    held.dec_item_add_content("Read");
                                 }
                                 else
                                 {
                                     packet_string = "Write";
                                     RnW = "Write";
-                                    ScanaStudio.dec_item_add_content("RnW : Write");
-                                    ScanaStudio.dec_item_add_content("Write");
+                                    held.dec_item_add_content("RnW : Write");
+                                    held.dec_item_add_content("Write");
                                 }
                                 display_sample(swd_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_io,swd_simple,"RnW",packet_string,"Data");
                                 //Read A[2:3] bit
@@ -919,10 +1122,10 @@ function on_decode_signals(resume)
                                 item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                                 dec_item_new_v2(ch_io,swd_simple);
                                 display_register_name();
-                                ScanaStudio.dec_item_add_content("Adress field : 0x" + Adress);
-                                ScanaStudio.dec_item_add_content("0x" + pad(Adress.toString(16),1));
+                                held.dec_item_add_content("Adress field : 0x" + Adress);
+                                held.dec_item_add_content("0x" + pad(Adress.toString(16),1));
                                 display_sample(swd_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_io,swd_simple,"A[2:3]",packet_string,"Data");
                                 //Read parity bit
@@ -941,8 +1144,8 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "OK";
                                     types = "Check";
-                                    ScanaStudio.dec_item_add_content("Parity bit OK");
-                                    ScanaStudio.dec_item_add_content("OK");
+                                    held.dec_item_add_content("Parity bit OK");
+                                    held.dec_item_add_content("OK");
                                 }
                                 else
                                 {
@@ -957,12 +1160,12 @@ function on_decode_signals(resume)
                                     {
                                         Protocol_State = "Error";
                                     }
-                                    ScanaStudio.dec_item_add_content("Parity bit NOT OK");
-                                    ScanaStudio.dec_item_add_content("NOT OK");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("Parity bit NOT OK");
+                                    held.dec_item_add_content("NOT OK");
+                                    held.dec_item_emphasize_error();
                                 }
                                 display_sample_0_1(swd_simple, item_display);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_io,swd_simple,"Parity bit",packet_string,types);
                                 //Read Stop bit
@@ -979,8 +1182,8 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "Stop";
                                     types = "Wrap";
-                                    ScanaStudio.dec_item_add_content("Stop");
-                                    ScanaStudio.dec_item_add_content("S");
+                                    held.dec_item_add_content("Stop");
+                                    held.dec_item_add_content("S");
                                 }
                                 else
                                 {
@@ -994,12 +1197,12 @@ function on_decode_signals(resume)
                                     {
                                         Protocol_State = "Error";
                                     }
-                                    ScanaStudio.dec_item_add_content("Stop");
-                                    ScanaStudio.dec_item_add_content("S");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("Stop");
+                                    held.dec_item_add_content("S");
+                                    held.dec_item_emphasize_error();
                                 }
                                 display_sample(swd_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_io,swd_simple,"Stop",packet_string,types);
                                 //Read Park bit
@@ -1011,13 +1214,13 @@ function on_decode_signals(resume)
                                     break;
                                 }
                                 swd_value = Number(swd_simple.unsigned_words);
-                                var protocol_error_start = dec_item_new_v2(ch_io,swd_simple)[1]; // protocol_error start take the value of the sample of the end of this item
+                                protocol_error_start = dec_item_new_v2(ch_io,swd_simple)[1]; // protocol_error start take the value of the sample of the end of this item
                                 if (swd_value == 1)
                                 {
                                     packet_string = "Park bit";
                                     types = "Wrap";
-                                    ScanaStudio.dec_item_add_content("Park bit");
-                                    ScanaStudio.dec_item_add_content("P");
+                                    held.dec_item_add_content("Park bit");
+                                    held.dec_item_add_content("P");
                                 }
                                 else
                                 {
@@ -1031,26 +1234,26 @@ function on_decode_signals(resume)
                                     {
                                         Protocol_State = "Error";
                                     }
-                                    ScanaStudio.dec_item_add_content("Park bit should be HIGH");
-                                    ScanaStudio.dec_item_add_content("P");
-                                    ScanaStudio.dec_item_emphasize_error();
+                                    held.dec_item_add_content("Park bit should be HIGH");
+                                    held.dec_item_add_content("P");
+                                    held.dec_item_emphasize_error();
                                 }
                                 display_sample(swd_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_io,swd_simple,"Park bit",packet_string,types);
-                                var end_request = protocol_error_start;
+                                end_request = protocol_error_start;
                                 // Display the driver
-                                ScanaStudio.dec_item_new(ch_clk,start_request + 1,end_request - 1);
-                                ScanaStudio.dec_item_add_content("Driver : Host");
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_new(ch_clk,start_request + 1,end_request - 1);
+                                held.dec_item_add_content("Driver : Host");
+                                held.dec_item_end();
                                 while (trs_io.sample_index < swd_simple.end_sample)
                                 {
-                                    if (!ScanaStudio.trs_is_not_last(ch_io))
+                                    if (!is_not_last(ch_io))
                                     {
                                         break;
                                     }
-                                    trs_io = ScanaStudio.trs_get_next(ch_io);
+                                    trs_io = next_trs(ch_io);
                                 }
                                 if (Protocol_State == "Reset" && Register_name == "DPIDR")
                                 {
@@ -1086,7 +1289,7 @@ function on_decode_signals(resume)
                             }
                             else
                             {
-                                trs_io = ScanaStudio.trs_get_next(ch_io);
+                                trs_io = next_trs(ch_io);
                                 break;
                             }
                         }
@@ -1109,30 +1312,30 @@ function on_decode_signals(resume)
                     }
                     if (reset == true)
                     {
-                        ScanaStudio.dec_item_new(ch_io,reset_sequence.start_sample + 1,reset_sequence.end_sample - 1);
-                        ScanaStudio.dec_item_add_content("Reset Sequence, go back to normal state");
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_new(ch_io,reset_sequence.start_sample + 1,reset_sequence.end_sample - 1);
+                        held.dec_item_add_content("Reset Sequence, go back to normal state");
+                        held.dec_item_end();
                         //Packet View
-                        ScanaStudio.packet_view_add_packet(true,ch_io,reset_sequence.start_sample,reset_sequence.end_sample,"RESET SEQUENCE","50 clocks with SWDIOTMS HIGH",ScanaStudio.PacketColors.Preamble.Title,ScanaStudio.PacketColors.Preamble.Content);
+                        held.packet_view_add_packet(true,ch_io,reset_sequence.start_sample,reset_sequence.end_sample,"RESET SEQUENCE","50 clocks with SWDIOTMS HIGH",ScanaStudio.PacketColors.Preamble.Title,ScanaStudio.PacketColors.Preamble.Content);
                         // Idle cycle
                         trs_io = ScanaStudio.trs_get_before(ch_io,reset_sequence.start_sample);
                         tmp_trs_sample_index = trs_io.sample_index;
-                        while( (tmp_trs_sample_index == trs_io.sample_index) && (ScanaStudio.trs_is_not_last(ch_io) == true) )
+                        while( (tmp_trs_sample_index == trs_io.sample_index) && (is_not_last(ch_io) == true) )
                         {
-                            trs_io = ScanaStudio.trs_get_next(ch_io);
+                            trs_io = next_trs(ch_io);
                         }
-                        var start_idle_cycles = trs_io.sample_index;
-                        trs_io = ScanaStudio.trs_get_next(ch_io); // rising edge because the last one was a falling
-                        ScanaStudio.dec_item_new(ch_io,start_idle_cycles + 1,trs_io.sample_index - 1);
-                        ScanaStudio.dec_item_add_content("Idle Cycles");
-                        ScanaStudio.dec_item_end();
+                        start_idle_cycles = trs_io.sample_index;
+                        trs_io = next_trs(ch_io); // rising edge because the last one was a falling
+                        held.dec_item_new(ch_io,start_idle_cycles + 1,trs_io.sample_index - 1);
+                        held.dec_item_add_content("Idle Cycles");
+                        held.dec_item_end();
                         // Display the driver on the clk line
-                        ScanaStudio.dec_item_new(ch_clk,reset_sequence.start_sample + 1,trs_io.sample_index - 1);
-                        ScanaStudio.dec_item_add_content("Driver : Host");
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_new(ch_clk,reset_sequence.start_sample + 1,trs_io.sample_index - 1);
+                        held.dec_item_add_content("Driver : Host");
+                        held.dec_item_end();
                         //Packet View
                         ScanaStudio.console_info_msg("test0",trs_io.sample_index);
-                        ScanaStudio.packet_view_add_packet(false,ch_io,start_idle_cycles,trs_io.sample_index - 1,"RESET SEQUENCE","IDLE CYCLES",ScanaStudio.PacketColors.Misc.Title,ScanaStudio.PacketColors.Misc.Content);
+                        held.packet_view_add_packet(false,ch_io,start_idle_cycles,trs_io.sample_index - 1,"RESET SEQUENCE","IDLE CYCLES",ScanaStudio.PacketColors.Misc.Title,ScanaStudio.PacketColors.Misc.Content);
                         Protocol_State = "Reset";
                         DP_BANK_SEL = 0;
                         Turnaround_period = 1;
@@ -1154,53 +1357,53 @@ function on_decode_signals(resume)
                         // ScanaStudio.console_info_msg("idle_cycles.start_sample + 1: " + (idle_cycles.start_sample + 1),(idle_cycles.start_sample + 1));
                         // ScanaStudio.console_info_msg("trs_io avant: " + trs_io.sample_index,trs_io.sample_index);
                         tmp_trs_sample_index = trs_io.sample_index;
-                        while( (tmp_trs_sample_index == trs_io.sample_index) && (ScanaStudio.trs_is_not_last(ch_io) == true) )
+                        while( (tmp_trs_sample_index == trs_io.sample_index) && (is_not_last(ch_io) == true) )
                         {
-                            trs_io = ScanaStudio.trs_get_next(ch_io); // rising edge
+                            trs_io = next_trs(ch_io); // rising edge
                         }
                         // ScanaStudio.console_info_msg("trs_io apres: " + trs_io.sample_index,trs_io.sample_index);
                         if (trs_io.sample_index < idle_cycles.start_sample)
                         {
                             tmp_trs_sample_index = trs_io.sample_index;
-                            while( (tmp_trs_sample_index == trs_io.sample_index) && (ScanaStudio.trs_is_not_last(ch_io) == true) )
+                            while( (tmp_trs_sample_index == trs_io.sample_index) && (is_not_last(ch_io) == true) )
                             {
-                                trs_io = ScanaStudio.trs_get_next(ch_io); // rising edge
+                                trs_io = next_trs(ch_io); // rising edge
                             }
                         }
                         // ScanaStudio.console_info_msg("trs_io apres: " + trs_io.sample_index,trs_io.sample_index);
                         trs_clk = ScanaStudio.trs_get_before(ch_clk,idle_cycles.start_sample - 1); //falling edge
-                        var start_item = trs_clk.sample_index;
-                        var nb_trs = 0;
+                        start_item = trs_clk.sample_index;
+                        nb_trs = 0;
                         while (trs_clk.sample_index <= trs_io.sample_index - 1)
                         {
                             tmp_trs_sample_index = trs_clk.sample_index;
-                            while( (tmp_trs_sample_index == trs_clk.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+                            while( (tmp_trs_sample_index == trs_clk.sample_index) && (is_not_last(ch_clk) == true) )
                             {
-                                trs_clk = ScanaStudio.trs_get_next(ch_clk);
+                                trs_clk = next_trs(ch_clk);
                             }
                             nb_trs++;
                         }
                         if (nb_trs >= 16)
                         {
-                            var test = ScanaStudio.dec_item_new(ch_io,start_item + 1,trs_io.sample_index - 1);
-                            ScanaStudio.dec_item_add_content("Idles Cycles : the clock can be stopped");
-                            ScanaStudio.dec_item_add_content("Idles Cycles");
-                            ScanaStudio.dec_item_end();
+                            test = held.dec_item_new(ch_io,start_item + 1,trs_io.sample_index - 1);
+                            held.dec_item_add_content("Idles Cycles : the clock can be stopped");
+                            held.dec_item_add_content("Idles Cycles");
+                            held.dec_item_end();
                         }
                         else
                         {
-                            var test = ScanaStudio.dec_item_new(ch_io,start_item + 1,trs_io.sample_index - 1);
-                            ScanaStudio.dec_item_add_content("Idles Cycles before another packet header");
-                            ScanaStudio.dec_item_add_content("Idles Cycles");
-                            ScanaStudio.dec_item_end();
+                            test = held.dec_item_new(ch_io,start_item + 1,trs_io.sample_index - 1);
+                            held.dec_item_add_content("Idles Cycles before another packet header");
+                            held.dec_item_add_content("Idles Cycles");
+                            held.dec_item_end();
                         }
                         // ScanaStudio.console_info_msg("test : " + test);
                         // Display the driver
-                        ScanaStudio.dec_item_new(ch_clk,start_item + 1,trs_io.sample_index - 1);
-                        ScanaStudio.dec_item_add_content("Driver : Host");
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_new(ch_clk,start_item + 1,trs_io.sample_index - 1);
+                        held.dec_item_add_content("Driver : Host");
+                        held.dec_item_end();
                         // Packet view
-                        ScanaStudio.packet_view_add_packet(false,ch_io,start_item + 1,trs_io.sample_index - 1,"Idles Cycles","Idles Cycles",ScanaStudio.PacketColors.Misc.Title,ScanaStudio.PacketColors.Misc.Content);
+                        held.packet_view_add_packet(false,ch_io,start_item + 1,trs_io.sample_index - 1,"Idles Cycles","Idles Cycles",ScanaStudio.PacketColors.Misc.Title,ScanaStudio.PacketColors.Misc.Content);
                         swd_simple.end_sample = trs_io.sample_index;
                         // Check if there is a line reset
                         trs_clk  = ScanaStudio.trs_get_before(ch_clk, trs_io.sample_index + 1);
@@ -1216,29 +1419,29 @@ function on_decode_signals(resume)
                         }
                         if (reset == true)
                         {
-                            ScanaStudio.dec_item_new(ch_io,reset_sequence.start_sample + 1,reset_sequence.end_sample - 1);
-                            ScanaStudio.dec_item_add_content("Reset Sequence, go back to normal state");
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_new(ch_io,reset_sequence.start_sample + 1,reset_sequence.end_sample - 1);
+                            held.dec_item_add_content("Reset Sequence, go back to normal state");
+                            held.dec_item_end();
                             //Packet View
-                            ScanaStudio.packet_view_add_packet(true,ch_io,reset_sequence.start_sample,reset_sequence.end_sample,"RESET SEQUENCE","50 clocks with SWDIOTMS HIGH",ScanaStudio.PacketColors.Preamble.Title,ScanaStudio.PacketColors.Preamble.Content);
+                            held.packet_view_add_packet(true,ch_io,reset_sequence.start_sample,reset_sequence.end_sample,"RESET SEQUENCE","50 clocks with SWDIOTMS HIGH",ScanaStudio.PacketColors.Preamble.Title,ScanaStudio.PacketColors.Preamble.Content);
                             // Idle cycle
                             trs_io = ScanaStudio.trs_get_before(ch_io,reset_sequence.start_sample);
                             tmp_trs_sample_index = trs_io.sample_index;
-                            while( (tmp_trs_sample_index == trs_io.sample_index) && (ScanaStudio.trs_is_not_last(ch_io) == true) )
+                            while( (tmp_trs_sample_index == trs_io.sample_index) && (is_not_last(ch_io) == true) )
                             {
-                                trs_io = ScanaStudio.trs_get_next(ch_io);
+                                trs_io = next_trs(ch_io);
                             }
-                            var start_idle_cycles = trs_io.sample_index;
-                            trs_io = ScanaStudio.trs_get_next(ch_io); // rising edge because the last one was a falling
-                            ScanaStudio.dec_item_new(ch_io,start_idle_cycles + 1,trs_io.sample_index - 1);
-                            ScanaStudio.dec_item_add_content("Idle Cycles");
-                            ScanaStudio.dec_item_end();
+                            start_idle_cycles = trs_io.sample_index;
+                            trs_io = next_trs(ch_io); // rising edge because the last one was a falling
+                            held.dec_item_new(ch_io,start_idle_cycles + 1,trs_io.sample_index - 1);
+                            held.dec_item_add_content("Idle Cycles");
+                            held.dec_item_end();
                             // Display the driver on the clk line
-                            ScanaStudio.dec_item_new(ch_clk,reset_sequence.start_sample + 1,trs_io.sample_index - 1);
-                            ScanaStudio.dec_item_add_content("Driver : Host");
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_new(ch_clk,reset_sequence.start_sample + 1,trs_io.sample_index - 1);
+                            held.dec_item_add_content("Driver : Host");
+                            held.dec_item_end();
                             //Packet View
-                            ScanaStudio.packet_view_add_packet(false,ch_io,start_idle_cycles,trs_io.sample_index - 1,"RESET SEQUENCE","IDLE CYCLES",ScanaStudio.PacketColors.Misc.Title,ScanaStudio.PacketColors.Misc.Content);
+                            held.packet_view_add_packet(false,ch_io,start_idle_cycles,trs_io.sample_index - 1,"RESET SEQUENCE","IDLE CYCLES",ScanaStudio.PacketColors.Misc.Title,ScanaStudio.PacketColors.Misc.Content);
                             Protocol_State = "Reset";
                             DP_BANK_SEL = 0;
                             Turnaround_period = 1;
@@ -1268,29 +1471,29 @@ function on_decode_signals(resume)
                         }
                         if (reset == true)
                         {
-                            ScanaStudio.dec_item_new(ch_io,reset_sequence.start_sample + 1,reset_sequence.end_sample - 1);
-                            ScanaStudio.dec_item_add_content("Reset Sequence, go back to normal state");
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_new(ch_io,reset_sequence.start_sample + 1,reset_sequence.end_sample - 1);
+                            held.dec_item_add_content("Reset Sequence, go back to normal state");
+                            held.dec_item_end();
                             //Packet View
-                            ScanaStudio.packet_view_add_packet(true,ch_io,reset_sequence.start_sample,reset_sequence.end_sample,"RESET SEQUENCE","50 clocks with SWDIOTMS HIGH",ScanaStudio.PacketColors.Preamble.Title,ScanaStudio.PacketColors.Preamble.Content);
+                            held.packet_view_add_packet(true,ch_io,reset_sequence.start_sample,reset_sequence.end_sample,"RESET SEQUENCE","50 clocks with SWDIOTMS HIGH",ScanaStudio.PacketColors.Preamble.Title,ScanaStudio.PacketColors.Preamble.Content);
                             // Idle cycle
                             trs_io = ScanaStudio.trs_get_before(ch_io,reset_sequence.start_sample);
                             tmp_trs_sample_index = trs_io.sample_index;
-                            while( (tmp_trs_sample_index == trs_io.sample_index) && (ScanaStudio.trs_is_not_last(ch_io) == true) )
+                            while( (tmp_trs_sample_index == trs_io.sample_index) && (is_not_last(ch_io) == true) )
                             {
-                                trs_io = ScanaStudio.trs_get_next(ch_io);
+                                trs_io = next_trs(ch_io);
                             }
-                            var start_idle_cycles = trs_io.sample_index;
-                            trs_io = ScanaStudio.trs_get_next(ch_io); // rising edge because the last one was a falling
-                            ScanaStudio.dec_item_new(ch_io,start_idle_cycles + 1,trs_io.sample_index - 1);
-                            ScanaStudio.dec_item_add_content("Idle Cycles");
-                            ScanaStudio.dec_item_end();
+                            start_idle_cycles = trs_io.sample_index;
+                            trs_io = next_trs(ch_io); // rising edge because the last one was a falling
+                            held.dec_item_new(ch_io,start_idle_cycles + 1,trs_io.sample_index - 1);
+                            held.dec_item_add_content("Idle Cycles");
+                            held.dec_item_end();
                             // Display the driver on the clk line
-                            ScanaStudio.dec_item_new(ch_clk,reset_sequence.start_sample + 1,trs_io.sample_index - 1);
-                            ScanaStudio.dec_item_add_content("Driver : Host");
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_new(ch_clk,reset_sequence.start_sample + 1,trs_io.sample_index - 1);
+                            held.dec_item_add_content("Driver : Host");
+                            held.dec_item_end();
                             //Packet View
-                            ScanaStudio.packet_view_add_packet(false,ch_io,start_idle_cycles,trs_io.sample_index - 1,"RESET SEQUENCE","IDLE CYCLES",ScanaStudio.PacketColors.Misc.Title,ScanaStudio.PacketColors.Misc.Content);
+                            held.packet_view_add_packet(false,ch_io,start_idle_cycles,trs_io.sample_index - 1,"RESET SEQUENCE","IDLE CYCLES",ScanaStudio.PacketColors.Misc.Title,ScanaStudio.PacketColors.Misc.Content);
                             Protocol_State = "Reset";
                             DP_BANK_SEL = 0;
                             Turnaround_period = 1;
@@ -1310,27 +1513,27 @@ function on_decode_signals(resume)
                     if (swd_value == 0)
                     {
                         dec_item_new_v2(ch_io, swd_simple);
-                        ScanaStudio.dec_item_add_content("Start");
-                        ScanaStudio.dec_item_add_content("S");
-                        ScanaStudio.dec_item_add_sample_point(swd_simple.start_sample,"P");
-                        ScanaStudio.dec_item_emphasize_error();
+                        held.dec_item_add_content("Start");
+                        held.dec_item_add_content("S");
+                        held.dec_item_add_sample_point(swd_simple.start_sample,"P");
+                        held.dec_item_emphasize_error();
                         ScanaStudio.console_info_msg("start_error : " + swd_simple.end_sample,swd_simple.end_sample);
                         state_machine = ENUM_STATE_REQUEST;
                         trs_io.value = -1;
                         item_display = [];
                         parity_array = [];
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
-                        ScanaStudio.packet_view_add_packet(true,ch_io,swd_simple.start_sample,swd_simple.end_sample,"SWD","CH_IO",ScanaStudio.get_channel_color(ch_io),ScanaStudio.get_channel_color(ch_io));
+                        held.packet_view_add_packet(true,ch_io,swd_simple.start_sample,swd_simple.end_sample,"SWD","CH_IO",ScanaStudio.get_channel_color(ch_io),ScanaStudio.get_channel_color(ch_io));
                         break;
                     }
                     //Packet View
-                    ScanaStudio.packet_view_add_packet(true,ch_io,swd_simple.start_sample,swd_simple.end_sample,"SWD","CH_IO",ScanaStudio.get_channel_color(ch_io),ScanaStudio.get_channel_color(ch_io));
-                    var start_request = dec_item_new_v2 (ch_io, swd_simple)[0];
-                    ScanaStudio.dec_item_add_content("Start");
-                    ScanaStudio.dec_item_add_content("S");
+                    held.packet_view_add_packet(true,ch_io,swd_simple.start_sample,swd_simple.end_sample,"SWD","CH_IO",ScanaStudio.get_channel_color(ch_io),ScanaStudio.get_channel_color(ch_io));
+                    start_request = dec_item_new_v2 (ch_io, swd_simple)[0];
+                    held.dec_item_add_content("Start");
+                    held.dec_item_add_content("S");
                     display_sample(swd_simple);
-                    ScanaStudio.dec_item_end();
+                    held.dec_item_end();
                     packet_view_add_packet_v2(ch_io,swd_simple,"Start","Request","Wrap");
                     trs_io.value = -1;
                     //Read APnDP bit
@@ -1349,20 +1552,20 @@ function on_decode_signals(resume)
                     {
                         packet_string = "AP (Access Port Register)";
                         APnDP = "AP";
-                        ScanaStudio.dec_item_add_content("APnDP : AP (Access Port Register)");
-                        ScanaStudio.dec_item_add_content("APnDP : AP");
-                        ScanaStudio.dec_item_add_content("AP");
+                        held.dec_item_add_content("APnDP : AP (Access Port Register)");
+                        held.dec_item_add_content("APnDP : AP");
+                        held.dec_item_add_content("AP");
                     }
                     else
                     {
                         packet_string = "DP (Debug Port Register)";
                         APnDP = "DP";
-                        ScanaStudio.dec_item_add_content("APnDP : DP (Debug Port Register)");
-                        ScanaStudio.dec_item_add_content("APnDP : DP");
-                        ScanaStudio.dec_item_add_content("DP");
+                        held.dec_item_add_content("APnDP : DP (Debug Port Register)");
+                        held.dec_item_add_content("APnDP : DP");
+                        held.dec_item_add_content("DP");
                     }
                     display_sample(swd_simple);
-                    ScanaStudio.dec_item_end();
+                    held.dec_item_end();
                     //Packet View
                     packet_view_add_packet_v2(ch_io,swd_simple,"APnDP",packet_string,"Data");
                     //Read RnW bit
@@ -1380,18 +1583,18 @@ function on_decode_signals(resume)
                     {
                         packet_string = "Read";
                         RnW = "Read";
-                        ScanaStudio.dec_item_add_content("RnW : Read");
-                        ScanaStudio.dec_item_add_content("Read");
+                        held.dec_item_add_content("RnW : Read");
+                        held.dec_item_add_content("Read");
                     }
                     else
                     {
                         packet_string = "Write";
                         RnW = "Write";
-                        ScanaStudio.dec_item_add_content("RnW : Write");
-                        ScanaStudio.dec_item_add_content("Write");
+                        held.dec_item_add_content("RnW : Write");
+                        held.dec_item_add_content("Write");
                     }
                     display_sample(swd_simple);
-                    ScanaStudio.dec_item_end();
+                    held.dec_item_end();
                     //Packet View
                     packet_view_add_packet_v2(ch_io,swd_simple,"RnW",packet_string,"Data");
                     //Read A[2:3] bit
@@ -1412,10 +1615,10 @@ function on_decode_signals(resume)
                     }
                     dec_item_new_v2(ch_io,swd_simple);
                     display_register_name();
-                    ScanaStudio.dec_item_add_content("Adress field : 0x" + Adress);
-                    ScanaStudio.dec_item_add_content("0x" + pad(Adress.toString(16),1));
+                    held.dec_item_add_content("Adress field : 0x" + Adress);
+                    held.dec_item_add_content("0x" + pad(Adress.toString(16),1));
                     display_sample(swd_simple);
-                    ScanaStudio.dec_item_end();
+                    held.dec_item_end();
                     //Packet View
                     packet_view_add_packet_v2(ch_io,swd_simple,"A[2:3]",packet_string,"Data");
                     //Read parity bit
@@ -1434,8 +1637,8 @@ function on_decode_signals(resume)
                     {
                         packet_string = "OK";
                         types = "Check";
-                        ScanaStudio.dec_item_add_content("Parity bit OK");
-                        ScanaStudio.dec_item_add_content("OK");
+                        held.dec_item_add_content("Parity bit OK");
+                        held.dec_item_add_content("OK");
                     }
                     else
                     {
@@ -1449,12 +1652,12 @@ function on_decode_signals(resume)
                         {
                             Protocol_State = "Error";
                         }
-                        ScanaStudio.dec_item_add_content("Parity bit NOT OK");
-                        ScanaStudio.dec_item_add_content("NOT OK");
-                        ScanaStudio.dec_item_emphasize_error();
+                        held.dec_item_add_content("Parity bit NOT OK");
+                        held.dec_item_add_content("NOT OK");
+                        held.dec_item_emphasize_error();
                     }
                     display_sample_0_1(swd_simple, item_display);
-                    ScanaStudio.dec_item_end();
+                    held.dec_item_end();
                     //Packet View
                     packet_view_add_packet_v2(ch_io,swd_simple,"Parity bit",packet_string,types);
                     //Read Stop bit
@@ -1471,8 +1674,8 @@ function on_decode_signals(resume)
                     {
                         packet_string = "Stop";
                         types = "Wrap";
-                        ScanaStudio.dec_item_add_content("Stop");
-                        ScanaStudio.dec_item_add_content("S");
+                        held.dec_item_add_content("Stop");
+                        held.dec_item_add_content("S");
                     }
                     else
                     {
@@ -1486,12 +1689,12 @@ function on_decode_signals(resume)
                         {
                             Protocol_State = "Error";
                         }
-                        ScanaStudio.dec_item_add_content("Stop");
-                        ScanaStudio.dec_item_add_content("S");
-                        ScanaStudio.dec_item_emphasize_error();
+                        held.dec_item_add_content("Stop");
+                        held.dec_item_add_content("S");
+                        held.dec_item_emphasize_error();
                     }
                     display_sample(swd_simple);
-                    ScanaStudio.dec_item_end();
+                    held.dec_item_end();
                     //Packet View
                     packet_view_add_packet_v2(ch_io,swd_simple,"Stop",packet_string,types);
                     //Read Park bit
@@ -1503,13 +1706,13 @@ function on_decode_signals(resume)
                         break;
                     }
                     swd_value = Number(swd_simple.unsigned_words);
-                    var protocol_error_start = dec_item_new_v2(ch_io,swd_simple)[1]; // protocol_error start take the value of the sample of the end of this item
+                    protocol_error_start = dec_item_new_v2(ch_io,swd_simple)[1]; // protocol_error start take the value of the sample of the end of this item
                     if (swd_value == 1)
                     {
                         packet_string = "Park bit";
                         types = "Wrap";
-                        ScanaStudio.dec_item_add_content("Park bit");
-                        ScanaStudio.dec_item_add_content("P");
+                        held.dec_item_add_content("Park bit");
+                        held.dec_item_add_content("P");
                     }
                     else
                     {
@@ -1523,28 +1726,28 @@ function on_decode_signals(resume)
                         {
                             Protocol_State = "Error";
                         }
-                        ScanaStudio.dec_item_add_content("Park bit should be HIGH");
-                        ScanaStudio.dec_item_add_content("P");
-                        ScanaStudio.dec_item_emphasize_error();
+                        held.dec_item_add_content("Park bit should be HIGH");
+                        held.dec_item_add_content("P");
+                        held.dec_item_emphasize_error();
                     }
                     display_sample(swd_simple);
-                    ScanaStudio.dec_item_end();
+                    held.dec_item_end();
                     //Packet View
-                    var end_request = protocol_error_start; //
+                    end_request = protocol_error_start; //
                     packet_view_add_packet_v2(ch_io,swd_simple,"Park bit",packet_string,types);
 
                     // Display the driver
-                    ScanaStudio.dec_item_new(ch_clk,start_request + 1,end_request - 1);
-                    ScanaStudio.dec_item_add_content("Driver : Host");
-                    ScanaStudio.dec_item_end();
+                    held.dec_item_new(ch_clk,start_request + 1,end_request - 1);
+                    held.dec_item_add_content("Driver : Host");
+                    held.dec_item_end();
 
                     while (trs_io.sample_index < swd_simple.end_sample)
                     {
-                        if (!ScanaStudio.trs_is_not_last(ch_io))
+                        if (!is_not_last(ch_io))
                         {
                             break;
                         }
-                        trs_io = ScanaStudio.trs_get_next(ch_io);
+                        trs_io = next_trs(ch_io);
                     }
 
                     if (Protocol_State == "Transfer")
@@ -1579,28 +1782,28 @@ function on_decode_signals(resume)
                     break;
                 }
                 swd_value = Number(swd_simple.unsigned_words);
-                var trs_start = ScanaStudio.trs_get_before(ch_clk,swd_simple.start_sample + 1);
-                var tmp_trs_sample_index;
+                trs_start = ScanaStudio.trs_get_before(ch_clk,swd_simple.start_sample + 1);
+                tmp_trs_sample_index;
                 tmp_trs_sample_index = trs_start.sample_index;
-                while( (tmp_trs_sample_index == trs_start.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+                while( (tmp_trs_sample_index == trs_start.sample_index) && (is_not_last(ch_clk) == true) )
                 {
                     trs_start = ScanaStudio.trs_get_previous(ch_clk);
                 }
                 tmp_trs_sample_index = trs_start.sample_index;
-                while( (tmp_trs_sample_index == trs_start.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+                while( (tmp_trs_sample_index == trs_start.sample_index) && (is_not_last(ch_clk) == true) )
                 {
-                    trs_start = ScanaStudio.trs_get_next(ch_clk);
+                    trs_start = next_trs(ch_clk);
                 }
-                ScanaStudio.dec_item_new(ch_io,trs_start.sample_index,swd_simple.end_sample - 1);
-                ScanaStudio.dec_item_add_content("Turnaround bits");
-                ScanaStudio.dec_item_add_content("Trn");
-                ScanaStudio.dec_item_end();
+                held.dec_item_new(ch_io,trs_start.sample_index,swd_simple.end_sample - 1);
+                held.dec_item_add_content("Turnaround bits");
+                held.dec_item_add_content("Trn");
+                held.dec_item_end();
                 //Packet View
                 packet_view_add_packet_v2(ch_io,swd_simple,"Trn","Turnaround bits","Misc");
                 // Display who is driving on the clk line
-                ScanaStudio.dec_item_new(ch_clk,trs_start.sample_index + 1, swd_simple.end_sample - 1);
-                ScanaStudio.dec_item_add_content("DRIVER : no one");
-                ScanaStudio.dec_item_end();
+                held.dec_item_new(ch_clk,trs_start.sample_index + 1, swd_simple.end_sample - 1);
+                held.dec_item_add_content("DRIVER : no one");
+                held.dec_item_end();
 
                 driver = "Target"; // The target always drive the line for the ACK
                 //Read ACK
@@ -1612,7 +1815,7 @@ function on_decode_signals(resume)
                     break;
                 }
                 swd_value = Number(swd_simple.unsigned_words);
-                var ack_item = dec_item_new_v2(ch_io,swd_simple);
+                ack_item = dec_item_new_v2(ch_io,swd_simple);
                 if (Register_name != "TARGETSEL") // If we use TARGETSEL we are selecting the target, so the target can't answer because it's not even targeted.
                 {
                     switch (swd_value)
@@ -1621,7 +1824,7 @@ function on_decode_signals(resume)
                         {
                             item_content = "OK Response";
                             ACK = "OK";
-                            ScanaStudio.dec_item_emphasize_success();
+                            held.dec_item_emphasize_success();
                             state_machine = ENUM_STATE_DATA_TRANSFER;
                             break;
                         }
@@ -1631,7 +1834,7 @@ function on_decode_signals(resume)
                             ACK = "WAIT";
                             Protocol_State = "Lockout";
                             types = "Error";
-                            ScanaStudio.dec_item_emphasize_warning();
+                            held.dec_item_emphasize_warning();
                             if (ORUNDETECT == 0) // overrun disabled
                             {
                                 state_machine = ENUM_STATE_RESET;
@@ -1656,7 +1859,7 @@ function on_decode_signals(resume)
                             ACK = "FAULT";
                             Protocol_State = "Lockout";
                             types = "Error";
-                            ScanaStudio.dec_item_emphasize_error();
+                            held.dec_item_emphasize_error();
                             if (ORUNDETECT == 0) // overrun disabled
                             {
                                 state_machine = ENUM_STATE_RESET;
@@ -1681,7 +1884,7 @@ function on_decode_signals(resume)
                             ACK = "NACK";
                             Protocol_State = "Lockout";
                             types = "Error";
-                            ScanaStudio.dec_item_emphasize_error();
+                            held.dec_item_emphasize_error();
                             if (ORUNDETECT == 0) // overrun disabled
                             {
                                 state_machine = ENUM_STATE_RESET;
@@ -1706,7 +1909,7 @@ function on_decode_signals(resume)
                             ACK = "INVALID ACK";
                             Protocol_State = "Lockout";
                             types = "Error";
-                            ScanaStudio.dec_item_emphasize_error();
+                            held.dec_item_emphasize_error();
                             if (ORUNDETECT == 0) // overrun disabled
                             {
                                 state_machine = ENUM_STATE_RESET;
@@ -1726,17 +1929,17 @@ function on_decode_signals(resume)
                             break;
                         }
                     }
-                    ScanaStudio.dec_item_add_content("ACK : " + item_content);
-                    ScanaStudio.dec_item_add_content(item_content);
+                    held.dec_item_add_content("ACK : " + item_content);
+                    held.dec_item_add_content(item_content);
                     display_sample(swd_simple);
-                    ScanaStudio.dec_item_end();
+                    held.dec_item_end();
                     //Packet View
                     packet_view_add_packet_v2(ch_io,swd_simple,"ACK",item_content,types);
                 }
                 else if (Register_name == "TARGETSEL")// it's DP TARGETSEL Register
                 {
-                    ScanaStudio.dec_item_add_content("Line not driven by the target because it's not selected yet");
-                    ScanaStudio.dec_item_end();
+                    held.dec_item_add_content("Line not driven by the target because it's not selected yet");
+                    held.dec_item_end();
                     ACK = "OK";
                     driver = "No one";
                     //Packet view
@@ -1745,9 +1948,9 @@ function on_decode_signals(resume)
                     state_machine = ENUM_STATE_DATA_TRANSFER;
                 }
                 // Display who is driven the line on the clk line
-                ScanaStudio.dec_item_new(ch_clk,ack_item[0], ack_item[1]);
-                ScanaStudio.dec_item_add_content("DRIVER : " + driver);
-                ScanaStudio.dec_item_end();
+                held.dec_item_new(ch_clk,ack_item[0], ack_item[1]);
+                held.dec_item_add_content("DRIVER : " + driver);
+                held.dec_item_end();
                 if (RnW == "Write" || ACK != "OK")
                 {
                     //Read Turnaround bits
@@ -1759,35 +1962,35 @@ function on_decode_signals(resume)
                         break;
                     }
                     swd_value = Number(swd_simple.unsigned_words);
-                    var trs_start = ScanaStudio.trs_get_before(ch_clk,swd_simple.start_sample + 1);
-                    var tmp_trs_sample_index;
+                    trs_start = ScanaStudio.trs_get_before(ch_clk,swd_simple.start_sample + 1);
+                    tmp_trs_sample_index;
                     tmp_trs_sample_index = trs_start.sample_index;
-                    while( (tmp_trs_sample_index == trs_start.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+                    while( (tmp_trs_sample_index == trs_start.sample_index) && (is_not_last(ch_clk) == true) )
                     {
                         trs_start = ScanaStudio.trs_get_previous(ch_clk);
                     }
                     tmp_trs_sample_index = trs_start.sample_index;
-                    while( (tmp_trs_sample_index == trs_start.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+                    while( (tmp_trs_sample_index == trs_start.sample_index) && (is_not_last(ch_clk) == true) )
                     {
-                        trs_start = ScanaStudio.trs_get_next(ch_clk);
+                        trs_start = next_trs(ch_clk);
                     }
-                    ScanaStudio.dec_item_new(ch_io,trs_start.sample_index,swd_simple.end_sample - 1);
-                    ScanaStudio.dec_item_add_content("Turnaround bits");
-                    ScanaStudio.dec_item_add_content("Trn");
-                    ScanaStudio.dec_item_end();
+                    held.dec_item_new(ch_io,trs_start.sample_index,swd_simple.end_sample - 1);
+                    held.dec_item_add_content("Turnaround bits");
+                    held.dec_item_add_content("Trn");
+                    held.dec_item_end();
                     // Display the driver on the clk line
-                    ScanaStudio.dec_item_new(ch_clk,trs_start.sample_index + 1,swd_simple.end_sample - 1);
-                    ScanaStudio.dec_item_add_content("Driver : No one");
-                    ScanaStudio.dec_item_end();
+                    held.dec_item_new(ch_clk,trs_start.sample_index + 1,swd_simple.end_sample - 1);
+                    held.dec_item_add_content("Driver : No one");
+                    held.dec_item_end();
                     //Packet View
                     packet_view_add_packet_v2(ch_io,swd_simple,"Trn","Turnaround bits","Misc");
                     // Display who is driven the line on the clk line
                     driver = "Host";
                 }
                 // Display who is driven the line on the clk line
-                ScanaStudio.dec_item_new(ch_clk,trs_start.sample_index + 1, swd_simple.end_sample - 1);
-                ScanaStudio.dec_item_add_content("DRIVER : no one");
-                ScanaStudio.dec_item_end();
+                held.dec_item_new(ch_clk,trs_start.sample_index + 1, swd_simple.end_sample - 1);
+                held.dec_item_add_content("DRIVER : no one");
+                held.dec_item_end();
                 break;
             }//end ENUM_STATE_ACK
 
@@ -1803,12 +2006,12 @@ function on_decode_signals(resume)
                 else
                 {
                     tmp_trs_sample_index = trs_clk.sample_index;
-                    while( (tmp_trs_sample_index == trs_clk.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+                    while( (tmp_trs_sample_index == trs_clk.sample_index) && (is_not_last(ch_clk) == true) )
                     {
-                        trs_clk = ScanaStudio.trs_get_next(ch_clk);
+                        trs_clk = next_trs(ch_clk);
                     }
                 }
-                var start_data = trs_clk.sample_index;
+                start_data = trs_clk.sample_index;
 
                 // Check the behavior of the access accordly to the request and the others request
                 parity_array = [];
@@ -1882,18 +2085,18 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Abort the current AP transaction";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("DAPABORT : Abort the current AP transaction");
-                            ScanaStudio.dec_item_add_content("Abort the current AP transaction");
-                            ScanaStudio.dec_item_add_content("Abort transaction");
+                            held.dec_item_add_content("DAPABORT : Abort the current AP transaction");
+                            held.dec_item_add_content("Abort the current AP transaction");
+                            held.dec_item_add_content("Abort transaction");
                         }
                         else
                         {
                             packet_string = "Do nothing";
                             types = "Misc";
-                            ScanaStudio.dec_item_add_content("Do nothing");
+                            held.dec_item_add_content("Do nothing");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"ABORT.DAPABORT",packet_string,types);
                         //Read STKCMPCLR bit
@@ -1913,25 +2116,25 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "Clear CTRL/STAT.STICKYCMP bit";
                                 types = "Data";
-                                ScanaStudio.dec_item_add_content("STKCMPCLR : Clear the CTRL/STAT.STICKYCMP bit");
-                                ScanaStudio.dec_item_add_content("Clear the CTRL/STAT.STICKYCMP bit");
-                                ScanaStudio.dec_item_add_content("Clear CTRL/STAT.STICKYCMP");
+                                held.dec_item_add_content("STKCMPCLR : Clear the CTRL/STAT.STICKYCMP bit");
+                                held.dec_item_add_content("Clear the CTRL/STAT.STICKYCMP bit");
+                                held.dec_item_add_content("Clear CTRL/STAT.STICKYCMP");
                             }
                             else
                             {
                                 packet_string = "Do nothing";
                                 types = "Misc";
-                                ScanaStudio.dec_item_add_content("Do nothing");
+                                held.dec_item_add_content("Do nothing");
                             }
                         }
                         else
                         {
                             packet_string = "Not implemented when MINDP is.";
-                            ScanaStudio.dec_item_add_content("STKCMPCLR : Not implemented when MINDP is implemented");
-                            ScanaStudio.dec_item_add_content("Not implemented when MINDP is implemented");
+                            held.dec_item_add_content("STKCMPCLR : Not implemented when MINDP is implemented");
+                            held.dec_item_add_content("Not implemented when MINDP is implemented");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"ABORT.STKCMPCLR",packet_string,types);
                         //Read STKERRCLR bit
@@ -1949,18 +2152,18 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Clear CTRL/STAT.STICKYERR bit";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("STKERRCLR : Clear the CTRL/STAT.STICKYERR bit");
-                            ScanaStudio.dec_item_add_content("Clear the CTRL/STAT.STICKYERR bit");
-                            ScanaStudio.dec_item_add_content("Clear CTRL/STAT.STICKYERR");
+                            held.dec_item_add_content("STKERRCLR : Clear the CTRL/STAT.STICKYERR bit");
+                            held.dec_item_add_content("Clear the CTRL/STAT.STICKYERR bit");
+                            held.dec_item_add_content("Clear CTRL/STAT.STICKYERR");
                         }
                         else
                         {
                             packet_string = "Do nothing";
                             types = "Misc";
-                            ScanaStudio.dec_item_add_content("Do nothing");
+                            held.dec_item_add_content("Do nothing");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"ABORT.STKERRCLR",packet_string,types);
                         //Read WDERRCLR bit
@@ -1978,18 +2181,18 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Clear CTRL/STAT.WDATAERR bit";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("WDERRCLR : Clear the CTRL/STAT.WDATAERR bit");
-                            ScanaStudio.dec_item_add_content("Clear the CTRL/STAT.WDATAERR bit");
-                            ScanaStudio.dec_item_add_content("Clear CTRL/STAT.WDATAERR");
+                            held.dec_item_add_content("WDERRCLR : Clear the CTRL/STAT.WDATAERR bit");
+                            held.dec_item_add_content("Clear the CTRL/STAT.WDATAERR bit");
+                            held.dec_item_add_content("Clear CTRL/STAT.WDATAERR");
                         }
                         else
                         {
                             packet_string = "Do nothing";
                             types = "Misc";
-                            ScanaStudio.dec_item_add_content("Do nothing");
+                            held.dec_item_add_content("Do nothing");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"ABORT.WDERRCLR",packet_string,types);
                         //Read ORUNERRCLR bit
@@ -2007,18 +2210,18 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Clear CTRL/STAT.STICKYORUN bit";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("ORUNERRCLR : Clear the CTRL/STAT.STICKYORUN bit");
-                            ScanaStudio.dec_item_add_content("Clear the CTRL/STAT.STICKYORUN bit");
-                            ScanaStudio.dec_item_add_content("Clear CTRL/STAT.STICKYORUN");
+                            held.dec_item_add_content("ORUNERRCLR : Clear the CTRL/STAT.STICKYORUN bit");
+                            held.dec_item_add_content("Clear the CTRL/STAT.STICKYORUN bit");
+                            held.dec_item_add_content("Clear CTRL/STAT.STICKYORUN");
                         }
                         else
                         {
                             packet_string = "Do nothing";
                             types = "Misc";
-                            ScanaStudio.dec_item_add_content("Do nothing");
+                            held.dec_item_add_content("Do nothing");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"ABORT.ORUNERRCLR",packet_string,types);
                         //Read Reserved, SBZ
@@ -2039,13 +2242,13 @@ function on_decode_signals(resume)
                         else
                         {
                             types = "Error";
-                            ScanaStudio.dec_item_emphasize_warning();
+                            held.dec_item_emphasize_warning();
                         }
                         packet_string = "Reserved, SBZ (Should be Zero)";
-                        ScanaStudio.dec_item_add_content("Reserved, SBZ (Should be Zero)");
-                        ScanaStudio.dec_item_add_content("Reserved, SBZ");
+                        held.dec_item_add_content("Reserved, SBZ (Should be Zero)");
+                        held.dec_item_add_content("Reserved, SBZ");
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"ABORT.Reserved",packet_string,types);
                         break;
@@ -2071,13 +2274,13 @@ function on_decode_signals(resume)
                         else
                         {
                             types = "Error";
-                            ScanaStudio.dec_item_emphasize_warning();
+                            held.dec_item_emphasize_warning();
                         }
                         packet_string = "RAO (Read-As-One)";
-                        ScanaStudio.dec_item_add_content("Reserved, RAO (Read-As-One)");
-                        ScanaStudio.dec_item_add_content("Reserved, RAO");
+                        held.dec_item_add_content("Reserved, RAO (Read-As-One)");
+                        held.dec_item_add_content("Reserved, RAO");
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"DPIDR.RAO",packet_string,types);
                         //Read DESIGNER bit (Designer of the DP)
@@ -2090,8 +2293,8 @@ function on_decode_signals(resume)
                         }
                         swd_value = Number(swd_simple.unsigned_words);
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
-                        var IDR = 0;
-                        var DPIDR = 0;
+                        IDR = 0;
+                        DPIDR = 0;
                         for (i=0; i<7; i++)
                         {
                             IDR += item_display[i]*Math.pow(2,i);
@@ -2101,9 +2304,9 @@ function on_decode_signals(resume)
                             DPIDR += item_display[i]*Math.pow(2,i-7);
                         }
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("IDR [7:1] : 0x" + pad(IDR.toString(16),2) + "  DPIDR [11:8] : 0x" + pad(DPIDR.toString(16),1));
+                        held.dec_item_add_content("IDR [7:1] : 0x" + pad(IDR.toString(16),2) + "  DPIDR [11:8] : 0x" + pad(DPIDR.toString(16),1));
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "IDR : 0x" + pad(IDR.toString(16),2) + ", DPIDR : 0x" + pad(DPIDR.toString(16),1);
                         packet_view_add_packet_v2(ch_io,swd_simple,"DPIDR.DESIGNER",packet_string,"Data");
@@ -2122,26 +2325,26 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Reserved, DPv0 do not implement DPIDR.";
                             types = "Error";
-                            ScanaStudio.dec_item_add_content("VERSION : Reserved, DPv0 do not implement DPIDR");
-                            ScanaStudio.dec_item_add_content("Reserved, DPv0 do not implement DPIDR");
-                            ScanaStudio.dec_item_add_content("DPv0 do not implement DPIDR");
-                            ScanaStudio.dec_item_add_content("Reserved");
+                            held.dec_item_add_content("VERSION : Reserved, DPv0 do not implement DPIDR");
+                            held.dec_item_add_content("Reserved, DPv0 do not implement DPIDR");
+                            held.dec_item_add_content("DPv0 do not implement DPIDR");
+                            held.dec_item_add_content("Reserved");
                         }
                         else if (swd_value > 3)
                         {
                             packet_string = "Reserved";
                             types = "Error";
-                            ScanaStudio.dec_item_add_content("Reserved");
-                            ScanaStudio.dec_item_emphasize_warning();
+                            held.dec_item_add_content("Reserved");
+                            held.dec_item_emphasize_warning();
                         }
                         else
                         {
                             packet_string = "DPv" + swd_value + " is implemented";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("DPv" + swd_value + " is implemented");
+                            held.dec_item_add_content("DPv" + swd_value + " is implemented");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"DPIDR.VERSION",packet_string,types);
                         //Read MIN bit
@@ -2158,21 +2361,21 @@ function on_decode_signals(resume)
                         if (swd_value == 0)
                         {
                             packet_string = "MINDP Functions are implemented.";
-                            var MINDP = "Implemented";
-                            ScanaStudio.dec_item_add_content("MIN : Transaction counter, Pushed-verify, and Pushed-find operations are implemented.");
-                            ScanaStudio.dec_item_add_content("Transaction counter, Pushed-verify, and Pushed-find operations are implemented.");
-                            ScanaStudio.dec_item_add_content("MINDP Functions implemented");
+                            MINDP = "Implemented";
+                            held.dec_item_add_content("MIN : Transaction counter, Pushed-verify, and Pushed-find operations are implemented.");
+                            held.dec_item_add_content("Transaction counter, Pushed-verify, and Pushed-find operations are implemented.");
+                            held.dec_item_add_content("MINDP Functions implemented");
                         }
                         else
                         {
                             packet_string = "MINDP Functions not implemented.";
-                            var MINDP = "Not Implemented";
-                            ScanaStudio.dec_item_add_content("MIN : Transaction counter, Pushed-verify, and Pushed-find operations are not implemented.");
-                            ScanaStudio.dec_item_add_content("Transaction counter, Pushed-verify, and Pushed-find operations are not implemented.");
-                            ScanaStudio.dec_item_add_content("MINDP Functions not implemented");
+                            MINDP = "Not Implemented";
+                            held.dec_item_add_content("MIN : Transaction counter, Pushed-verify, and Pushed-find operations are not implemented.");
+                            held.dec_item_add_content("Transaction counter, Pushed-verify, and Pushed-find operations are not implemented.");
+                            held.dec_item_add_content("MINDP Functions not implemented");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"DPIDR.MIN",packet_string,"Data");
                         //Read RES0 bit
@@ -2189,10 +2392,10 @@ function on_decode_signals(resume)
                         swd_value = Number(swd_simple.unsigned_words);
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("PARTNO : 0x" + pad(swd_value.toString(16),2));
-                        ScanaStudio.dec_item_add_content(swd_value);
+                        held.dec_item_add_content("PARTNO : 0x" + pad(swd_value.toString(16),2));
+                        held.dec_item_add_content(swd_value);
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"DPIDR.PARTNO",swd_value,"Data");
                         //Read REVISION
@@ -2206,10 +2409,10 @@ function on_decode_signals(resume)
                         swd_value = Number(swd_simple.unsigned_words);
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("REVISION : 0x" + pad(swd_value.toString(16),1) + " (meaning is IMPLEMENTATION DEFINED)");
-                        ScanaStudio.dec_item_add_content(swd_value);
+                        held.dec_item_add_content("REVISION : 0x" + pad(swd_value.toString(16),1) + " (meaning is IMPLEMENTATION DEFINED)");
+                        held.dec_item_add_content(swd_value);
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "0x" + pad(swd_value.toString(16),1) + " (IMPLEMENTATION DEFINED)";
                         packet_view_add_packet_v2(ch_io,swd_simple,"DPIDR.REVISION",packet_string,"Data");
@@ -2229,10 +2432,10 @@ function on_decode_signals(resume)
                         swd_value = Number(swd_simple.unsigned_words);
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("ASIZE : 0x" + pad(swd_value.toString(16),2) + "-bit address");
-                        ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),2) + "-bit address");
+                        held.dec_item_add_content("ASIZE : 0x" + pad(swd_value.toString(16),2) + "-bit address");
+                        held.dec_item_add_content("0x" + pad(swd_value.toString(16),2) + "-bit address");
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "0x" + pad(swd_value.toString(16),2) + "-bit address";
                         packet_view_add_packet_v2(ch_io,swd_simple,"DPIDR1.ASIZE",packet_string,"Data");
@@ -2246,23 +2449,23 @@ function on_decode_signals(resume)
                         }
                         swd_value = Number(swd_simple.unsigned_words);
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
-                        var IDR = 0;
-                        var DPIDR = 0;
+                        IDR = 0;
+                        DPIDR = 0;
                         if (swd_value == 0)
                         {
                             packet_string = "DPIDR1.ERRMODE isn't implemented.";
-                            ScanaStudio.dec_item_add_content("ERRMODE : DPIDR1.ERRMODE isn't implemented");
-                            ScanaStudio.dec_item_add_content("DPIDR1.ERRMODE is not implemented");
+                            held.dec_item_add_content("ERRMODE : DPIDR1.ERRMODE isn't implemented");
+                            held.dec_item_add_content("DPIDR1.ERRMODE is not implemented");
                         }
                         else
                         {
                             packet_string = "DPIDR1.ERRMODE is implemented.";
-                            ScanaStudio.dec_item_add_content("ERRMODE : DPIDR1.ERRMODE is implemented");
-                            ScanaStudio.dec_item_add_content("DPIDR1.ERRMODE is implemented");
+                            held.dec_item_add_content("ERRMODE : DPIDR1.ERRMODE is implemented");
+                            held.dec_item_add_content("DPIDR1.ERRMODE is implemented");
                         }
                         dec_item_new_v2(ch_io,swd_simple);
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"DPIDR1.ERRMODE",packet_string,"Data");
                         //Read RES0 bit
@@ -2287,17 +2490,17 @@ function on_decode_signals(resume)
                         if (swd_value == 0)
                         {
                             packet_string = "No valid base address is specified.";
-                            ScanaStudio.dec_item_add_content("VALID : No valid base address is specified. The value of the PTR field is UNKNOWN");
-                            ScanaStudio.dec_item_add_content("No valid base address is specified. The value of the PTR field is UNKNOWN");
+                            held.dec_item_add_content("VALID : No valid base address is specified. The value of the PTR field is UNKNOWN");
+                            held.dec_item_add_content("No valid base address is specified. The value of the PTR field is UNKNOWN");
                         }
                         else
                         {
                             packet_string = "The PTR field specifies a valid base address.";
-                            ScanaStudio.dec_item_add_content("VALID : The PTR field specifies a valid base address");
-                            ScanaStudio.dec_item_add_content("The PTR field specifies a valid base address");
+                            held.dec_item_add_content("VALID : The PTR field specifies a valid base address");
+                            held.dec_item_add_content("The PTR field specifies a valid base address");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"BASEPTR0.VALID",packet_string,"Data");
                         //Read RES0 bit
@@ -2312,12 +2515,12 @@ function on_decode_signals(resume)
                             break;
                         }
                         swd_value = Number(swd_simple.unsigned_words);
-                        var BASEPTR0_PTR = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
+                        BASEPTR0_PTR = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("BASEPTR0_PTR : 0x" + pad(swd_value.toString(16),5));
-                        ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),5));
+                        held.dec_item_add_content("BASEPTR0_PTR : 0x" + pad(swd_value.toString(16),5));
+                        held.dec_item_add_content("0x" + pad(swd_value.toString(16),5));
                         display_sample_0_1(swd_simple, BASEPTR0_PTR);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "0x" + pad(swd_value.toString(16),5);
                         packet_view_add_packet_v2(ch_io,swd_simple,"BASEPTR0.PTR",packet_string,"Data");
@@ -2335,12 +2538,12 @@ function on_decode_signals(resume)
                             break;
                         }
                         swd_value = Number(swd_simple.unsigned_words);
-                        var BASEPTR1_PTR = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
+                        BASEPTR1_PTR = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("BASEPTR1 [63:32] : 0x " + pad(swd_value.toString(16),8));
-                        ScanaStudio.dec_item_add_content("0x " + pad(swd_value.toString(16),8));
+                        held.dec_item_add_content("BASEPTR1 [63:32] : 0x " + pad(swd_value.toString(16),8));
+                        held.dec_item_add_content("0x " + pad(swd_value.toString(16),8));
                         display_sample_0_1(swd_simple, BASEPTR1_PTR);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "[63:32] : 0x " + pad(swd_value.toString(16),8);
                         packet_view_add_packet_v2(ch_io,swd_simple,"BASEPTR1.PTR",packet_string,"Data");
@@ -2363,17 +2566,17 @@ function on_decode_signals(resume)
                         if (ORUNDETECT == 0) // disabled
                         {
                             packet_string = "Overrun detection is disabled.";
-                            ScanaStudio.dec_item_add_content("ORUNDETECT : Overrun detection is disabled");
-                            ScanaStudio.dec_item_add_content("Overrun detection is disabled");
+                            held.dec_item_add_content("ORUNDETECT : Overrun detection is disabled");
+                            held.dec_item_add_content("Overrun detection is disabled");
                         }
                         else
                         {
                             packet_string = "Overrun detection is enabled.";
-                            ScanaStudio.dec_item_add_content("ORUNDETECT : Overrun detection is enabled");
-                            ScanaStudio.dec_item_add_content("Overrun detection is enabled");
+                            held.dec_item_add_content("ORUNDETECT : Overrun detection is enabled");
+                            held.dec_item_add_content("Overrun detection is enabled");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"CTRL/STAT.ORUNDETECT",packet_string,"Data");
                         //Read STICKYORUN bit
@@ -2387,11 +2590,11 @@ function on_decode_signals(resume)
                         swd_value = Number(swd_simple.unsigned_words);
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("STICKYORUN : Access is RO/WI (Read Only/Write Ignore)");
-                        ScanaStudio.dec_item_add_content("Access is RO/WI (Read Only/Write Ignore)");
-                        ScanaStudio.dec_item_add_content("Access is RO/WI");
+                        held.dec_item_add_content("STICKYORUN : Access is RO/WI (Read Only/Write Ignore)");
+                        held.dec_item_add_content("Access is RO/WI (Read Only/Write Ignore)");
+                        held.dec_item_add_content("Access is RO/WI");
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Access is Read Only/Write Ignore.";
                         packet_view_add_packet_v2(ch_io,swd_simple,"CTRL/STAT.STICKYORUN",packet_string,"Data");
@@ -2412,36 +2615,36 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 packet_string = "Normal Operation";
-                                ScanaStudio.dec_item_add_content("TRNMODE : Normal Operation");
-                                ScanaStudio.dec_item_add_content("Normal Operation");
+                                held.dec_item_add_content("TRNMODE : Normal Operation");
+                                held.dec_item_add_content("Normal Operation");
                             }
                             else if (swd_value == 1)
                             {
                                 packet_string = "Pushed-verify mode";
-                                ScanaStudio.dec_item_add_content("TRNMODE : Pushed-verify mode");
-                                ScanaStudio.dec_item_add_content("Pushed-verify mode");
+                                held.dec_item_add_content("TRNMODE : Pushed-verify mode");
+                                held.dec_item_add_content("Pushed-verify mode");
                             }
                             else if (swd_value == 2)
                             {
                                 packet_string = "Pushed-compare mode";
-                                ScanaStudio.dec_item_add_content("TRNMODE : Pushed-compare mode");
-                                ScanaStudio.dec_item_add_content("Pushed-compare mode");
+                                held.dec_item_add_content("TRNMODE : Pushed-compare mode");
+                                held.dec_item_add_content("Pushed-compare mode");
                             }
                             else
                             {
                                 packet_string = "Reserved";
-                                ScanaStudio.dec_item_add_content("TRNMODE : Reserved");
-                                ScanaStudio.dec_item_add_content("Reserved");
+                                held.dec_item_add_content("TRNMODE : Reserved");
+                                held.dec_item_add_content("Reserved");
                             }
                         }
                         else
                         {
                             packet_string = "Not implemented when MINDP is.";
-                            ScanaStudio.dec_item_add_content("TRNMODE : Not implemented when MINDP is implemented");
-                            ScanaStudio.dec_item_add_content("Not implemented when MINDP is implemented");
+                            held.dec_item_add_content("TRNMODE : Not implemented when MINDP is implemented");
+                            held.dec_item_add_content("Not implemented when MINDP is implemented");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"CTRL/STAT.TRNMODE",packet_string,"Data");
                         //Read STICKYCMP bit
@@ -2455,11 +2658,11 @@ function on_decode_signals(resume)
                         swd_value = Number(swd_simple.unsigned_words);
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("STICKYCMP : Access is RO/WI (Read Only/Write Ignore)");
-                        ScanaStudio.dec_item_add_content("Access is RO/WI (Read Only/Write Ignore)");
-                        ScanaStudio.dec_item_add_content("Access is RO/WI");
+                        held.dec_item_add_content("STICKYCMP : Access is RO/WI (Read Only/Write Ignore)");
+                        held.dec_item_add_content("Access is RO/WI (Read Only/Write Ignore)");
+                        held.dec_item_add_content("Access is RO/WI");
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Access is Read Only/Write Ignore.";
                         packet_view_add_packet_v2(ch_io,swd_simple,"CTRL/STAT.STICKYCMP",packet_string,"Data");
@@ -2474,11 +2677,11 @@ function on_decode_signals(resume)
                         swd_value = Number(swd_simple.unsigned_words);
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("STICKYERR : Access is RO/WI (Read Only/Write Ignore)");
-                        ScanaStudio.dec_item_add_content("Access is RO/WI (Read Only/Write Ignore)");
-                        ScanaStudio.dec_item_add_content("Access is RO/WI");
+                        held.dec_item_add_content("STICKYERR : Access is RO/WI (Read Only/Write Ignore)");
+                        held.dec_item_add_content("Access is RO/WI (Read Only/Write Ignore)");
+                        held.dec_item_add_content("Access is RO/WI");
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Access is Read Only/Write Ignore.";
                         packet_view_add_packet_v2(ch_io,swd_simple,"CTRL/STAT.STICKYERR",packet_string,"Data");
@@ -2496,19 +2699,19 @@ function on_decode_signals(resume)
                         if (DP_Version >= 1)
                         {
                             packet_string = "Access is Read Only/Write Ignore.";
-                            ScanaStudio.dec_item_add_content("READOK : Access is RO/WI (Read Only/Write Ignore)");
-                            ScanaStudio.dec_item_add_content("Access is RO/WI (Read Only/Write Ignore)");
-                            ScanaStudio.dec_item_add_content("Access is RO/WI");
+                            held.dec_item_add_content("READOK : Access is RO/WI (Read Only/Write Ignore)");
+                            held.dec_item_add_content("Access is RO/WI (Read Only/Write Ignore)");
+                            held.dec_item_add_content("Access is RO/WI");
                         }
                         else
                         {
                             packet_string = "Isn't defined for DPv0.";
-                            ScanaStudio.dec_item_add_content("READOK : Isn't defined for DPv0");
-                            ScanaStudio.dec_item_add_content("Isn't defined for DPv0");
-                            ScanaStudio.dec_item_add_content("Isn't Defined");
+                            held.dec_item_add_content("READOK : Isn't defined for DPv0");
+                            held.dec_item_add_content("Isn't defined for DPv0");
+                            held.dec_item_add_content("Isn't Defined");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"CTRL/STAT.READOK",packet_string,"Data");
                         //Read WDATAERR bit
@@ -2522,11 +2725,11 @@ function on_decode_signals(resume)
                         swd_value = Number(swd_simple.unsigned_words);
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("WDATAERR : Access is RO/WI (Read Only/Write Ignore)");
-                        ScanaStudio.dec_item_add_content("Access is RO/WI (Read Only/Write Ignore)");
-                        ScanaStudio.dec_item_add_content("Access is RO/WI");
+                        held.dec_item_add_content("WDATAERR : Access is RO/WI (Read Only/Write Ignore)");
+                        held.dec_item_add_content("Access is RO/WI (Read Only/Write Ignore)");
+                        held.dec_item_add_content("Access is RO/WI");
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Access is Read Only/Write Ignore";
                         packet_view_add_packet_v2(ch_io,swd_simple,"CTRL/STAT.WDATAERR",packet_string,"Data");
@@ -2559,17 +2762,17 @@ function on_decode_signals(resume)
                         if (MINDP == "Implemented")
                         {
                             packet_string = "Include byte lane " + item_content + " in comparisons.";
-                            ScanaStudio.dec_item_add_content("MASKLANE : Include byte lane " + item_content + " in comparisons");
-                            ScanaStudio.dec_item_add_content("Include byte lane " + item_content + " in comparisons");
+                            held.dec_item_add_content("MASKLANE : Include byte lane " + item_content + " in comparisons");
+                            held.dec_item_add_content("Include byte lane " + item_content + " in comparisons");
                         }
                         else
                         {
                             packet_string = "Not Implemented when MINDP is.";
-                            ScanaStudio.dec_item_add_content("MASKLANE : Not Implemented when MINDP is implemented");
-                            ScanaStudio.dec_item_add_content("Not Implemented when MINDP is implemented");
+                            held.dec_item_add_content("MASKLANE : Not Implemented when MINDP is implemented");
+                            held.dec_item_add_content("Not Implemented when MINDP is implemented");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"CTRL/STAT.MASKLANE",packet_string,"Data");
                         //Read TRNCNT bits
@@ -2586,19 +2789,19 @@ function on_decode_signals(resume)
                         if (MINDP == "Implemented")
                         {
                             packet_string = "Transaction Counter 0x" + pad(swd_value.toString(16),3);
-                            ScanaStudio.dec_item_add_content("TRNCNT : Transaction Counter 0x" + pad(swd_value.toString(16),3));
-                            ScanaStudio.dec_item_add_content("Transaction Counter 0x" + pad(swd_value.toString(16),3));
-                            ScanaStudio.dec_item_add_content(swd_value);
+                            held.dec_item_add_content("TRNCNT : Transaction Counter 0x" + pad(swd_value.toString(16),3));
+                            held.dec_item_add_content("Transaction Counter 0x" + pad(swd_value.toString(16),3));
+                            held.dec_item_add_content(swd_value);
                         }
                         else //Not Implemented
                         {
                             packet_string = "Not Implemented when MINDP is.";
-                            ScanaStudio.dec_item_add_content("TRNCNT : Transaction Counter isn't implemented when MINDP is implemented");
-                            ScanaStudio.dec_item_add_content("Transaction Counter isn't implemented when MINDP is implemented");
-                            ScanaStudio.dec_item_add_content("Transaction Counter isn't implemented");
+                            held.dec_item_add_content("TRNCNT : Transaction Counter isn't implemented when MINDP is implemented");
+                            held.dec_item_add_content("Transaction Counter isn't implemented when MINDP is implemented");
+                            held.dec_item_add_content("Transaction Counter isn't implemented");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"CTRL/STAT.TRNCNT",packet_string,"Data");
                         //Read ERRMODE bits
@@ -2617,16 +2820,16 @@ function on_decode_signals(resume)
                             if (swd_value == 1)
                             {
                                 packet_string = "is cleared when a FAULT response is output.";
-                                ScanaStudio.dec_item_add_content("ERRMODE : Errors on AP transactions set CTRL/STAT.STICKYERR, and CTRL/STAT.STICKYERR is cleared when a FAULT response is output");
-                                ScanaStudio.dec_item_add_content("Errors on AP transactions set CTRL/STAT.STICKYERR, and CTRL/STAT.STICKYERR is cleared when a FAULT response is output");
-                                ScanaStudio.dec_item_add_content("CTRL/STAT.STICKYERR is cleared when a FAULT response is output");
+                                held.dec_item_add_content("ERRMODE : Errors on AP transactions set CTRL/STAT.STICKYERR, and CTRL/STAT.STICKYERR is cleared when a FAULT response is output");
+                                held.dec_item_add_content("Errors on AP transactions set CTRL/STAT.STICKYERR, and CTRL/STAT.STICKYERR is cleared when a FAULT response is output");
+                                held.dec_item_add_content("CTRL/STAT.STICKYERR is cleared when a FAULT response is output");
                             }
                             else
                             {
                                 packet_string = "Is set until explicitly cleared.";
-                                ScanaStudio.dec_item_add_content("ERRMODE : Errors on AP transactions set CTRL/STAT.STICKYERR and CTRL/STAT.STICKYERR remains set until explicitly cleared");
-                                ScanaStudio.dec_item_add_content("Errors on AP transactions set CTRL/STAT.STICKYERR and CTRL/STAT.STICKYERR remains set until explicitly cleared");
-                                ScanaStudio.dec_item_add_content("CTRL/STAT.STICKYERR remains set until explicitly cleared");
+                                held.dec_item_add_content("ERRMODE : Errors on AP transactions set CTRL/STAT.STICKYERR and CTRL/STAT.STICKYERR remains set until explicitly cleared");
+                                held.dec_item_add_content("Errors on AP transactions set CTRL/STAT.STICKYERR and CTRL/STAT.STICKYERR remains set until explicitly cleared");
+                                held.dec_item_add_content("CTRL/STAT.STICKYERR remains set until explicitly cleared");
                             }
                         }
                         else //Not Implemented
@@ -2634,19 +2837,19 @@ function on_decode_signals(resume)
                             if (swd_value == 1)
                             {
                                 types = "Error";
-                                ScanaStudio.dec_item_emphasize_error();
+                                held.dec_item_emphasize_error();
                             }
                             else
                             {
                                 types = "Misc";
                             }
                             packet_string = "RES0 for DPv2 and before.";
-                            ScanaStudio.dec_item_add_content("ERRMODE : RES0 for DPv2 and before");
-                            ScanaStudio.dec_item_add_content("RES0 for DPv2 and before");
-                            ScanaStudio.dec_item_add_content("RES0");
+                            held.dec_item_add_content("ERRMODE : RES0 for DPv2 and before");
+                            held.dec_item_add_content("RES0 for DPv2 and before");
+                            held.dec_item_add_content("RES0");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"CTRL/STAT.ERRMODE",packet_string,"Data");
                         //Read RES0 bit
@@ -2667,17 +2870,17 @@ function on_decode_signals(resume)
                         if (swd_value == 0)
                         {
                             packet_string = "Do nothing.";
-                            ScanaStudio.dec_item_add_content("CDBGRSTREQ : Do nothing" + item_content);
-                            ScanaStudio.dec_item_add_content("Do nothing");
+                            held.dec_item_add_content("CDBGRSTREQ : Do nothing" + item_content);
+                            held.dec_item_add_content("Do nothing");
                         }
                         else
                         {
                             packet_string = "Initiate the debug reset request.";
-                            ScanaStudio.dec_item_add_content("CDBGRSTREQ : Initiate the debug reset request" + item_content);
-                            ScanaStudio.dec_item_add_content("Initiate the debug reset request");
+                            held.dec_item_add_content("CDBGRSTREQ : Initiate the debug reset request" + item_content);
+                            held.dec_item_add_content("Initiate the debug reset request");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"CDBGRSTREQ",packet_string,"Data");
                         //Read CDBGRSTACK bit
@@ -2694,17 +2897,17 @@ function on_decode_signals(resume)
                         if (swd_value == 0)
                         {
                             packet_string = "Do nothing (RO).";
-                            ScanaStudio.dec_item_add_content("CDBGRSTACK : Do nothing (RO bit)");
-                            ScanaStudio.dec_item_add_content("Do nothing");
+                            held.dec_item_add_content("CDBGRSTACK : Do nothing (RO bit)");
+                            held.dec_item_add_content("Do nothing");
                         }
                         else
                         {
                             packet_string = "Accept the debug reset request.";
-                            ScanaStudio.dec_item_add_content("CDBGRSTACK : Accept the debug reset request (RO bit)");
-                            ScanaStudio.dec_item_add_content("Accept the debug reset request");
+                            held.dec_item_add_content("CDBGRSTACK : Accept the debug reset request (RO bit)");
+                            held.dec_item_add_content("Accept the debug reset request");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"CDBGRSTACK",packet_string,"Data");
                         //Read CDBGPWRUPREQ bit
@@ -2722,17 +2925,17 @@ function on_decode_signals(resume)
                         if (swd_value == 0)
                         {
                             packet_string = "Do nothing.";
-                            ScanaStudio.dec_item_add_content("CDBGPWRUPREQ : Do nothing");
-                            ScanaStudio.dec_item_add_content("Do nothing");
+                            held.dec_item_add_content("CDBGPWRUPREQ : Do nothing");
+                            held.dec_item_add_content("Do nothing");
                         }
                         else
                         {
                             packet_string = "Initiate the debug powerup request.";
-                            ScanaStudio.dec_item_add_content("CDBGPWRUPREQ : Initiate the debug powerup request");
-                            ScanaStudio.dec_item_add_content("Initiate the debug reset request");
+                            held.dec_item_add_content("CDBGPWRUPREQ : Initiate the debug powerup request");
+                            held.dec_item_add_content("Initiate the debug reset request");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"CDBGPWRUPREQ",packet_string,"Data");
                         //Read CDBGPWRUPACK bit
@@ -2749,17 +2952,17 @@ function on_decode_signals(resume)
                         if (swd_value == 0)
                         {
                             packet_string = "Do nothing (RO).";
-                            ScanaStudio.dec_item_add_content("CDBGPWRUPACK : Do nothing (RO bit)");
-                            ScanaStudio.dec_item_add_content("Do nothing");
+                            held.dec_item_add_content("CDBGPWRUPACK : Do nothing (RO bit)");
+                            held.dec_item_add_content("Do nothing");
                         }
                         else
                         {
                             packet_string = "Accept the debug powerup request.";
-                            ScanaStudio.dec_item_add_content("CDBGPWRUPACK : Accept the debug powerup request (RO bit)");
-                            ScanaStudio.dec_item_add_content("Accept the debug reset request");
+                            held.dec_item_add_content("CDBGPWRUPACK : Accept the debug powerup request (RO bit)");
+                            held.dec_item_add_content("Accept the debug reset request");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"CDBGPWRUPACK",packet_string,"Data");
                         //Read CDBGPWRUPREQ bit
@@ -2776,17 +2979,17 @@ function on_decode_signals(resume)
                         if (swd_value == 0)
                         {
                             packet_string = "Do nothing.";
-                            ScanaStudio.dec_item_add_content("CDBGPWRUPREQ : Do nothing");
-                            ScanaStudio.dec_item_add_content("Do nothing");
+                            held.dec_item_add_content("CDBGPWRUPREQ : Do nothing");
+                            held.dec_item_add_content("Do nothing");
                         }
                         else
                         {
                             packet_string = "Initiate System powerup request.";
-                            ScanaStudio.dec_item_add_content("CDBGPWRUPREQ : Initiate the System powerup request");
-                            ScanaStudio.dec_item_add_content("Initiate the debug reset request");
+                            held.dec_item_add_content("CDBGPWRUPREQ : Initiate the System powerup request");
+                            held.dec_item_add_content("Initiate the debug reset request");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"CDBGPWRUPREQ",packet_string,"Data");
                         //Read CSYSPWRUPREQ bit
@@ -2803,17 +3006,17 @@ function on_decode_signals(resume)
                         if (swd_value == 0)
                         {
                             packet_string = "Do nothing (RO).";
-                            ScanaStudio.dec_item_add_content("CSYSPWRUPREQ : Do nothing (RO bit)");
-                            ScanaStudio.dec_item_add_content("Do nothing");
+                            held.dec_item_add_content("CSYSPWRUPREQ : Do nothing (RO bit)");
+                            held.dec_item_add_content("Do nothing");
                         }
                         else
                         {
                             packet_string = "Accept System powerup request.";
-                            ScanaStudio.dec_item_add_content("CSYSPWRUPREQ : Accept the System powerup request (RO bit)");
-                            ScanaStudio.dec_item_add_content("Accept the debug reset request");
+                            held.dec_item_add_content("CSYSPWRUPREQ : Accept the System powerup request (RO bit)");
+                            held.dec_item_add_content("Accept the debug reset request");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"CSYSPWRUPREQ",packet_string,"Data");
                         break;
@@ -2843,9 +3046,9 @@ function on_decode_signals(resume)
                         {
                             types = "Error";
                         }
-                        ScanaStudio.dec_item_add_content("RES1");
+                        held.dec_item_add_content("RES1");
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"DLCR.RES1","RES1",types);
                         //Read RES0 bit
@@ -2862,10 +3065,10 @@ function on_decode_signals(resume)
                         Turnaround_period = Number(swd_simple.unsigned_words) + 1;
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("TURNROUND : " + Turnaround_period + " data period");
-                        ScanaStudio.dec_item_add_content(Turnaround_period + " data period");
+                        held.dec_item_add_content("TURNROUND : " + Turnaround_period + " data period");
+                        held.dec_item_add_content(Turnaround_period + " data period");
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = Turnaround_period + " data period";
                         packet_view_add_packet_v2(ch_io,swd_simple,"DLCR.TURNROUND",packet_string,"Data");
@@ -2892,18 +3095,18 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Should be 1";
                             types = "Error";
-                            ScanaStudio.dec_item_add_content("SBO : Should be 1");
-                            ScanaStudio.dec_item_add_content("Should be 1");
-                            ScanaStudio.dec_item_emphasize_warning();
+                            held.dec_item_add_content("SBO : Should be 1");
+                            held.dec_item_add_content("Should be 1");
+                            held.dec_item_emphasize_warning();
                         }
                         else
                         {
                             packet_string = "SBO bit";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("SBO");
+                            held.dec_item_add_content("SBO");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"TARGETID.SBO",packet_string,types);
                         //Read TDESIGNER bit (Designer of the part)
@@ -2916,8 +3119,8 @@ function on_decode_signals(resume)
                         }
                         swd_value = Number(swd_simple.unsigned_words);
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
-                        var TARGETID_IDR = 0;
-                        var TARGETIDL_DPIDR = 0;
+                        TARGETID_IDR = 0;
+                        TARGETIDL_DPIDR = 0;
                         for (i=0; i<7; i++)
                         {
                             TARGETID_IDR += item_display[i]*Math.pow(2,i);
@@ -2927,10 +3130,10 @@ function on_decode_signals(resume)
                             TARGETIDL_DPIDR += item_display[i]*Math.pow(2,i-7);
                         }
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("TARGETID [7:1] : " + pad(TARGETID_IDR.toString(16),2) + " TARGETID [11:8] : " + pad(TARGETIDL_DPIDR.toString(16),1));
-                        ScanaStudio.dec_item_add_content("[7:1] : " + pad(TARGETID_IDR.toString(16),2) + " [11:8] : " +  pad(TARGETIDL_DPIDR.toString(16),1));
+                        held.dec_item_add_content("TARGETID [7:1] : " + pad(TARGETID_IDR.toString(16),2) + " TARGETID [11:8] : " + pad(TARGETIDL_DPIDR.toString(16),1));
+                        held.dec_item_add_content("[7:1] : " + pad(TARGETID_IDR.toString(16),2) + " [11:8] : " +  pad(TARGETIDL_DPIDR.toString(16),1));
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "[7:1] : " + pad(TARGETID_IDR.toString(16),2) + "[11:8] : " + pad(TARGETIDL_DPIDR.toString(16),1);
                         packet_view_add_packet_v2(ch_io,swd_simple,"TARGETID.TDESIGNER",packet_string,"Data");
@@ -2945,10 +3148,10 @@ function on_decode_signals(resume)
                         swd_value = Number(swd_simple.unsigned_words);
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("TPARTNO : 0x" + pad(swd_value.toString(16),4));
-                        ScanaStudio.dec_item_add_content(swd_value);
+                        held.dec_item_add_content("TPARTNO : 0x" + pad(swd_value.toString(16),4));
+                        held.dec_item_add_content(swd_value);
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"TARGETID.TPARTNO",swd_value,types);
                         //Read TREVISION
@@ -2962,11 +3165,11 @@ function on_decode_signals(resume)
                         swd_value = Number(swd_simple.unsigned_words);
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("TREVISION : 0x" + pad(swd_value.toString(16),1) + " (meaning is IMPLEMENTATION DEFINED)");
-                        ScanaStudio.dec_item_add_content("TREVISION : 0x" + pad(swd_value.toString(16),1));
-                        ScanaStudio.dec_item_add_content(swd_value);
+                        held.dec_item_add_content("TREVISION : 0x" + pad(swd_value.toString(16),1) + " (meaning is IMPLEMENTATION DEFINED)");
+                        held.dec_item_add_content("TREVISION : 0x" + pad(swd_value.toString(16),1));
+                        held.dec_item_add_content(swd_value);
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string ="0x" + pad(swd_value.toString(16),1) + " (meaning is IMPLEMENTATION DEFINED)";
                         packet_view_add_packet_v2(ch_io,swd_simple,"TARGETID.TREVISION",packet_string,"Data");
@@ -2991,16 +3194,16 @@ function on_decode_signals(resume)
                             packet_string = "SWD protocol Version 2";
                             types = "Data";
                             Protocol_version = SWD_PROTOCOL_VERSION_2;
-                            ScanaStudio.dec_item_add_content("PROTVSN : SWD protocol Version 2");
+                            held.dec_item_add_content("PROTVSN : SWD protocol Version 2");
                         }
                         else
                         {
                             packet_string = "Reserved Version"
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("Reserved");
+                            held.dec_item_add_content("Reserved");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"DLPIDR.PROTVSN",packet_string,types);
                         //Read RES0 bit
@@ -3017,10 +3220,10 @@ function on_decode_signals(resume)
                         swd_value = Number(swd_simple.unsigned_words);
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("TINSTANCE : Instance Number 0x" + pad(swd_value.toString(16),1) + "(this value must be unique for devices with identical TARGETID_TPARTNO and TARGETID_TDESIGNER)");
-                        ScanaStudio.dec_item_add_content("Instance Number 0x" + pad(swd_value.toString(16),1));
+                        held.dec_item_add_content("TINSTANCE : Instance Number 0x" + pad(swd_value.toString(16),1) + "(this value must be unique for devices with identical TARGETID_TPARTNO and TARGETID_TDESIGNER)");
+                        held.dec_item_add_content("Instance Number 0x" + pad(swd_value.toString(16),1));
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "Instance Number 0x" + pad(swd_value.toString(16),1);
                         packet_view_add_packet_v2(ch_io,swd_simple,"DLPIDR.TINSTANCE",packet_string,"Data");
@@ -3043,17 +3246,17 @@ function on_decode_signals(resume)
                         if (swd_value == 0)
                         {
                             packet_string = "An event requires attention";
-                            ScanaStudio.dec_item_add_content("EA : An event requires attention");
-                            ScanaStudio.dec_item_add_content("An event requires attention");
+                            held.dec_item_add_content("EA : An event requires attention");
+                            held.dec_item_add_content("An event requires attention");
                         }
                         else
                         {
                             packet_string = "There is no event requiring attention"
-                            ScanaStudio.dec_item_add_content("EA : There is no event requiring attention");
-                            ScanaStudio.dec_item_add_content("There is no event requiring attention");
+                            held.dec_item_add_content("EA : There is no event requiring attention");
+                            held.dec_item_add_content("There is no event requiring attention");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"EVENTSTAT.EA",packet_string,"Data");
                         //Read RES0 bit
@@ -3075,10 +3278,10 @@ function on_decode_signals(resume)
                         SELECT1_ADDR = Number(swd_simple.unsigned_words);
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("ADDR : [31:63] 0x" + pad(SELECT1_ADDR.toString(16),8));
-                        ScanaStudio.dec_item_add_content("[31:63] 0x" + pad(SELECT1_ADDR.toString(16),8));
+                        held.dec_item_add_content("ADDR : [31:63] 0x" + pad(SELECT1_ADDR.toString(16),8));
+                        held.dec_item_add_content("[31:63] 0x" + pad(SELECT1_ADDR.toString(16),8));
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "[31:63] 0x" + pad(SELECT1_ADDR.toString(16),8);
                         packet_view_add_packet_v2(ch_io,swd_simple,"SELECT1.ADDR",packet_string,"Data");
@@ -3099,10 +3302,10 @@ function on_decode_signals(resume)
                         DP_BANK_SEL = Number(swd_simple.unsigned_words);
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("DPBANKSEL : 0x" + pad(DP_BANK_SEL.toString(16),1));
-                        ScanaStudio.dec_item_add_content("0x" + pad(DP_BANK_SEL.toString(16),1));
+                        held.dec_item_add_content("DPBANKSEL : 0x" + pad(DP_BANK_SEL.toString(16),1));
+                        held.dec_item_add_content("0x" + pad(DP_BANK_SEL.toString(16),1));
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "0x" + pad(DP_BANK_SEL.toString(16),1);
                         packet_view_add_packet_v2(ch_io,swd_simple,"SELECT.DPBANKSEL",packet_string,"Data");
@@ -3117,10 +3320,10 @@ function on_decode_signals(resume)
                         SELECT_ADDR = Number(swd_simple.unsigned_words);
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("ADDR : 0x" + pad(SELECT_ADDR.toString(16),7));
-                        ScanaStudio.dec_item_add_content("[4:31] [" + item_display + "]");
+                        held.dec_item_add_content("ADDR : 0x" + pad(SELECT_ADDR.toString(16),7));
+                        held.dec_item_add_content("[4:31] [" + item_display + "]");
                         display_sample_0_1(swd_simple, item_display);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "[4:31] 0x" + pad(SELECT_ADDR.toString(16),7);
                         packet_view_add_packet_v2(ch_io,swd_simple,"SELECT.ADRESS",packet_string,"Data");
@@ -3143,9 +3346,9 @@ function on_decode_signals(resume)
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         dec_item_new_v2(ch_io,swd_simple);
                         packet_string = "UNKNOWN DATA : 0x" + pad(swd_value.toString(16),8);
-                        ScanaStudio.dec_item_add_content("UNKNOWN DATA : 0x" + pad(swd_value.toString(16),8));
+                        held.dec_item_add_content("UNKNOWN DATA : 0x" + pad(swd_value.toString(16),8));
                         display_sample_0_1(swd_simple, item_display);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"RDBUFF.DATA",packet_string,"Data");
                         break;
@@ -3165,9 +3368,9 @@ function on_decode_signals(resume)
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         dec_item_new_v2(ch_io,swd_simple);
                         packet_string = "There wasn't any AP read before";
-                        ScanaStudio.dec_item_add_content("There wasn't any AP read before");
+                        held.dec_item_add_content("There wasn't any AP read before");
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"RESEND.DATA",packet_string,"Data");
                         break;
@@ -3192,18 +3395,18 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "Should be 1";
                                 types = "Error";
-                                ScanaStudio.dec_item_add_content("SBO : Should be 1");
-                                ScanaStudio.dec_item_add_content("Should be 1");
-                                ScanaStudio.dec_item_emphasize_warning();
+                                held.dec_item_add_content("SBO : Should be 1");
+                                held.dec_item_add_content("Should be 1");
+                                held.dec_item_emphasize_warning();
                             }
                             else
                             {
                                 packet_string = "SBO bit";
                                 types = "Data";
-                                ScanaStudio.dec_item_add_content("SBO");
+                                held.dec_item_add_content("SBO");
                             }
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"TARGETSEL.SBO",packet_string,types);
                             //Read TDESIGNER bit (Designer of the part)
@@ -3216,8 +3419,8 @@ function on_decode_signals(resume)
                             }
                             swd_value = Number(swd_simple.unsigned_words);
                             item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
-                            var TARGETSEL_IDR = 0;
-                            var TARGETSEL_DPIDR = 0;
+                            TARGETSEL_IDR = 0;
+                            TARGETSEL_DPIDR = 0;
                             for (i=0; i<7; i++)
                             {
                                 TARGETSEL_IDR += item_display[i]*Math.pow(2,i);
@@ -3227,10 +3430,10 @@ function on_decode_signals(resume)
                                 TARGETSEL_DPIDR += item_display[i]*Math.pow(2,i-7);
                             }
                             dec_item_new_v2(ch_io,swd_simple);
-                            ScanaStudio.dec_item_add_content("TARGETSEL_IDR [7:1] : 0x" + pad(TARGETSEL_IDR.toString(16),2) + " TARGETSEL_DPIDR [11:8] : 0x" + pad(TARGETSEL_DPIDR.toString(16),1));
-                            ScanaStudio.dec_item_add_content("[7:1] : 0x" + pad(TARGETSEL_IDR.toString(16),2) + " [11:8] : 0x" + pad(TARGETSEL_DPIDR.toString(16),1));
+                            held.dec_item_add_content("TARGETSEL_IDR [7:1] : 0x" + pad(TARGETSEL_IDR.toString(16),2) + " TARGETSEL_DPIDR [11:8] : 0x" + pad(TARGETSEL_DPIDR.toString(16),1));
+                            held.dec_item_add_content("[7:1] : 0x" + pad(TARGETSEL_IDR.toString(16),2) + " [11:8] : 0x" + pad(TARGETSEL_DPIDR.toString(16),1));
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_string = "[7:1] : 0x" + pad(TARGETSEL_IDR.toString(16),2) + " [11:8] : 0x" + pad(TARGETSEL_DPIDR.toString(16),1);
                             packet_view_add_packet_v2(ch_io,swd_simple,"TARGETSEL.TDESIGNER",packet_string,"Data");
@@ -3245,10 +3448,10 @@ function on_decode_signals(resume)
                             swd_value = Number(swd_simple.unsigned_words);
                             item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                             dec_item_new_v2(ch_io,swd_simple);
-                            ScanaStudio.dec_item_add_content("TPARTNO : 0x" + pad(swd_value.toString(16),4));
-                            ScanaStudio.dec_item_add_content(swd_value);
+                            held.dec_item_add_content("TPARTNO : 0x" + pad(swd_value.toString(16),4));
+                            held.dec_item_add_content(swd_value);
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"TARGETSEL.TPARTNO",swd_value,types);
                             //Read TINSTANCE
@@ -3262,11 +3465,11 @@ function on_decode_signals(resume)
                             swd_value = Number(swd_simple.unsigned_words);
                             item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                             dec_item_new_v2(ch_io,swd_simple);
-                            ScanaStudio.dec_item_add_content("TINSTANCE : 0x" + pad(swd_value.toString(16),1) + " (this value must be unique for devices with identical TARGETID_TPARTNO and TARGETID_TDESIGNER)");
-                            ScanaStudio.dec_item_add_content("TINSTANCE : 0x" + pad(swd_value.toString(16),1));
-                            ScanaStudio.dec_item_add_content(swd_value);
+                            held.dec_item_add_content("TINSTANCE : 0x" + pad(swd_value.toString(16),1) + " (this value must be unique for devices with identical TARGETID_TPARTNO and TARGETID_TDESIGNER)");
+                            held.dec_item_add_content("TINSTANCE : 0x" + pad(swd_value.toString(16),1));
+                            held.dec_item_add_content(swd_value);
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_string = "0x" + pad(swd_value.toString(16),1) + " (IMPLEMENTATION DEFINED)";
                             packet_view_add_packet_v2(ch_io,swd_simple,"TARGETSEL.TINSTANCE",packet_string,"Data");
@@ -3284,10 +3487,10 @@ function on_decode_signals(resume)
                             swd_value = Number(swd_simple.unsigned_words);
                             item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                             dec_item_new_v2(ch_io,swd_simple);
-                            ScanaStudio.dec_item_add_content("Write to TARGETSEL is UNPREDICTABLE if it doesn't follow a line reset");
-                            ScanaStudio.dec_item_add_content("UNPREDICTABLE");
+                            held.dec_item_add_content("Write to TARGETSEL is UNPREDICTABLE if it doesn't follow a line reset");
+                            held.dec_item_add_content("UNPREDICTABLE");
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"TARGETSEL","UNPREDICTABLE","Misc");
                         }
@@ -3315,9 +3518,9 @@ function on_decode_signals(resume)
                         swd_value = Number(swd_simple.unsigned_words);
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("This is an RO Register");
+                        held.dec_item_add_content("This is an RO Register");
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"RO_REGISTER.ERROR","It's an RO Register",types);
                         break;
@@ -3337,12 +3540,12 @@ function on_decode_signals(resume)
                                 break;
                             }
                             swd_value = Number(swd_simple.unsigned_words);
-                            var DAR_nb = AP_Adress + Adress/4;
+                            DAR_nb = AP_Adress + Adress/4;
                             item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                             dec_item_new_v2(ch_io,swd_simple);
-                            ScanaStudio.dec_item_add_content("DAR" + DAR_nb + " : Accessed data 0x" + pad(swd_value.toString(16),8));
+                            held.dec_item_add_content("DAR" + DAR_nb + " : Accessed data 0x" + pad(swd_value.toString(16),8));
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_string = "Accessed data 0x" + pad(swd_value.toString(16),8);
                             packet_view_add_packet_v2(ch_io,swd_simple,"DAR.DATA",packet_string,"Data");
@@ -3359,12 +3562,12 @@ function on_decode_signals(resume)
                                 break;
                             }
                             swd_value = Number(swd_simple.unsigned_words);
-                            var DAR_nb = AP_Adress + Adress/4;
+                            DAR_nb = AP_Adress + Adress/4;
                             item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                             dec_item_new_v2(ch_io,swd_simple);
-                            ScanaStudio.dec_item_add_content("DAR Registers aren't implemented, 0x" + pad(swd_value.toString(16),8));
+                            held.dec_item_add_content("DAR Registers aren't implemented, 0x" + pad(swd_value.toString(16),8));
                             display_sample_0_1(swd_simple,item_display);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_string = "Accessed data 0x" + pad(swd_value.toString(16),8);
                             packet_view_add_packet_v2(ch_io,swd_simple,"DAR.DATA",packet_string,"Data");
@@ -3385,36 +3588,36 @@ function on_decode_signals(resume)
                                 break;
                             }
                             swd_value = Number(swd_simple.unsigned_words);
-                            var data_size = Math.pow(2,swd_value + 4);
+                            data_size = Math.pow(2,swd_value + 4);
                             item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                             dec_item_new_v2(ch_io,swd_simple);
                             packet_string = "Data Type " + data_size + "-bits";
                             types = "Data";
                             if ((swd_value < 2)  && (Bytes_lanes_implemented == true))
                             {
-                                ScanaStudio.dec_item_add_content("SIZE : Data Type " + data_size + "-bits");
-                                ScanaStudio.dec_item_add_content("Data Type " + data_size + "-bits");
+                                held.dec_item_add_content("SIZE : Data Type " + data_size + "-bits");
+                                held.dec_item_add_content("Data Type " + data_size + "-bits");
                             }
                             else if (swd_value == 2)
                             {
-                                ScanaStudio.dec_item_add_content("SIZE : Data Type " + data_size + "-bits");
-                                ScanaStudio.dec_item_add_content("Data Type " + data_size + "-bits");
+                                held.dec_item_add_content("SIZE : Data Type " + data_size + "-bits");
+                                held.dec_item_add_content("Data Type " + data_size + "-bits");
                             }
                             else if (swd_value > 2 && Large_data_extension_implemented == true)
                             {
-                                ScanaStudio.dec_item_add_content("SIZE : Data Type " + data_size + "-bits");
-                                ScanaStudio.dec_item_add_content("Data Type " + data_size + "-bits");
+                                held.dec_item_add_content("SIZE : Data Type " + data_size + "-bits");
+                                held.dec_item_add_content("Data Type " + data_size + "-bits");
                             }
                             else
                             {
                                 packet_string = "Data Type Reserved or Not Implemented";
                                 types = "Error";
-                                ScanaStudio.dec_item_add_content("SIZE : Data Type Reserved or Not Implemented");
-                                ScanaStudio.dec_item_add_content("Data Type Reserved");
-                                ScanaStudio.dec_item_emphasize_warning();
+                                held.dec_item_add_content("SIZE : Data Type Reserved or Not Implemented");
+                                held.dec_item_add_content("Data Type Reserved");
+                                held.dec_item_emphasize_warning();
                             }
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"CSW.SIZE",packet_string,types);
                             //Read RES0 bit
@@ -3438,13 +3641,13 @@ function on_decode_signals(resume)
 
                                 {
                                     packet_string = "Auto-increment off";
-                                    ScanaStudio.dec_item_add_content("AddrInc : Auto-increment off"); //The address in the TAR is not automatically incremented, and remains unchanged after any Data Read/Write Register access.
+                                    held.dec_item_add_content("AddrInc : Auto-increment off"); //The address in the TAR is not automatically incremented, and remains unchanged after any Data Read/Write Register access.
                                     break;
                                 }
                                 case 1 :
                                 {
                                     packet_string = "Increment single";
-                                    ScanaStudio.dec_item_add_content("AddrInc : Increment single"); //After a successful DRW access, the address in the TAR is incremented by the size of the access
+                                    held.dec_item_add_content("AddrInc : Increment single"); //After a successful DRW access, the address in the TAR is incremented by the size of the access
                                     break;
                                 }
                                 case 2 :
@@ -3452,13 +3655,13 @@ function on_decode_signals(resume)
                                     if (Packet_transfers_implemented == true)
                                     {
                                         packet_string = "Increment packed";
-                                        ScanaStudio.dec_item_add_content("AddrInc : Increment packed"); // Increment packed, enables packed transfers, which pack multiple halfword or byte memory accesses into a single word AP access
+                                        held.dec_item_add_content("AddrInc : Increment packed"); // Increment packed, enables packed transfers, which pack multiple halfword or byte memory accesses into a single word AP access
                                         break;
                                     }
                                     else
                                     {
                                         packet_string = "Incorrect value, packet transfers isn't implemented";
-                                        ScanaStudio.dec_item_add_content("AddrInc : Incorrect value, packet transfers isn't implemented");
+                                        held.dec_item_add_content("AddrInc : Incorrect value, packet transfers isn't implemented");
                                         break;
                                     }
                                 }
@@ -3466,12 +3669,12 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = "Reserved";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("AddrInc : Reserved");
+                                    held.dec_item_add_content("AddrInc : Reserved");
                                     break;
                                 }
                             }
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"CSW.AddrInc",packet_string,types);
                             //Read DeviceEn
@@ -3488,17 +3691,17 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 packet_string = "The MEM-AP is not enabled";
-                                ScanaStudio.dec_item_add_content("DeviceEn : The MEM-AP is not enabled");
-                                ScanaStudio.dec_item_add_content("The MEM-AP is not enabled");
+                                held.dec_item_add_content("DeviceEn : The MEM-AP is not enabled");
+                                held.dec_item_add_content("The MEM-AP is not enabled");
                             }
                             else
                             {
                                 packet_string = "Transactions can be issued through the MEM-AP";
-                                ScanaStudio.dec_item_add_content("DeviceEn : Transactions can be issued through the MEM-AP");
-                                ScanaStudio.dec_item_add_content("Transactions can be issued through the MEM-AP");
+                                held.dec_item_add_content("DeviceEn : Transactions can be issued through the MEM-AP");
+                                held.dec_item_add_content("Transactions can be issued through the MEM-AP");
                             }
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"CSW.DeviceEn",packet_string,"Data");
                             //Read TrInProg
@@ -3515,17 +3718,17 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 packet_string = "The connection to the memory system is idle";
-                                ScanaStudio.dec_item_add_content("TrInProg : The connection to the memory system is idle");
-                                ScanaStudio.dec_item_add_content("The connection to the memory system is idle");
+                                held.dec_item_add_content("TrInProg : The connection to the memory system is idle");
+                                held.dec_item_add_content("The connection to the memory system is idle");
                             }
                             else
                             {
                                 packet_string = "A transfer is in progress on the connection to the memory system";
-                                ScanaStudio.dec_item_add_content("TrInProg : A transfer is in progress on the connection to the memory system");
-                                ScanaStudio.dec_item_add_content("A transfer is in progress on the connection to the memory system");
+                                held.dec_item_add_content("TrInProg : A transfer is in progress on the connection to the memory system");
+                                held.dec_item_add_content("A transfer is in progress on the connection to the memory system");
                             }
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"CSW.TrInProg",packet_string,"Data");
                             //Read Mode
@@ -3543,23 +3746,23 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 packet_string = "Basic mode";
-                                ScanaStudio.dec_item_add_content("Mode : Basic mode");
-                                ScanaStudio.dec_item_add_content("Basic mode");
+                                held.dec_item_add_content("Mode : Basic mode");
+                                held.dec_item_add_content("Basic mode");
                             }
                             else if (swd_value == 1 && Barrier_operation_extension_implemented)
                             {
                                 packet_string = "Barrier support enabled";
-                                ScanaStudio.dec_item_add_content("Mode : Barrier support enabled");
-                                ScanaStudio.dec_item_add_content("Barrier support enabled");
+                                held.dec_item_add_content("Mode : Barrier support enabled");
+                                held.dec_item_add_content("Barrier support enabled");
                             }
                             else
                             {
                                 packet_string = "Reserved";
-                                ScanaStudio.dec_item_add_content("Mode : Reserved");
-                                ScanaStudio.dec_item_add_content("Reserved");
+                                held.dec_item_add_content("Mode : Reserved");
+                                held.dec_item_add_content("Reserved");
                             }
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"CSW.Mode",packet_string,"Data");
                             //Read Type
@@ -3574,9 +3777,9 @@ function on_decode_signals(resume)
                             item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                             dec_item_new_v2(ch_io,swd_simple);
                             // IMPLEMENTATION DEFINED
-                            ScanaStudio.dec_item_add_content("Type : IMPLEMENTATION DEFINED")
+                            held.dec_item_add_content("Type : IMPLEMENTATION DEFINED")
                             display_sample_0_1(swd_simple, item_display);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"CSW.Type",packet_string,"Data");
                             //Read ERRNPASS
@@ -3595,24 +3798,24 @@ function on_decode_signals(resume)
                                 if (swd_value == 0)
                                 {
                                     packet_string = "Errors are passed upstream";
-                                    ScanaStudio.dec_item_add_content("ERRNPASS : Errors are passed upstream");
-                                    ScanaStudio.dec_item_add_content("Errors are passed upstream");
+                                    held.dec_item_add_content("ERRNPASS : Errors are passed upstream");
+                                    held.dec_item_add_content("Errors are passed upstream");
                                 }
                                 else
                                 {
                                     packet_string = "Errors are not passed upstream";
-                                    ScanaStudio.dec_item_add_content("ERRNPASS : Errors are not passed upstream");
-                                    ScanaStudio.dec_item_add_content("Errors are not passed upstream");
+                                    held.dec_item_add_content("ERRNPASS : Errors are not passed upstream");
+                                    held.dec_item_add_content("Errors are not passed upstream");
                                 }
                             }
                             else
                             {
                                 packet_string = "ERRNPASS isn't implemented";
-                                ScanaStudio.dec_item_add_content("ERRNPASS : ERRNPASS isn't implemented");
-                                ScanaStudio.dec_item_add_content("ERRNPASS isn't implemented");
+                                held.dec_item_add_content("ERRNPASS : ERRNPASS isn't implemented");
+                                held.dec_item_add_content("ERRNPASS isn't implemented");
                             }
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"CSW.ERRNPASS",packet_string,"Data");
                             //Read ERRSTOP
@@ -3631,25 +3834,25 @@ function on_decode_signals(resume)
                                 if (swd_value == 0)
                                 {
                                     packet_string = "Memory access errors do not prevent future memory accesses";
-                                    ScanaStudio.dec_item_add_content("ERRSTOP : Memory access errors do not prevent future memory accesses");
-                                    ScanaStudio.dec_item_add_content("Memory access errors do not prevent future memory accesses");
+                                    held.dec_item_add_content("ERRSTOP : Memory access errors do not prevent future memory accesses");
+                                    held.dec_item_add_content("Memory access errors do not prevent future memory accesses");
                                 }
                                 else
                                 {
                                     packet_string = "Memory access errors prevent future memory accesses";
-                                    ScanaStudio.dec_item_add_content("ERRSTOP : Memory access errors prevent future memory accesses");
-                                    ScanaStudio.dec_item_add_content("Memory access errors prevent future memory accesses");
+                                    held.dec_item_add_content("ERRSTOP : Memory access errors prevent future memory accesses");
+                                    held.dec_item_add_content("Memory access errors prevent future memory accesses");
                                 }
                             }
                             else
                             {
                                 packet_string = "ERRSTOP isn't implemented";
-                                ScanaStudio.dec_item_add_content("ERRSTOP : ERRSTOP isn't implemented");
-                                ScanaStudio.dec_item_add_content("ERRSTOP isn't implemented");
+                                held.dec_item_add_content("ERRSTOP : ERRSTOP isn't implemented");
+                                held.dec_item_add_content("ERRSTOP isn't implemented");
                             }
 
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"CSW.ERRSTOP",packet_string,"Data");
                             //Read RES0 bit
@@ -3663,23 +3866,23 @@ function on_decode_signals(resume)
                                 go_to_last_trans_io();
                                 break;
                             }
-                            var SDeviceEn = Number(swd_simple.unsigned_words);
+                            SDeviceEn = Number(swd_simple.unsigned_words);
                             item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                             dec_item_new_v2(ch_io,swd_simple);
                             if (SDeviceEn == 0)
                             {
                                 packet_string = "Secure access is disabled";
-                                ScanaStudio.dec_item_add_content("SDeviceEn : Secure access is disabled");
-                                ScanaStudio.dec_item_add_content("Secure access is disabled");
+                                held.dec_item_add_content("SDeviceEn : Secure access is disabled");
+                                held.dec_item_add_content("Secure access is disabled");
                             }
                             else
                             {
                                 packet_string = "Secure access is enabled";
-                                ScanaStudio.dec_item_add_content("SDeviceEn : Secure access is enabled");
-                                ScanaStudio.dec_item_add_content("Secure access is enabled");
+                                held.dec_item_add_content("SDeviceEn : Secure access is enabled");
+                                held.dec_item_add_content("Secure access is enabled");
                             }
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"CSW.SDeviceEn",packet_string,"Data");
                             //Read Prot
@@ -3694,9 +3897,9 @@ function on_decode_signals(resume)
                             item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                             dec_item_new_v2(ch_io,swd_simple);
                             // IMPLEMENTATION DEFINED (if not implemented RES0)
-                            ScanaStudio.dec_item_add_content("Prot : 0x" + pad(swd_value.toString(16),2) + " , IMPLEMENTATION DEFINED");
+                            held.dec_item_add_content("Prot : 0x" + pad(swd_value.toString(16),2) + " , IMPLEMENTATION DEFINED");
                             display_sample_0_1(swd_simple, item_display);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"CSW.Prot",packet_string,"Data");
                             //Read DbgSwEnable
@@ -3713,17 +3916,17 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 packet_string = "Debug software access is disabled";
-                                ScanaStudio.dec_item_add_content("DbgSwEnable : Debug software access is disabled. If DeviceEn is 0b0, DbgSwEnable must be ignored and treated as one");
-                                ScanaStudio.dec_item_add_content("Debug software access is disabled. If DeviceEn is 0b0, DbgSwEnable must be ignored and treated as one");
+                                held.dec_item_add_content("DbgSwEnable : Debug software access is disabled. If DeviceEn is 0b0, DbgSwEnable must be ignored and treated as one");
+                                held.dec_item_add_content("Debug software access is disabled. If DeviceEn is 0b0, DbgSwEnable must be ignored and treated as one");
                             }
                             else
                             {
                                 packet_string = "Debug software access is enabled";
-                                ScanaStudio.dec_item_add_content("DbgSwEnable : Debug software access is enabled");
-                                ScanaStudio.dec_item_add_content("Debug software access is enabled");
+                                held.dec_item_add_content("DbgSwEnable : Debug software access is enabled");
+                                held.dec_item_add_content("Debug software access is enabled");
                             }
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"CSW.DbgSwEnable",packet_string,"Data");
                             break;
@@ -3744,17 +3947,17 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 packet_string = "Deassert nSRSTOUT HIGH";
-                                ScanaStudio.dec_item_add_content("SRST_OUT : Deassert nSRSTOUT HIGH");
-                                ScanaStudio.dec_item_add_content("Deassert nSRSTOUT HIGH");
+                                held.dec_item_add_content("SRST_OUT : Deassert nSRSTOUT HIGH");
+                                held.dec_item_add_content("Deassert nSRSTOUT HIGH");
                             }
                             else
                             {
                                 packet_string = "Assert nSRSTOUT LOW";
-                                ScanaStudio.dec_item_add_content("SRST_OUT : Assert nSRSTOUT LOW");
-                                ScanaStudio.dec_item_add_content("Assert nSRSTOUT LOW");
+                                held.dec_item_add_content("SRST_OUT : Assert nSRSTOUT LOW");
+                                held.dec_item_add_content("Assert nSRSTOUT LOW");
                             }
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"CSW.SRST_OUT",packet_string,"Data");
                             //Read TRST_OUT
@@ -3771,17 +3974,17 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 packet_string = "Deassert TRST HIGH";
-                                ScanaStudio.dec_item_add_content("TRST_OUT : Deassert TRST HIGH");
-                                ScanaStudio.dec_item_add_content("Deassert TRST HIGH");
+                                held.dec_item_add_content("TRST_OUT : Deassert TRST HIGH");
+                                held.dec_item_add_content("Deassert TRST HIGH");
                             }
                             else
                             {
                                 packet_string = "Assert TRST LOW";
-                                ScanaStudio.dec_item_add_content("TRST_OUT : Assert TRST LOW");
-                                ScanaStudio.dec_item_add_content("Assert TRST LOW");
+                                held.dec_item_add_content("TRST_OUT : Assert TRST LOW");
+                                held.dec_item_add_content("Assert TRST LOW");
                             }
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"CSW.TRST_OUT",packet_string,"Data");
                             //Read SRSTCONNECTED
@@ -3795,10 +3998,10 @@ function on_decode_signals(resume)
                             swd_value = Number(swd_simple.unsigned_words);
                             item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                             dec_item_new_v2(ch_io,swd_simple);
-                            ScanaStudio.dec_item_add_content("SRSTCONNECTED : 0x" + pad(swd_value.toString(16),1) + ", logical AND of the SRSTCONNECTED signals from all ports that are currently selected (RO field)");
-                            ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),1) + ", logical AND of the SRSTCONNECTED signals from all ports that are currently selected (RO field)");
+                            held.dec_item_add_content("SRSTCONNECTED : 0x" + pad(swd_value.toString(16),1) + ", logical AND of the SRSTCONNECTED signals from all ports that are currently selected (RO field)");
+                            held.dec_item_add_content("0x" + pad(swd_value.toString(16),1) + ", logical AND of the SRSTCONNECTED signals from all ports that are currently selected (RO field)");
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_string = "0x" + pad(swd_value.toString(16),1) + " (RO field)";
                             packet_view_add_packet_v2(ch_io,swd_simple,"CSW.SRSTCONNECTED",packet_string,"Data");
@@ -3813,10 +4016,10 @@ function on_decode_signals(resume)
                             swd_value = Number(swd_simple.unsigned_words);
                             item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                             dec_item_new_v2(ch_io,swd_simple);
-                            ScanaStudio.dec_item_add_content("PORTCONNECTED : 0x" + pad(swd_value.toString(16),1) + ", logical AND of the PORTCONNECTED signals from all ports that are currently selected (RO field)");
-                            ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),1) + ", logical AND of the PORTCONNECTED signals from all ports that are currently selected (RO field)");
+                            held.dec_item_add_content("PORTCONNECTED : 0x" + pad(swd_value.toString(16),1) + ", logical AND of the PORTCONNECTED signals from all ports that are currently selected (RO field)");
+                            held.dec_item_add_content("0x" + pad(swd_value.toString(16),1) + ", logical AND of the PORTCONNECTED signals from all ports that are currently selected (RO field)");
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_string = "0x" + pad(swd_value.toString(16),1) + " (RO field)";
                             packet_view_add_packet_v2(ch_io,swd_simple,"CSW.PORTCONNECTED",packet_string,"Data");
@@ -3834,11 +4037,11 @@ function on_decode_signals(resume)
                             swd_value = Number(swd_simple.unsigned_words);
                             item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                             dec_item_new_v2(ch_io,swd_simple);
-                            ScanaStudio.dec_item_add_content("RFIFOCNT : 0x" + pad(swd_value.toString(16),1) + ",  number of bytes of response data available in the Response FIFO (RO field)");
-                            ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),1) + ",  number of bytes of response data available in the Response FIFO (RO field)");
-                            ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),1) + ",  number of bytes of response data available in the Response FIFO");
+                            held.dec_item_add_content("RFIFOCNT : 0x" + pad(swd_value.toString(16),1) + ",  number of bytes of response data available in the Response FIFO (RO field)");
+                            held.dec_item_add_content("0x" + pad(swd_value.toString(16),1) + ",  number of bytes of response data available in the Response FIFO (RO field)");
+                            held.dec_item_add_content("0x" + pad(swd_value.toString(16),1) + ",  number of bytes of response data available in the Response FIFO");
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_string = "0x" + pad(swd_value.toString(16),1) + " (RO field)";
                             packet_view_add_packet_v2(ch_io,swd_simple,"CSW.RFIFOCNT",packet_string,"Data");
@@ -3856,11 +4059,11 @@ function on_decode_signals(resume)
                             WFIFOCNT = Number(swd_simple.unsigned_words);
                             item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                             dec_item_new_v2(ch_io,swd_simple);
-                            ScanaStudio.dec_item_add_content("WFIFOCNT : 0x" + pad(swd_value.toString(16),1) + ",  number of command bytes held in the Command FIFO that have yet to be processed by the JTAG Engine (RO field)");
-                            ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),1) + ",  number of command bytes held in the Command FIFO that have yet to be processed by the JTAG Engine (RO field)");
-                            ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),1) + ",  number of command bytes held in the Command FIFO that have yet to be processed ");
+                            held.dec_item_add_content("WFIFOCNT : 0x" + pad(swd_value.toString(16),1) + ",  number of command bytes held in the Command FIFO that have yet to be processed by the JTAG Engine (RO field)");
+                            held.dec_item_add_content("0x" + pad(swd_value.toString(16),1) + ",  number of command bytes held in the Command FIFO that have yet to be processed by the JTAG Engine (RO field)");
+                            held.dec_item_add_content("0x" + pad(swd_value.toString(16),1) + ",  number of command bytes held in the Command FIFO that have yet to be processed ");
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_string = "0x" + pad(swd_value.toString(16),1) + " (RO field)";
                             packet_view_add_packet_v2(ch_io,swd_simple,"CSW.WFIFOCNT",packet_string,"Data");
@@ -3878,17 +4081,17 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 packet_string = "JTAG Engine is inactive";
-                                ScanaStudio.dec_item_add_content("SERACTV : JTAG Engine is inactive, provided WFIFOCNT is also 0b0.");
-                                ScanaStudio.dec_item_add_content("JTAG Engine is inactive, provided WFIFOCNT is also 0b0.");
+                                held.dec_item_add_content("SERACTV : JTAG Engine is inactive, provided WFIFOCNT is also 0b0.");
+                                held.dec_item_add_content("JTAG Engine is inactive, provided WFIFOCNT is also 0b0.");
                             }
                             else
                             {
                                 packet_string = "JTAG Engine is processing commands";
-                                ScanaStudio.dec_item_add_content("SERACTV : JTAG Engine is processing commands from the Command FIFO");
-                                ScanaStudio.dec_item_add_content("JTAG Engine is processing commands from the Command FIFO");
+                                held.dec_item_add_content("SERACTV : JTAG Engine is processing commands from the Command FIFO");
+                                held.dec_item_add_content("JTAG Engine is processing commands from the Command FIFO");
                             }
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"CSW.SERACTV",packet_string,"Data");
                         }
@@ -3911,26 +4114,26 @@ function on_decode_signals(resume)
                             TAR_Adress_LSB = Number(swd_simple.unsigned_words);
                             fill_TAR_Adress();
                             packet_string = "[31:0] : 0x" + pad(TAR_Adress_LSB.toString(16),8);
-                            ScanaStudio.dec_item_add_content("Address [31:0] : 0x" + pad(TAR_Adress_LSB.toString(16),8) + ", TAR_Adress [63:32] : " + TAR_string_hexa);
-                            ScanaStudio.dec_item_add_content("0x" + pad(TAR_Adress_LSB.toString(16),8));
+                            held.dec_item_add_content("Address [31:0] : 0x" + pad(TAR_Adress_LSB.toString(16),8) + ", TAR_Adress [63:32] : " + TAR_string_hexa);
+                            held.dec_item_add_content("0x" + pad(TAR_Adress_LSB.toString(16),8));
                         }
                         else if ((Adress == 8) && (Large_physical_adress_extension_implemented == true))
                         {
                             TAR_Adress_MSB = Number(swd_simple.unsigned_words);
                             fill_TAR_Adress();
                             packet_string = "[63:32] : 0x" + pad(TAR_Adress_MSB.toString(16),8);
-                            ScanaStudio.dec_item_add_content("Address [63:32] : 0x" + pad(TAR_Adress_MSB.toString(16),8) + ", TAR_Adress [63:32] : " + TAR_string_hexa);
-                            ScanaStudio.dec_item_add_content("0x" + pad(TAR_Adress_MSB.toString(16),8));
+                            held.dec_item_add_content("Address [63:32] : 0x" + pad(TAR_Adress_MSB.toString(16),8) + ", TAR_Adress [63:32] : " + TAR_string_hexa);
+                            held.dec_item_add_content("0x" + pad(TAR_Adress_MSB.toString(16),8));
                         }
                         else
                         {
                             // TAR_Adress_MSB = Number(swd_simple.unsigned_words);
                             packet_string = "RES 0 : Large Data Adress isn't Implemented";
-                            ScanaStudio.dec_item_add_content("Address [63:32] : RES0 : Large Data Adress isn't Implemented");
-                            ScanaStudio.dec_item_add_content("RES0 : Large Data Adress isn't Implemented");
+                            held.dec_item_add_content("Address [63:32] : RES0 : Large Data Adress isn't Implemented");
+                            held.dec_item_add_content("RES0 : Large Data Adress isn't Implemented");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"TAR.Address",packet_string,"Data");
                         break;
@@ -3954,13 +4157,13 @@ function on_decode_signals(resume)
                             packet_string = "Write to TAR_Adress : 0x"  + pad(swd_value.toString(16),8);
                             if (AddrInc == 1 || AddrInc == 2)
                             {
-                                ScanaStudio.dec_item_add_content("Write to TAR_Adress, Data 0x"  + pad(swd_value.toString(16),8) + "(don't forget that AutoInc is enable)");
-                                ScanaStudio.dec_item_add_content("Data : 0x" + pad(swd_value.toString(16),8));
+                                held.dec_item_add_content("Write to TAR_Adress, Data 0x"  + pad(swd_value.toString(16),8) + "(don't forget that AutoInc is enable)");
+                                held.dec_item_add_content("Data : 0x" + pad(swd_value.toString(16),8));
                             }
                             else
                             {
-                                ScanaStudio.dec_item_add_content("Write to TAR_Adress, Data 0x"  + pad(swd_value.toString(16),8));
-                                ScanaStudio.dec_item_add_content("Data : 0x" + pad(swd_value.toString(16),8));
+                                held.dec_item_add_content("Write to TAR_Adress, Data 0x"  + pad(swd_value.toString(16),8));
+                                held.dec_item_add_content("Data : 0x" + pad(swd_value.toString(16),8));
                             }
                         }
                         else if (RnW == "Read")
@@ -3968,18 +4171,18 @@ function on_decode_signals(resume)
                             packet_string = "Read from TAR_Adress : 0x" + pad(swd_value.toString(16),8);
                             if (AddrInc == 1 || AddrInc == 2)
                             {
-                                ScanaStudio.dec_item_add_content("Read from TAR_Adress, Data 0x" + pad(swd_value.toString(16),8) + "(don't forget that AutoInc is enable)");
-                                ScanaStudio.dec_item_add_content("Data : 0x" + pad(swd_value.toString(16),8));
+                                held.dec_item_add_content("Read from TAR_Adress, Data 0x" + pad(swd_value.toString(16),8) + "(don't forget that AutoInc is enable)");
+                                held.dec_item_add_content("Data : 0x" + pad(swd_value.toString(16),8));
                             }
                             else
                             {
-                                ScanaStudio.dec_item_add_content("Read from TAR_Adress, Data 0x" + pad(swd_value.toString(16),8));
-                                ScanaStudio.dec_item_add_content("Data : 0x" + pad(swd_value.toString(16),8));
+                                held.dec_item_add_content("Read from TAR_Adress, Data 0x" + pad(swd_value.toString(16),8));
+                                held.dec_item_add_content("Data : 0x" + pad(swd_value.toString(16),8));
                             }
 
                         }
                         display_sample_0_1(swd_simple, item_display);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"DRW.Data",packet_string,"Data");
                         break;
@@ -4001,15 +4204,15 @@ function on_decode_signals(resume)
                         if (RnW == "Write")
                         {
                             packet_string = "BD" + (Adress/4) + " Write : 0x" + pad(swd_value.toString(16),8);
-                            ScanaStudio.dec_item_add_content("BD" + (Adress/4) + " Write : 0x" + pad(swd_value.toString(16),8));
+                            held.dec_item_add_content("BD" + (Adress/4) + " Write : 0x" + pad(swd_value.toString(16),8));
                         }
                         else if (RnW == "Read")
                         {
                             packet_string = "BD" + (Adress/4) + " Read : 0x" + pad(swd_value.toString(16),8);
-                            ScanaStudio.dec_item_add_content("BD" + (Adress/4) + " Read : 0x" + pad(swd_value.toString(16),8));
+                            held.dec_item_add_content("BD" + (Adress/4) + " Read : 0x" + pad(swd_value.toString(16),8));
                         }
                         display_sample_0_1(swd_simple, item_display);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"BD.Data",packet_string,"Data");
                         break;
@@ -4032,17 +4235,17 @@ function on_decode_signals(resume)
                         {
                             packet_string = "IMPLEMENTATION DEFINED";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("MBT : IMPLEMENTATION DEFINED");
+                            held.dec_item_add_content("MBT : IMPLEMENTATION DEFINED");
                         }
                         else
                         {
                             packet_string = "This register isn't implemented";
                             types = "Misc";
-                            ScanaStudio.dec_item_add_content("MBT : This register isn't implemented if Barrier Operation Extension isn't");
-                            ScanaStudio.dec_item_add_content("MBT : This register isn't implemented");
+                            held.dec_item_add_content("MBT : This register isn't implemented if Barrier Operation Extension isn't");
+                            held.dec_item_add_content("MBT : This register isn't implemented");
                         }
                         display_sample_0_1(swd_simple, item_display);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"MBT.Data",packet_string,types);
                         break;
@@ -4068,14 +4271,14 @@ function on_decode_signals(resume)
                                 if (swd_value == 0)
                                 {
                                     packet_string = "No error response was logged";
-                                    ScanaStudio.dec_item_add_content("ERR : No error response was logged");
-                                    ScanaStudio.dec_item_add_content("No error response was logged");
+                                    held.dec_item_add_content("ERR : No error response was logged");
+                                    held.dec_item_add_content("No error response was logged");
                                 }
                                 else
                                 {
                                     packet_string = "An error response was logged";
-                                    ScanaStudio.dec_item_add_content("ERR : An error response was logged");
-                                    ScanaStudio.dec_item_add_content("An error response was logged");
+                                    held.dec_item_add_content("ERR : An error response was logged");
+                                    held.dec_item_add_content("An error response was logged");
                                 }
                             }
                             else
@@ -4083,18 +4286,18 @@ function on_decode_signals(resume)
                                 if (swd_value == 0)
                                 {
                                     packet_string = "No effect";
-                                    ScanaStudio.dec_item_add_content("ERR : No effect");
-                                    ScanaStudio.dec_item_add_content("No effect");
+                                    held.dec_item_add_content("ERR : No effect");
+                                    held.dec_item_add_content("No effect");
                                 }
                                 else
                                 {
                                     packet_string = "This field is cleared to 0b0";
-                                    ScanaStudio.dec_item_add_content("ERR : This field is cleared to 0b0");
-                                    ScanaStudio.dec_item_add_content("This field is cleared to 0b0");
+                                    held.dec_item_add_content("ERR : This field is cleared to 0b0");
+                                    held.dec_item_add_content("This field is cleared to 0b0");
                                 }
                             }
                             display_sample_0_1(swd_simple, item_display);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"TRR.ERR",packet_string,"Data");
                             //Read RES0 bit
@@ -4114,9 +4317,9 @@ function on_decode_signals(resume)
                             swd_value = Number(swd_simple.unsigned_words);
                             item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                             dec_item_new_v2(ch_io,swd_simple);
-                            ScanaStudio.dec_item_add_content("TRR is not implemented (look CFG.ERR)");
+                            held.dec_item_add_content("TRR is not implemented (look CFG.ERR)");
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"TRR","Not Implemented","Misc");
                         }
@@ -4140,9 +4343,9 @@ function on_decode_signals(resume)
                                 BASEADDR_MSW = Number(swd_simple.unsigned_words);
                                 item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                                 dec_item_new_v2(ch_io,swd_simple);
-                                ScanaStudio.dec_item_add_content("BASEADDR : [63:32] : 0x" + pad(BASEADDR_MSW.toString(16),8));
+                                held.dec_item_add_content("BASEADDR : [63:32] : 0x" + pad(BASEADDR_MSW.toString(16),8));
                                 display_sample(swd_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = "[63:32] : 0x" + pad(BASEADDR_MSW.toString(16),8);
                                 packet_view_add_packet_v2(ch_io,swd_simple,"BASE.BASEADDR",packet_string,"Data");
@@ -4168,9 +4371,9 @@ function on_decode_signals(resume)
                                 {
                                     types = "Error";
                                 }
-                                ScanaStudio.dec_item_add_content("RES0, because BASEADDR is 32 bits");
+                                held.dec_item_add_content("RES0, because BASEADDR is 32 bits");
                                 display_sample(swd_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_io,swd_simple,"BASE.BASEADDR","[63:32] are RES0",types);
                             }
@@ -4191,17 +4394,17 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 packet_string = "No debug entry is present";
-                                ScanaStudio.dec_item_add_content("P : No debug entry is present");
-                                ScanaStudio.dec_item_add_content("No debug entry is present");
+                                held.dec_item_add_content("P : No debug entry is present");
+                                held.dec_item_add_content("No debug entry is present");
                             }
                             else
                             {
                                 packet_string = "Debug entry is present";
-                                ScanaStudio.dec_item_add_content("P : Debug entry is present");
-                                ScanaStudio.dec_item_add_content("Debug entry is present");
+                                held.dec_item_add_content("P : Debug entry is present");
+                                held.dec_item_add_content("Debug entry is present");
                             }
                             display_sample_0_1(swd_simple, item_display);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"BASE.P",packet_string,"Data");
                             //Read Format bit
@@ -4219,16 +4422,16 @@ function on_decode_signals(resume)
                             {
                                 packet_string = "ADIv6 format";
                                 types = "Data";
-                                ScanaStudio.dec_item_add_content("ADIv6 format");
+                                held.dec_item_add_content("ADIv6 format");
                             }
                             else
                             {
                                 packet_string = "Error in ADIv format";
-                                ScanaStudio.dec_item_add_content("Error in ADIv format");
+                                held.dec_item_add_content("Error in ADIv format");
                                 types = "Error";
                             }
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"BASE.RES0",packet_string,types);
                             //Read RES0 bit
@@ -4245,9 +4448,9 @@ function on_decode_signals(resume)
                             BASEADDR_LSW = Number(swd_simple.unsigned_words);
                             item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                             dec_item_new_v2(ch_io,swd_simple);
-                            ScanaStudio.dec_item_add_content("BASEADDR : [31:12] : 0x" + pad(BASEADDR_LSW.toString(16),5));
+                            held.dec_item_add_content("BASEADDR : [31:12] : 0x" + pad(BASEADDR_LSW.toString(16),5));
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_string = "[31:12] : 0x" + pad(BASEADDR_LSW.toString(16),8);
                             packet_view_add_packet_v2(ch_io,swd_simple,"BASE.BASEADDR",packet_string,"Data");
@@ -4271,18 +4474,18 @@ function on_decode_signals(resume)
                         if (swd_value == 0)
                         {
                             packet_string = "RAZ bit";
-                            ScanaStudio.dec_item_add_content("BE : RAZ bit");
-                            ScanaStudio.dec_item_add_content("RAZ bit");
+                            held.dec_item_add_content("BE : RAZ bit");
+                            held.dec_item_add_content("RAZ bit");
                         }
 
                         else
                         {
                             packet_string = "RAZ : Should be 0";
-                            ScanaStudio.dec_item_add_content("BE : RAZ : Should be 0");
-                            ScanaStudio.dec_item_add_content("RAZ : Should be 0");
+                            held.dec_item_add_content("BE : RAZ : Should be 0");
+                            held.dec_item_add_content("RAZ : Should be 0");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"CFG.BE",packet_string,"Data");
                         // LA bit (Long Adress)
@@ -4300,19 +4503,19 @@ function on_decode_signals(resume)
                         {
                             Large_physical_adress_extension_implemented = true;
                             packet_string = "Large physical adress extension implemented";
-                            ScanaStudio.dec_item_add_content("LA : The implementation supports physical addresses with more than 32 bits");
-                            ScanaStudio.dec_item_add_content("The implementation supports physical addresses with more than 32 bits");
+                            held.dec_item_add_content("LA : The implementation supports physical addresses with more than 32 bits");
+                            held.dec_item_add_content("The implementation supports physical addresses with more than 32 bits");
                         }
 
                         else
                         {
                             Large_physical_adress_extension_implemented = false;
                             packet_string = "Large physical adress extension not implemented ";
-                            ScanaStudio.dec_item_add_content("LA : The implementation support only physical addresses of 32 bits or smaller");
-                            ScanaStudio.dec_item_add_content("The implementation support only physical addresses of 32 bits or smaller");
+                            held.dec_item_add_content("LA : The implementation support only physical addresses of 32 bits or smaller");
+                            held.dec_item_add_content("The implementation support only physical addresses of 32 bits or smaller");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"CFG.LA",packet_string,"Data");
                         // LD bit (Large Data)
@@ -4330,19 +4533,19 @@ function on_decode_signals(resume)
                         {
                             Large_data_extension_implemented = true;
                             packet_string = "Large Data extension Implemented";
-                            ScanaStudio.dec_item_add_content("LD : The implementation includes the Large Data Extension, and supports data items larger than 32 bits");
-                            ScanaStudio.dec_item_add_content("The implementation includes the Large Data Extension, and supports data items larger than 32 bits");
+                            held.dec_item_add_content("LD : The implementation includes the Large Data Extension, and supports data items larger than 32 bits");
+                            held.dec_item_add_content("The implementation includes the Large Data Extension, and supports data items larger than 32 bits");
                         }
 
                         else
                         {
                             Large_data_extension_implemented = false;
                             packet_string = "Large Data extension not Implemented ";
-                            ScanaStudio.dec_item_add_content("LD : The implementation does not support data items that are larger than 32 bits");
-                            ScanaStudio.dec_item_add_content("The implementation does not support data items that are larger than 32 bits");
+                            held.dec_item_add_content("LD : The implementation does not support data items that are larger than 32 bits");
+                            held.dec_item_add_content("The implementation does not support data items that are larger than 32 bits");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"CFG.LD",packet_string,"Data");
                         //Read RES0 bit
@@ -4363,24 +4566,24 @@ function on_decode_signals(resume)
                         if (DARSIZE == 0)
                         {
                             packet_string = "DAR0-DAR255 are not implemented";
-                            ScanaStudio.dec_item_add_content("DARSIZE : DAR0-DAR255 are not implemented");
-                            ScanaStudio.dec_item_add_content("DAR0-DAR255 are not implemented");
+                            held.dec_item_add_content("DARSIZE : DAR0-DAR255 are not implemented");
+                            held.dec_item_add_content("DAR0-DAR255 are not implemented");
                         }
                         else if (DARSIZE == 10)
                         {
                             packet_string = "DAR0-DAR255 are implemented";
-                            ScanaStudio.dec_item_add_content("DARSIZE : DAR0-DAR255, which occupy a register space of 1KB, are implemented");
-                            ScanaStudio.dec_item_add_content("DAR0-DAR255, which occupy a register space of 1KB, are implemented");
+                            held.dec_item_add_content("DARSIZE : DAR0-DAR255, which occupy a register space of 1KB, are implemented");
+                            held.dec_item_add_content("DAR0-DAR255, which occupy a register space of 1KB, are implemented");
                         }
                         else
                         {
                             packet_string = "Reserved";
                             types = "Error";
-                            ScanaStudio.dec_item_add_content("DARSIZE : Reserved");
-                            ScanaStudio.dec_item_add_content("Reserved");
+                            held.dec_item_add_content("DARSIZE : Reserved");
+                            held.dec_item_add_content("Reserved");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"CFG.DARSIZE",packet_string,"Data");
                         // ERR bit
@@ -4401,8 +4604,8 @@ function on_decode_signals(resume)
                             CSW_ERRSTOP_implemented = false;
                             TRR_implemented = false;
                             packet_string = "TRR/CSW.ERRNPASS/CSW.ERRSTOP not implemented";
-                            ScanaStudio.dec_item_add_content("ERR : Error response are always passed upstream. TRR/CSW.ERRNPASS/CSW.ERRSTOP not implemented");
-                            ScanaStudio.dec_item_add_content("Error response are always passed upstream. TRR/CSW.ERRNPASS/CSW.ERRSTOP not implemented");
+                            held.dec_item_add_content("ERR : Error response are always passed upstream. TRR/CSW.ERRNPASS/CSW.ERRSTOP not implemented");
+                            held.dec_item_add_content("Error response are always passed upstream. TRR/CSW.ERRNPASS/CSW.ERRSTOP not implemented");
                         }
                         else if (swd_value == 1)
                         {
@@ -4410,18 +4613,18 @@ function on_decode_signals(resume)
                             CSW_ERRSTOP_implemented = true;
                             TRR_implemented = true;
                             packet_string = "TRR/CSW.ERRNPASS/CSW.ERRSTOP implemented";
-                            ScanaStudio.dec_item_add_content("ERR : TRR/CSW.ERRNPASS/CSW.ERRSTOP implemented");
-                            ScanaStudio.dec_item_add_content("TRR/CSW.ERRNPASS/CSW.ERRSTOP implemented");
+                            held.dec_item_add_content("ERR : TRR/CSW.ERRNPASS/CSW.ERRSTOP implemented");
+                            held.dec_item_add_content("TRR/CSW.ERRNPASS/CSW.ERRSTOP implemented");
                         }
                         else
                         {
                             packet_string = "Reserved";
                             types = "Error";
-                            ScanaStudio.dec_item_add_content("ERR : Reserved");
-                            ScanaStudio.dec_item_add_content("Reserved");
+                            held.dec_item_add_content("ERR : Reserved");
+                            held.dec_item_add_content("Reserved");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"CFG.ERR",packet_string,"Data");
                         //Read RES0 bit
@@ -4442,17 +4645,17 @@ function on_decode_signals(resume)
                         if (swd_value == 0)
                         {
                             packet_string = "The TAR incrementer size is not specified.";
-                            ScanaStudio.dec_item_add_content("TARINC : The TAR incrementer size is not specified, at least 10bits");
-                            ScanaStudio.dec_item_add_content("The TAR incrementer size is not specified, at least 10bits");
+                            held.dec_item_add_content("TARINC : The TAR incrementer size is not specified, at least 10bits");
+                            held.dec_item_add_content("The TAR incrementer size is not specified, at least 10bits");
                         }
                         else
                         {
                             packet_string = (9+swd_value) + " bits";
-                            ScanaStudio.dec_item_add_content("TARINC : " + (9+swd_value) + " bits");
-                            ScanaStudio.dec_item_add_content((9+swd_value) + " bits");
+                            held.dec_item_add_content("TARINC : " + (9+swd_value) + " bits");
+                            held.dec_item_add_content((9+swd_value) + " bits");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"CFG.TARINC",packet_string,"Data");
                         //Read RES0 bit
@@ -4480,49 +4683,49 @@ function on_decode_signals(resume)
                             case 0 : //0x0
                             {
                                 packet_string = "JTAG connection";
-                                ScanaStudio.dec_item_add_content("TYPE : JTAG connection"); // VARIANT field must be non-zero
-                                ScanaStudio.dec_item_add_content("JTAG connection");
+                                held.dec_item_add_content("TYPE : JTAG connection"); // VARIANT field must be non-zero
+                                held.dec_item_add_content("JTAG connection");
                                 break;
                             }
                             case 1 : //0x1
                             {
                                 packet_string = "AMBA AHB3 bus";
-                                ScanaStudio.dec_item_add_content("TYPE : AMBA AHB3 bus");
-                                ScanaStudio.dec_item_add_content("AMBA AHB3 bus");
+                                held.dec_item_add_content("TYPE : AMBA AHB3 bus");
+                                held.dec_item_add_content("AMBA AHB3 bus");
                                 break;
                             }
                             case 2 : //0x2
                             {
                                 packet_string = "AMBA APB2 or APB3 bus";
-                                ScanaStudio.dec_item_add_content("TYPE : AMBA APB2 or APB3 bus");
-                                ScanaStudio.dec_item_add_content("AMBA APB2 or APB3 bus");
+                                held.dec_item_add_content("TYPE : AMBA APB2 or APB3 bus");
+                                held.dec_item_add_content("AMBA APB2 or APB3 bus");
                                 break;
                             }
                             case 4 : //0x4
                             {
                                 packet_string = "AMBA AXI3 or AXI4 bus";
-                                ScanaStudio.dec_item_add_content("TYPE : AMBA AXI3 or AXI4 bus, with optional ACE-Lite support");
-                                ScanaStudio.dec_item_add_content("AMBA AXI3 or AXI4 bus, with optional ACE-Lite support");
+                                held.dec_item_add_content("TYPE : AMBA AXI3 or AXI4 bus, with optional ACE-Lite support");
+                                held.dec_item_add_content("AMBA AXI3 or AXI4 bus, with optional ACE-Lite support");
                                 break;
                             }
                             case 5 : //0x5
                             {
                                 packet_string = "AMBA AHB5 bus";
-                                ScanaStudio.dec_item_add_content("TYPE : AMBA AHB5 bus");
-                                ScanaStudio.dec_item_add_content("AMBA AHB5 bus");
+                                held.dec_item_add_content("TYPE : AMBA AHB5 bus");
+                                held.dec_item_add_content("AMBA AHB5 bus");
                                 break;
                             }
                             default : // Others
                             {
                                 packet_string = "Reserved";
                                 types = "Error";
-                                ScanaStudio.dec_item_add_content("TYPE : Reserved");
-                                ScanaStudio.dec_item_add_content("Reserved");
+                                held.dec_item_add_content("TYPE : Reserved");
+                                held.dec_item_add_content("Reserved");
                                 break;
                             }
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"IDR.TYPE",packet_string,types);
                         // VARIANT bit
@@ -4540,18 +4743,18 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Must not be 0";
                             types = "Error";
-                            ScanaStudio.dec_item_add_content("VARIANT : must not be 0");
-                            ScanaStudio.dec_item_add_content("must not be 0");
+                            held.dec_item_add_content("VARIANT : must not be 0");
+                            held.dec_item_add_content("must not be 0");
                         }
                         else
                         {
                             packet_string = "0x" + pad(swd_value.toString(16),1);
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("VARIANT : 0x" + pad(swd_value.toString(16),1));
-                            ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),1));
+                            held.dec_item_add_content("VARIANT : 0x" + pad(swd_value.toString(16),1));
+                            held.dec_item_add_content("0x" + pad(swd_value.toString(16),1));
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"IDR.VARIANT",packet_string,types);
                         //Read RES0 bit
@@ -4573,30 +4776,30 @@ function on_decode_signals(resume)
                             if (CLASS == 0)
                             {
                                 packet_string = "No defined class";
-                                ScanaStudio.dec_item_add_content("CLASS : No defined class");
-                                ScanaStudio.dec_item_add_content("No defined class");
+                                held.dec_item_add_content("CLASS : No defined class");
+                                held.dec_item_add_content("No defined class");
                             }
                             else
                             {
                                 packet_string = "When TYPE=0, CLASS must be 0 too";
-                                ScanaStudio.dec_item_add_content("CLASS : When TYPE=0, CLASS must be 0 too");
-                                ScanaStudio.dec_item_add_content("When TYPE=0, CLASS must be 0 too");
+                                held.dec_item_add_content("CLASS : When TYPE=0, CLASS must be 0 too");
+                                held.dec_item_add_content("When TYPE=0, CLASS must be 0 too");
                             }
                         }
                         else if (CLASS == 8)
                         {
                             packet_string = "Memory Access Port";
-                            ScanaStudio.dec_item_add_content("CLASS : Memory Access Port");
-                            ScanaStudio.dec_item_add_content("Memory Access Port");
+                            held.dec_item_add_content("CLASS : Memory Access Port");
+                            held.dec_item_add_content("Memory Access Port");
                         }
                         else
                         {
                             packet_string = "Invalid class value";
-                            ScanaStudio.dec_item_add_content("CLASS : Invalid class value");
-                            ScanaStudio.dec_item_add_content("Invalid class value");
+                            held.dec_item_add_content("CLASS : Invalid class value");
+                            held.dec_item_add_content("Invalid class value");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"IDR.CLASS",packet_string,"Data");
                         //Read DESIGNER bit
@@ -4609,8 +4812,8 @@ function on_decode_signals(resume)
                         }
                         swd_value = Number(swd_simple.unsigned_words);
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
-                        var IDR_IDR = 0;
-                        var IDR_DPIDR = 0;
+                        IDR_IDR = 0;
+                        IDR_DPIDR = 0;
                         for (i=0; i<7; i++)
                         {
                             IDR_IDR += item_display[i]*Math.pow(2,i);
@@ -4620,9 +4823,9 @@ function on_decode_signals(resume)
                             IDR_DPIDR += item_display[i]*Math.pow(2,i-7);
                         }
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("IDR [23:17] : 0x" + pad(IDR_IDR.toString(16),2) + "IDR [27:24] : 0x" + pad(IDR_DPIDR.toString(16),1));
+                        held.dec_item_add_content("IDR [23:17] : 0x" + pad(IDR_IDR.toString(16),2) + "IDR [27:24] : 0x" + pad(IDR_DPIDR.toString(16),1));
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_string = "[23:17] : 0x" + pad(IDR_IDR.toString(16),2) + "[27:24] : 0x" + pad(IDR_DPIDR.toString(16),1);
                         packet_view_add_packet_v2(ch_io,swd_simple,"IDR.DESIGNER",packet_string,"Data");
@@ -4640,17 +4843,17 @@ function on_decode_signals(resume)
                         if (swd_value == 0)
                         {
                             packet_string = "First implementation of an AP design";
-                            ScanaStudio.dec_item_add_content("REVISION : First implementation of an AP design");
-                            ScanaStudio.dec_item_add_content("First implementation of an AP design");
+                            held.dec_item_add_content("REVISION : First implementation of an AP design");
+                            held.dec_item_add_content("First implementation of an AP design");
                         }
                         else
                         {
                             packet_string = "This AP design had 0x" + pad(swd_value.toString(16),1) + " revisions";
-                            ScanaStudio.dec_item_add_content("REVISION : This AP design had 0x" + pad(swd_value.toString(16),1) + " Major/Minor revisions");
-                            ScanaStudio.dec_item_add_content("This AP design had 0x" + pad(swd_value.toString(16),1) + " Major/Minor revisions");
+                            held.dec_item_add_content("REVISION : This AP design had 0x" + pad(swd_value.toString(16),1) + " Major/Minor revisions");
+                            held.dec_item_add_content("This AP design had 0x" + pad(swd_value.toString(16),1) + " Major/Minor revisions");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"IDR.REVISION",packet_string,"Data");
                         break;
@@ -4672,17 +4875,17 @@ function on_decode_signals(resume)
                         if (swd_value == 0)
                         {
                             packet_string = "The component must enter functional mode";
-                            ScanaStudio.dec_item_add_content("IME : The component must enter functional mode");
-                            ScanaStudio.dec_item_add_content("The component must enter functional mode");
+                            held.dec_item_add_content("IME : The component must enter functional mode");
+                            held.dec_item_add_content("The component must enter functional mode");
                         }
                         else
                         {
                             packet_string = "The component must enter integration mode";
-                            ScanaStudio.dec_item_add_content("IME : The component must enter integration mode, and enable support for topology detection and integration testing");
-                            ScanaStudio.dec_item_add_content("The component must enter integration mode, and enable support for topology detection and integration testing");
+                            held.dec_item_add_content("IME : The component must enter integration mode, and enable support for topology detection and integration testing");
+                            held.dec_item_add_content("The component must enter integration mode, and enable support for topology detection and integration testing");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"ITCTRL.IME",packet_string,types);
                         //Read RES0 bit
@@ -4708,17 +4911,17 @@ function on_decode_signals(resume)
                         if (swd_value == 0)
                         {
                             packet_string = "Claim tag 0 is not set";
-                            ScanaStudio.dec_item_add_content("CLAIM_TAG_0 : Claim tag 0 is not set");
-                            ScanaStudio.dec_item_add_content("Claim tag 0 is not set");
+                            held.dec_item_add_content("CLAIM_TAG_0 : Claim tag 0 is not set");
+                            held.dec_item_add_content("Claim tag 0 is not set");
                         }
                         else
                         {
                             packet_string = "Claim tag 0 is set";
-                            ScanaStudio.dec_item_add_content("CLAIM_TAG_0 : Claim tag 0 is set");
-                            ScanaStudio.dec_item_add_content("Claim tag 0 is set");
+                            held.dec_item_add_content("CLAIM_TAG_0 : Claim tag 0 is set");
+                            held.dec_item_add_content("Claim tag 0 is set");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         Title = Register_name + ".TAG_0";
                         packet_view_add_packet_v2(ch_io,swd_simple,Title,packet_string,"Data");
@@ -4736,17 +4939,17 @@ function on_decode_signals(resume)
                         if (swd_value == 0)
                         {
                             packet_string = " Claim tag 1 is not set";
-                            ScanaStudio.dec_item_add_content("CLAIM_TAG_1 : Claim tag 0 is not set");
-                            ScanaStudio.dec_item_add_content("Claim tag 1 is not set");
+                            held.dec_item_add_content("CLAIM_TAG_1 : Claim tag 0 is not set");
+                            held.dec_item_add_content("Claim tag 1 is not set");
                         }
                         else
                         {
                             packet_string = " Claim tag 1 is set";
-                            ScanaStudio.dec_item_add_content("CLAIM_TAG_1 : Claim tag 0 is set");
-                            ScanaStudio.dec_item_add_content("Claim tag 1 is set");
+                            held.dec_item_add_content("CLAIM_TAG_1 : Claim tag 0 is set");
+                            held.dec_item_add_content("Claim tag 1 is set");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         Title = Register_name + ".TAG_1";
                         packet_view_add_packet_v2(ch_io,swd_simple,Title,packet_string,"Data");
@@ -4761,9 +4964,9 @@ function on_decode_signals(resume)
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         swd_value = Number(swd_simple.unsigned_words);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("IMPLEMENTATION_DEFINED : 0x" + pad(swd_value.toString(16),8));
+                        held.dec_item_add_content("IMPLEMENTATION_DEFINED : 0x" + pad(swd_value.toString(16),8));
                         display_sample_0_1(swd_simple, item_display);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         Title = Register_name + ".IMPLEMENTATION_DEFINED";
                         packet_view_add_packet_v2(ch_io,swd_simple,Title," IMPLEMENTATION_DEFINED","Data");
@@ -4790,9 +4993,9 @@ function on_decode_signals(resume)
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         swd_value = Number(swd_simple.unsigned_words);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("KEY : WI (Write is ignored)");
+                        held.dec_item_add_content("KEY : WI (Write is ignored)");
                         display_sample_0_1(swd_simple, item_display);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"LAR.KEY","WI (Write is ignored)","Data");
                         break;
@@ -4811,9 +5014,9 @@ function on_decode_signals(resume)
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         swd_value = Number(swd_simple.unsigned_words);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("SLI : RAZ (Read as zero)");
+                        held.dec_item_add_content("SLI : RAZ (Read as zero)");
                         display_sample_0_1(swd_simple, item_display);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"LSR.SLI","RAZ (Read as zero)","Data");
                         // SLK bits
@@ -4827,9 +5030,9 @@ function on_decode_signals(resume)
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         swd_value = Number(swd_simple.unsigned_words);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("SLK : RAZ (Read as zero)");
+                        held.dec_item_add_content("SLK : RAZ (Read as zero)");
                         display_sample_0_1(swd_simple, item_display);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"LSR.SLK","RAZ (Read as zero)","Data");
                         // nTT bits
@@ -4843,9 +5046,9 @@ function on_decode_signals(resume)
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         swd_value = Number(swd_simple.unsigned_words);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("nTT : RAZ (Read as zero)");
+                        held.dec_item_add_content("nTT : RAZ (Read as zero)");
                         display_sample_0_1(swd_simple, item_display);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"LSR.nTT","RAZ (Read as zero)","Data");
                         //RES0
@@ -4873,15 +5076,15 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 packet_string = "Isn't supported";
-                                ScanaStudio.dec_item_add_content("NSID : Non-secure invasive debug isn't supported");
-                                ScanaStudio.dec_item_add_content("Non-secure invasive debug isn't supported");
-                                ScanaStudio.dec_item_add_content("NSID : Isn't supported");
+                                held.dec_item_add_content("NSID : Non-secure invasive debug isn't supported");
+                                held.dec_item_add_content("Non-secure invasive debug isn't supported");
+                                held.dec_item_add_content("NSID : Isn't supported");
                             }
                             else
                             {
                                 packet_string = "For " + AP_Memory + " it should be 0";
-                                ScanaStudio.dec_item_add_content("NSID : For " + AP_Memory + " this field should be 0");
-                                ScanaStudio.dec_item_add_content("For " + AP_Memory + " this field should be 0");
+                                held.dec_item_add_content("NSID : For " + AP_Memory + " this field should be 0");
+                                held.dec_item_add_content("For " + AP_Memory + " this field should be 0");
                             }
                         }
                         else // Other AP than MEM/JTAG-AP
@@ -4889,20 +5092,20 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 packet_string = "Isn't supported";
-                                ScanaStudio.dec_item_add_content("NSID : Non-secure invasive Debug is supported");
-                                ScanaStudio.dec_item_add_content("Non-secure invasive Debug Support is supported");
-                                ScanaStudio.dec_item_add_content("NSID : Is supported");
+                                held.dec_item_add_content("NSID : Non-secure invasive Debug is supported");
+                                held.dec_item_add_content("Non-secure invasive Debug Support is supported");
+                                held.dec_item_add_content("NSID : Is supported");
                             }
                             else
                             {
                                 packet_string = "Is supported";
-                                ScanaStudio.dec_item_add_content("NSID : Non-secure invasive Debug is supported");
-                                ScanaStudio.dec_item_add_content("Non-secure invasive Debug Support is supported");
-                                ScanaStudio.dec_item_add_content("NSID : Is supported");
+                                held.dec_item_add_content("NSID : Non-secure invasive Debug is supported");
+                                held.dec_item_add_content("Non-secure invasive Debug Support is supported");
+                                held.dec_item_add_content("NSID : Is supported");
                             }
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"AUTHSTATUS.NSID",packet_string,types);
                         // NSNID bits
@@ -4922,15 +5125,15 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 packet_string = "Isn't supported";
-                                ScanaStudio.dec_item_add_content("NSNID : Non-secure noninvasive debug isn't supported");
-                                ScanaStudio.dec_item_add_content("Non-secure noninvasive debug isn't supported");
-                                ScanaStudio.dec_item_add_content("NSNID : Isn't supported");
+                                held.dec_item_add_content("NSNID : Non-secure noninvasive debug isn't supported");
+                                held.dec_item_add_content("Non-secure noninvasive debug isn't supported");
+                                held.dec_item_add_content("NSNID : Isn't supported");
                             }
                             else
                             {
                                 packet_string = "For MEM-AP it should be 0";
-                                ScanaStudio.dec_item_add_content("NSNID : For MEM-AP this field should be 0");
-                                ScanaStudio.dec_item_add_content("For MEM-AP this field should be 0");
+                                held.dec_item_add_content("NSNID : For MEM-AP this field should be 0");
+                                held.dec_item_add_content("For MEM-AP this field should be 0");
                             }
                         }
                         else if (AP_Memory == "JTAG-AP")
@@ -4940,16 +5143,16 @@ function on_decode_signals(resume)
                                 if (swd_value == 2)
                                 {
                                     packet_string = "Is supported";
-                                    ScanaStudio.dec_item_add_content("NSNID : Non-secure noninvasive debug is supported");
-                                    ScanaStudio.dec_item_add_content("Non-secure noninvasive debug is supported");
-                                    ScanaStudio.dec_item_add_content("NSNID : Is supported");
+                                    held.dec_item_add_content("NSNID : Non-secure noninvasive debug is supported");
+                                    held.dec_item_add_content("Non-secure noninvasive debug is supported");
+                                    held.dec_item_add_content("NSNID : Is supported");
                                 }
                                 else
                                 {
                                     packet_string = "For JTAG-AP it should be 2";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("NSNID : For JTAG-AP this field should be 2");
-                                    ScanaStudio.dec_item_add_content("For JTAG-AP this field should be 2");
+                                    held.dec_item_add_content("NSNID : For JTAG-AP this field should be 2");
+                                    held.dec_item_add_content("For JTAG-AP this field should be 2");
                                 }
                             }
                             else if (SDeviceEn == 1)
@@ -4957,16 +5160,16 @@ function on_decode_signals(resume)
                                 if (swd_value == 2)
                                 {
                                     packet_string = "Is supported";
-                                    ScanaStudio.dec_item_add_content("NSNID : Non-secure noninvasive debug is supported and (NIDEN | DBGEN) == true");
-                                    ScanaStudio.dec_item_add_content("Non-secure noninvasive debug is supported");
-                                    ScanaStudio.dec_item_add_content("NSNID : Is supported");
+                                    held.dec_item_add_content("NSNID : Non-secure noninvasive debug is supported and (NIDEN | DBGEN) == true");
+                                    held.dec_item_add_content("Non-secure noninvasive debug is supported");
+                                    held.dec_item_add_content("NSNID : Is supported");
                                 }
                                 else
                                 {
                                     packet_string = "For JTAG-AP it should be 3";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("NSNID : For JTAG-AP this field should be 3");
-                                    ScanaStudio.dec_item_add_content("For JTAG-AP this field should be 3");
+                                    held.dec_item_add_content("NSNID : For JTAG-AP this field should be 3");
+                                    held.dec_item_add_content("For JTAG-AP this field should be 3");
                                 }
                             }
                         }
@@ -4975,20 +5178,20 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 packet_string = "Isn't supported";
-                                ScanaStudio.dec_item_add_content("NSNID : Non-secure noninvasive Debug Support isn't supported");
-                                ScanaStudio.dec_item_add_content("Non-secure noninvasive Debug Support isn't supported");
-                                ScanaStudio.dec_item_add_content("NSNID :  Isn't supported");
+                                held.dec_item_add_content("NSNID : Non-secure noninvasive Debug Support isn't supported");
+                                held.dec_item_add_content("Non-secure noninvasive Debug Support isn't supported");
+                                held.dec_item_add_content("NSNID :  Isn't supported");
                             }
                             else
                             {
                                 packet_string = "Is supported";
-                                ScanaStudio.dec_item_add_content("NSNID : Non-secure noninvasive Debug is supported");
-                                ScanaStudio.dec_item_add_content("Non-secure noninvasive Debug is supported");
-                                ScanaStudio.dec_item_add_content("NSNID : Is supported");
+                                held.dec_item_add_content("NSNID : Non-secure noninvasive Debug is supported");
+                                held.dec_item_add_content("Non-secure noninvasive Debug is supported");
+                                held.dec_item_add_content("NSNID : Is supported");
                             }
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"AUTHSTATUS.NSNID",packet_string,types);
                         // SID bits
@@ -5008,15 +5211,15 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 packet_string = "Isn't supported";
-                                ScanaStudio.dec_item_add_content("SID : Secure invasive isn't supported");
-                                ScanaStudio.dec_item_add_content("Secure invasive isn't supported");
-                                ScanaStudio.dec_item_add_content("SID : Isn't supported");
+                                held.dec_item_add_content("SID : Secure invasive isn't supported");
+                                held.dec_item_add_content("Secure invasive isn't supported");
+                                held.dec_item_add_content("SID : Isn't supported");
                             }
                             else
                             {
                                 packet_string = "For MEM-AP it should be 0";
-                                ScanaStudio.dec_item_add_content("SID : For " + AP_Memory + " this field should be 0");
-                                ScanaStudio.dec_item_add_content("For MEM-AP this field should be 0");
+                                held.dec_item_add_content("SID : For " + AP_Memory + " this field should be 0");
+                                held.dec_item_add_content("For MEM-AP this field should be 0");
                             }
                         }
                         else // Other AP than MEM/JTAG-AP
@@ -5024,20 +5227,20 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 packet_string = "Isn't supported";
-                                ScanaStudio.dec_item_add_content("SID : Secure invasive isn't supported");
-                                ScanaStudio.dec_item_add_content("Secure invasive isn't supported");
-                                ScanaStudio.dec_item_add_content("SID : Isn't supported");
+                                held.dec_item_add_content("SID : Secure invasive isn't supported");
+                                held.dec_item_add_content("Secure invasive isn't supported");
+                                held.dec_item_add_content("SID : Isn't supported");
                             }
                             else
                             {
                                 packet_string = "Is supported";
-                                ScanaStudio.dec_item_add_content("SID : Secure invasive is supported");
-                                ScanaStudio.dec_item_add_content("Secure invasive is supported");
-                                ScanaStudio.dec_item_add_content("SID : Is supported");
+                                held.dec_item_add_content("SID : Secure invasive is supported");
+                                held.dec_item_add_content("Secure invasive is supported");
+                                held.dec_item_add_content("SID : Is supported");
                             }
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"AUTHSTATUS.SID",packet_string,types);
                         // SNID bits
@@ -5057,15 +5260,15 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 packet_string = "Isn't supported";
-                                ScanaStudio.dec_item_add_content("SNID : Secure noninvasive debug isn't supported");
-                                ScanaStudio.dec_item_add_content("Secure noninvasive debug isn't supported");
-                                ScanaStudio.dec_item_add_content("SNID : Isn't supported");
+                                held.dec_item_add_content("SNID : Secure noninvasive debug isn't supported");
+                                held.dec_item_add_content("Secure noninvasive debug isn't supported");
+                                held.dec_item_add_content("SNID : Isn't supported");
                             }
                             else
                             {
                                 packet_string = "For MEM-AP it should be 0";
-                                ScanaStudio.dec_item_add_content("SNID : For MEM-AP this field should be 0");
-                                ScanaStudio.dec_item_add_content("For MEM-AP this field should be 0");
+                                held.dec_item_add_content("SNID : For MEM-AP this field should be 0");
+                                held.dec_item_add_content("For MEM-AP this field should be 0");
                             }
                         }
                         else if (AP_Memory == "JTAG-AP")
@@ -5075,16 +5278,16 @@ function on_decode_signals(resume)
                                 if (swd_value == 2)
                                 {
                                     packet_string = "Is supported";
-                                    ScanaStudio.dec_item_add_content("SNID : Secure noninvasive debug is supported");
-                                    ScanaStudio.dec_item_add_content("Secure noninvasive debug is supported");
-                                    ScanaStudio.dec_item_add_content("SNID : Is supported");
+                                    held.dec_item_add_content("SNID : Secure noninvasive debug is supported");
+                                    held.dec_item_add_content("Secure noninvasive debug is supported");
+                                    held.dec_item_add_content("SNID : Is supported");
                                 }
                                 else
                                 {
                                     packet_string = "For JTAG-AP it should be 2";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("SNID : For JTAG-AP this field should be 2");
-                                    ScanaStudio.dec_item_add_content("For JTAG-AP this field should be 2");
+                                    held.dec_item_add_content("SNID : For JTAG-AP this field should be 2");
+                                    held.dec_item_add_content("For JTAG-AP this field should be 2");
                                 }
                             }
                             else if (SDeviceEn == 1)
@@ -5092,16 +5295,16 @@ function on_decode_signals(resume)
                                 if (swd_value == 2)
                                 {
                                     packet_string = "Is supported";
-                                    ScanaStudio.dec_item_add_content("SNID : Secure noninvasive debug is supported and (SPIDEN | SPNIDEN) & (DBGEN | NIDEN) == true");
-                                    ScanaStudio.dec_item_add_content("Secure noninvasive debug is supported");
-                                    ScanaStudio.dec_item_add_content("SNID : Is supported");
+                                    held.dec_item_add_content("SNID : Secure noninvasive debug is supported and (SPIDEN | SPNIDEN) & (DBGEN | NIDEN) == true");
+                                    held.dec_item_add_content("Secure noninvasive debug is supported");
+                                    held.dec_item_add_content("SNID : Is supported");
                                 }
                                 else
                                 {
                                     packet_string = "For JTAG-AP it should be 3";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("SNID : For JTAG-AP this field should be 3");
-                                    ScanaStudio.dec_item_add_content("For JTAG-AP this field should be 3");
+                                    held.dec_item_add_content("SNID : For JTAG-AP this field should be 3");
+                                    held.dec_item_add_content("For JTAG-AP this field should be 3");
                                 }
                             }
                         }
@@ -5110,20 +5313,20 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 packet_string = "Secure noninvasive debug isn't supported";
-                                ScanaStudio.dec_item_add_content("SNID : Secure noninvasive debug isn't supported");
-                                ScanaStudio.dec_item_add_content("Secure noninvasive debug isn't supported");
-                                ScanaStudio.dec_item_add_content("SNID : Isn't supported");
+                                held.dec_item_add_content("SNID : Secure noninvasive debug isn't supported");
+                                held.dec_item_add_content("Secure noninvasive debug isn't supported");
+                                held.dec_item_add_content("SNID : Isn't supported");
                             }
                             else
                             {
                                 packet_string = "Secure noninvasive debug is supported";
-                                ScanaStudio.dec_item_add_content("SNID : Secure noninvasive debug is supported");
-                                ScanaStudio.dec_item_add_content("Secure noninvasive debug is supported");
-                                ScanaStudio.dec_item_add_content("SNID : Is supported");
+                                held.dec_item_add_content("SNID : Secure noninvasive debug is supported");
+                                held.dec_item_add_content("Secure noninvasive debug is supported");
+                                held.dec_item_add_content("SNID : Is supported");
                             }
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"AUTHSTATUS.SNID",packet_string,types);
                         // HID bits
@@ -5143,15 +5346,15 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 packet_string = "Isn't supported";
-                                ScanaStudio.dec_item_add_content("HID : Hypervisor invasive debug isn't supported");
-                                ScanaStudio.dec_item_add_content("Hypervisor invasive debug isn't supported");
-                                ScanaStudio.dec_item_add_content("HID : Isn't supported");
+                                held.dec_item_add_content("HID : Hypervisor invasive debug isn't supported");
+                                held.dec_item_add_content("Hypervisor invasive debug isn't supported");
+                                held.dec_item_add_content("HID : Isn't supported");
                             }
                             else
                             {
                                 packet_string = "For MEM-AP it should be 0";
-                                ScanaStudio.dec_item_add_content("HID : For " + AP_Memory + " this field should be 0");
-                                ScanaStudio.dec_item_add_content("For MEM-AP this field should be 0");
+                                held.dec_item_add_content("HID : For " + AP_Memory + " this field should be 0");
+                                held.dec_item_add_content("For MEM-AP this field should be 0");
                             }
                         }
                         else // Other AP than MEM/JTAG-AP
@@ -5159,20 +5362,20 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 packet_string = "Isn't supported";
-                                ScanaStudio.dec_item_add_content("HID : Hypervisor invasive debug isn't supported");
-                                ScanaStudio.dec_item_add_content("Hypervisor invasive debug isn't supported");
-                                ScanaStudio.dec_item_add_content("HID : Isn't supported");
+                                held.dec_item_add_content("HID : Hypervisor invasive debug isn't supported");
+                                held.dec_item_add_content("Hypervisor invasive debug isn't supported");
+                                held.dec_item_add_content("HID : Isn't supported");
                             }
                             else
                             {
                                 packet_string = "Is supported";
-                                ScanaStudio.dec_item_add_content("HID : Hypervisor invasive debug is supported");
-                                ScanaStudio.dec_item_add_content("Hypervisor invasive debug is supported");
-                                ScanaStudio.dec_item_add_content("HID : Is supported");
+                                held.dec_item_add_content("HID : Hypervisor invasive debug is supported");
+                                held.dec_item_add_content("Hypervisor invasive debug is supported");
+                                held.dec_item_add_content("HID : Is supported");
                             }
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"AUTHSTATUS.HID",packet_string,types);
                         // HNID bits
@@ -5192,15 +5395,15 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 packet_string = "Isn't supported";
-                                ScanaStudio.dec_item_add_content("HNID : Hypervisor noninvasive debug isn't supported");
-                                ScanaStudio.dec_item_add_content("Hypervisor noninvasive debug isn't supported");
-                                ScanaStudio.dec_item_add_content("HNID : Isn't supported");
+                                held.dec_item_add_content("HNID : Hypervisor noninvasive debug isn't supported");
+                                held.dec_item_add_content("Hypervisor noninvasive debug isn't supported");
+                                held.dec_item_add_content("HNID : Isn't supported");
                             }
                             else
                             {
                                 packet_string = "For MEM-AP it should be 0";
-                                ScanaStudio.dec_item_add_content("HNID : For " + AP_Memory + " this field should be 0");
-                                ScanaStudio.dec_item_add_content("For MEM-AP this field should be 0");
+                                held.dec_item_add_content("HNID : For " + AP_Memory + " this field should be 0");
+                                held.dec_item_add_content("For MEM-AP this field should be 0");
                             }
                         }
                         else // Other AP than MEM/JTAG-AP
@@ -5208,20 +5411,20 @@ function on_decode_signals(resume)
                             if (swd_value == 0)
                             {
                                 packet_string = "Isn't supported";
-                                ScanaStudio.dec_item_add_content("HNID : Hypervisor noninvasive debug isn't supported");
-                                ScanaStudio.dec_item_add_content("Hypervisor noninvasive debug isn't supported");
-                                ScanaStudio.dec_item_add_content("HNID : Isn't supported");
+                                held.dec_item_add_content("HNID : Hypervisor noninvasive debug isn't supported");
+                                held.dec_item_add_content("Hypervisor noninvasive debug isn't supported");
+                                held.dec_item_add_content("HNID : Isn't supported");
                             }
                             else
                             {
                                 packet_string = "Is supported";
-                                ScanaStudio.dec_item_add_content("HNID :Hypervisor noninvasive debug is supported");
-                                ScanaStudio.dec_item_add_content("Hypervisor noninvasive debug is supported");
-                                ScanaStudio.dec_item_add_content("HNID : Is supported");
+                                held.dec_item_add_content("HNID :Hypervisor noninvasive debug is supported");
+                                held.dec_item_add_content("Hypervisor noninvasive debug is supported");
+                                held.dec_item_add_content("HNID : Is supported");
                             }
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"AUTHSTATUS.HNID",packet_string,types);
                         //RES0
@@ -5247,29 +5450,29 @@ function on_decode_signals(resume)
                         if (swd_value == 2583) // 0x0A17
                         {
                             packet_string = "MEM-AP";
-                            ScanaStudio.dec_item_add_content("ARCHID : MEM-AP 0x");
-                            ScanaStudio.dec_item_add_content("MEM-AP 0x");
+                            held.dec_item_add_content("ARCHID : MEM-AP 0x");
+                            held.dec_item_add_content("MEM-AP 0x");
                         }
                         else if (swd_value == 2599) // 0x0A27
                         {
                             packet_string = "JTAG-AP";
-                            ScanaStudio.dec_item_add_content("ARCHID : JTAG-AP");
-                            ScanaStudio.dec_item_add_content("JTAG-AP");
+                            held.dec_item_add_content("ARCHID : JTAG-AP");
+                            held.dec_item_add_content("JTAG-AP");
                         }
                         else if (swd_value == 2631) // 0x0A47
                         {
                             packet_string = "Unknown AP 0x" + pad(swd_value.toString(16),4);
-                            ScanaStudio.dec_item_add_content("ARCHID : Unknown AP, access to the IDR Register to get more information about it");
-                            ScanaStudio.dec_item_add_content("Unknown AP, access to the IDR Register to get more information about it");
+                            held.dec_item_add_content("ARCHID : Unknown AP, access to the IDR Register to get more information about it");
+                            held.dec_item_add_content("Unknown AP, access to the IDR Register to get more information about it");
                         }
                         else
                         {
                             packet_string = "0x" + pad(swd_value.toString(16),4);
-                            ScanaStudio.dec_item_add_content("ARCHID : 0x" + pad(swd_value.toString(16),4) + ", use IDR Register in the AP to determine more information about it");
-                            ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),4) + ", use IDR Register in the AP to determine more information about it");
+                            held.dec_item_add_content("ARCHID : 0x" + pad(swd_value.toString(16),4) + ", use IDR Register in the AP to determine more information about it");
+                            held.dec_item_add_content("0x" + pad(swd_value.toString(16),4) + ", use IDR Register in the AP to determine more information about it");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"DEVARCH.ARCHID",packet_string,"Data");
                         // REVISION bits
@@ -5287,18 +5490,18 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Revision 0";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("REVISION : Revision 0");
-                            ScanaStudio.dec_item_add_content("Revision 0");
+                            held.dec_item_add_content("REVISION : Revision 0");
+                            held.dec_item_add_content("Revision 0");
                         }
                         else
                         {
                             packet_string = "Should be Revision 0";
                             types = "Error";
-                            ScanaStudio.dec_item_add_content("REVISION : Should be Revision 0");
-                            ScanaStudio.dec_item_add_content("Should be Revision 0");
+                            held.dec_item_add_content("REVISION : Should be Revision 0");
+                            held.dec_item_add_content("Should be Revision 0");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"DEVARCH.REVISION",packet_string,types);
                         // PRESENT bits
@@ -5316,18 +5519,18 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Present";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("PRESENT : Present");
-                            ScanaStudio.dec_item_add_content("Present");
+                            held.dec_item_add_content("PRESENT : Present");
+                            held.dec_item_add_content("Present");
                         }
                         else
                         {
                             packet_string = "Should be Present";
                             types = "Error";
-                            ScanaStudio.dec_item_add_content("PRESENT : Should be Present");
-                            ScanaStudio.dec_item_add_content("Should be Present");
+                            held.dec_item_add_content("PRESENT : Should be Present");
+                            held.dec_item_add_content("Should be Present");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"DEVARCH.PRESENT",packet_string,types);
                         // ARCHITECT bits
@@ -5345,18 +5548,18 @@ function on_decode_signals(resume)
                         {
                             packet_string = "ARM";
                             types = "Data";
-                            ScanaStudio.dec_item_add_content("ARCHITECT : ARM");
-                            ScanaStudio.dec_item_add_content("ARM");
+                            held.dec_item_add_content("ARCHITECT : ARM");
+                            held.dec_item_add_content("ARM");
                         }
                         else
                         {
                             packet_string = "Should be ARM";
                             types = "Error";
-                            ScanaStudio.dec_item_add_content("ARCHITECT : Should be ARM");
-                            ScanaStudio.dec_item_add_content("Should be ARM");
+                            held.dec_item_add_content("ARCHITECT : Should be ARM");
+                            held.dec_item_add_content("Should be ARM");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"DEVARCH.ARCHITECT",packet_string,types);
                         break;
@@ -5387,18 +5590,18 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Miscellaneous";
                             types = "Misc";
-                            ScanaStudio.dec_item_add_content("MAJOR : Miscellaneous");
-                            ScanaStudio.dec_item_add_content("Miscellaneous");
+                            held.dec_item_add_content("MAJOR : Miscellaneous");
+                            held.dec_item_add_content("Miscellaneous");
                         }
                         else
                         {
                             packet_string = "Should be 0";
                             types = "Error";
-                            ScanaStudio.dec_item_add_content("MAJOR : Should be 0");
-                            ScanaStudio.dec_item_add_content("Should be 0");
+                            held.dec_item_add_content("MAJOR : Should be 0");
+                            held.dec_item_add_content("Should be 0");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"DEVTYPE.MAJOR",packet_string,types);
                         // SUB bits
@@ -5416,18 +5619,18 @@ function on_decode_signals(resume)
                         {
                             packet_string = "Other, undefined";
                             types = "Misc";
-                            ScanaStudio.dec_item_add_content("SUB : Other, undefined");
-                            ScanaStudio.dec_item_add_content("Other, undefined");
+                            held.dec_item_add_content("SUB : Other, undefined");
+                            held.dec_item_add_content("Other, undefined");
                         }
                         else
                         {
                             packet_string = "Should be 0";
                             types = "Error";
-                            ScanaStudio.dec_item_add_content("SUB : Should be 0");
-                            ScanaStudio.dec_item_add_content("Should be 0");
+                            held.dec_item_add_content("SUB : Should be 0");
+                            held.dec_item_add_content("Should be 0");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"DEVTYPE.SUB",packet_string,types);
                         //RES0
@@ -5453,10 +5656,10 @@ function on_decode_signals(resume)
                                 item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                                 swd_value = Number(swd_simple.unsigned_words);
                                 dec_item_new_v2(ch_io,swd_simple);
-                                ScanaStudio.dec_item_add_content("DES_2 : 0x" + pad(swd_value.toString(16),1));
-                                ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),1));
+                                held.dec_item_add_content("DES_2 : 0x" + pad(swd_value.toString(16),1));
+                                held.dec_item_add_content("0x" + pad(swd_value.toString(16),1));
                                 display_sample(swd_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = "0x" + pad(swd_value.toString(16),1);
                                 packet_view_add_packet_v2(ch_io,swd_simple,"PIDR_4.DES_2",packet_string,"Data");
@@ -5474,17 +5677,17 @@ function on_decode_signals(resume)
                                 if (swd_value == 0)
                                 {
                                     packet_string = "This field is deprecated, 0 means we can't determine the size";
-                                    ScanaStudio.dec_item_add_content("SIZE : This field is deprecated, 0 means we can't determine the size");
-                                    ScanaStudio.dec_item_add_content("This field is deprecated, 0 means we can't determine the size");
+                                    held.dec_item_add_content("SIZE : This field is deprecated, 0 means we can't determine the size");
+                                    held.dec_item_add_content("This field is deprecated, 0 means we can't determine the size");
                                 }
                                 else
                                 {
                                     packet_string = Math.floor(Math.log(swd_value)/Math.log(2)) + " 4KB block";
-                                    ScanaStudio.dec_item_add_content("SIZE : " + Math.floor(Math.log(swd_value)/Math.log(2)) + " 4KB block"); // Idk if we can take a part of 4KB block.
-                                    ScanaStudio.dec_item_add_content(Math.floor(Math.log(swd_value)/Math.log(2)) + " 4KB block");
+                                    held.dec_item_add_content("SIZE : " + Math.floor(Math.log(swd_value)/Math.log(2)) + " 4KB block"); // Idk if we can take a part of 4KB block.
+                                    held.dec_item_add_content(Math.floor(Math.log(swd_value)/Math.log(2)) + " 4KB block");
                                 }
                                 display_sample(swd_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_io,swd_simple,"PIDR_4.SIZE",packet_string,"Data");
                                 //RES0
@@ -5515,10 +5718,10 @@ function on_decode_signals(resume)
                                     item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                                     PART_0 = Number(swd_simple.unsigned_words);
                                     dec_item_new_v2(ch_io,swd_simple);
-                                    ScanaStudio.dec_item_add_content("PART_0 [7:0] : 0x" + pad(PART_0.toString(16),2));
-                                    ScanaStudio.dec_item_add_content("0x" + pad(PART_0.toString(16),2));
+                                    held.dec_item_add_content("PART_0 [7:0] : 0x" + pad(PART_0.toString(16),2));
+                                    held.dec_item_add_content("0x" + pad(PART_0.toString(16),2));
                                     display_sample(swd_simple);
-                                    ScanaStudio.dec_item_end();
+                                    held.dec_item_end();
                                     //Packet View
                                     packet_string = "[7:0] : 0x" + pad(PART_0.toString(16),2);
                                     packet_view_add_packet_v2(ch_io,swd_simple,"PIDR_0.PART_0",packet_string,"Data");
@@ -5538,10 +5741,10 @@ function on_decode_signals(resume)
                                     item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                                     PART_1 = Number(swd_simple.unsigned_words);
                                     dec_item_new_v2(ch_io,swd_simple);
-                                    ScanaStudio.dec_item_add_content("PART_1 [11:8] : 0x" + pad(PART_1.toString(16),1));
-                                    ScanaStudio.dec_item_add_content("0x" + pad(PART_1.toString(16),1));
+                                    held.dec_item_add_content("PART_1 [11:8] : 0x" + pad(PART_1.toString(16),1));
+                                    held.dec_item_add_content("0x" + pad(PART_1.toString(16),1));
                                     display_sample(swd_simple);
-                                    ScanaStudio.dec_item_end();
+                                    held.dec_item_end();
                                     //Packet View
                                     packet_string = "[11:8] : 0x" + pad(PART_1.toString(16),1);
                                     packet_view_add_packet_v2(ch_io,swd_simple,"PIDR_0.PART_1",packet_string,"Data");
@@ -5556,10 +5759,10 @@ function on_decode_signals(resume)
                                     item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                                     DES_0 = Number(swd_simple.unsigned_words);
                                     dec_item_new_v2(ch_io,swd_simple);
-                                    ScanaStudio.dec_item_add_content("DES_0 [3:0] : 0x" + pad(DES_0.toString(16),1));
-                                    ScanaStudio.dec_item_add_content("0x" + pad(DES_0.toString(16),1));
+                                    held.dec_item_add_content("DES_0 [3:0] : 0x" + pad(DES_0.toString(16),1));
+                                    held.dec_item_add_content("0x" + pad(DES_0.toString(16),1));
                                     display_sample(swd_simple);
-                                    ScanaStudio.dec_item_end();
+                                    held.dec_item_end();
                                     //Packet View
                                     packet_string = "[3:0] 0x" + pad(DES_0.toString(16),1);
                                     packet_view_add_packet_v2(ch_io,swd_simple,"PIDR_1.DES_0",packet_string,"Data");
@@ -5579,10 +5782,10 @@ function on_decode_signals(resume)
                                     item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                                     DES_1 = Number(swd_simple.unsigned_words);
                                     dec_item_new_v2(ch_io,swd_simple);
-                                    ScanaStudio.dec_item_add_content("DES_1 [6:4] : 0x" + pad(DES_1.toString(16),1));
-                                    ScanaStudio.dec_item_add_content("0x" + pad(DES_1.toString(16),1));
+                                    held.dec_item_add_content("DES_1 [6:4] : 0x" + pad(DES_1.toString(16),1));
+                                    held.dec_item_add_content("0x" + pad(DES_1.toString(16),1));
                                     display_sample(swd_simple);
-                                    ScanaStudio.dec_item_end();
+                                    held.dec_item_end();
                                     //Packet View
                                     packet_string = "[6:4] 0x" + pad(DES_1.toString(16),1);
                                     packet_view_add_packet_v2(ch_io,swd_simple,"PIDR_2.DES_1",packet_string,"Data");
@@ -5601,18 +5804,18 @@ function on_decode_signals(resume)
                                     {
                                         packet_string = "JEDEC-assigned value is used";
                                         types = "Data";
-                                        ScanaStudio.dec_item_add_content("JEDEC : JEDEC-assigned value is used");
-                                        ScanaStudio.dec_item_add_content("JEDEC-assigned value is used");
+                                        held.dec_item_add_content("JEDEC : JEDEC-assigned value is used");
+                                        held.dec_item_add_content("JEDEC-assigned value is used");
                                     }
                                     else
                                     {
                                         packet_string = "Must be 0b1";
                                         types = "Error";
-                                        ScanaStudio.dec_item_add_content("JEDEC : Must be 0b1 to indicate that a JEDEC-assigned value is used.");
-                                        ScanaStudio.dec_item_add_content("Must be 0b1 to indicate that a JEDEC-assigned value is used.");
+                                        held.dec_item_add_content("JEDEC : Must be 0b1 to indicate that a JEDEC-assigned value is used.");
+                                        held.dec_item_add_content("Must be 0b1 to indicate that a JEDEC-assigned value is used.");
                                     }
                                     display_sample(swd_simple);
-                                    ScanaStudio.dec_item_end();
+                                    held.dec_item_end();
                                     //Packet View
                                     packet_view_add_packet_v2(ch_io,swd_simple,"PIDR_2.JEDEC",packet_string,types);
                                     // REVISION bits
@@ -5629,17 +5832,17 @@ function on_decode_signals(resume)
                                     if (swd_value == 0)
                                     {
                                         packet_string = "First implementation of a component";
-                                        ScanaStudio.dec_item_add_content("REVISION : First implementation of a component");
-                                        ScanaStudio.dec_item_add_content("First implementation of a component");
+                                        held.dec_item_add_content("REVISION : First implementation of a component");
+                                        held.dec_item_add_content("First implementation of a component");
                                     }
                                     else
                                     {
                                         packet_string = "This component had 0x" + pad(swd_value.toString(16),1) + " Major/Minor revisions";
-                                        ScanaStudio.dec_item_add_content("REVISION : This component had 0x" + pad(swd_value.toString(16),1) + " Major/Minor revisions");
-                                        ScanaStudio.dec_item_add_content("This component had 0x" + pad(swd_value.toString(16),1) + " Major/Minor revisions");
+                                        held.dec_item_add_content("REVISION : This component had 0x" + pad(swd_value.toString(16),1) + " Major/Minor revisions");
+                                        held.dec_item_add_content("This component had 0x" + pad(swd_value.toString(16),1) + " Major/Minor revisions");
                                     }
                                     display_sample(swd_simple);
-                                    ScanaStudio.dec_item_end();
+                                    held.dec_item_end();
                                     //Packet View
                                     packet_view_add_packet_v2(ch_io,swd_simple,"PIDR_2.REVISION",packet_string,"Data");
                                     break;
@@ -5661,18 +5864,18 @@ function on_decode_signals(resume)
                                     if (swd_value == 0)
                                     {
                                         packet_string = "Component hasn't been modified.";
-                                        ScanaStudio.dec_item_add_content("CMOD : The component is not modified from the original design");
-                                        ScanaStudio.dec_item_add_content("The component is not modified from the original design");
+                                        held.dec_item_add_content("CMOD : The component is not modified from the original design");
+                                        held.dec_item_add_content("The component is not modified from the original design");
                                     }
                                     else
                                     {
                                         packet_string = "The component has been modified.";
-                                        ScanaStudio.dec_item_add_content("CMOD : The component has been modified, read documentation to determine the modifications");
-                                        ScanaStudio.dec_item_add_content("The component has been modified, read documentation to determine the modifications");
-                                        ScanaStudio.dec_item_add_content("The component has been modified");
+                                        held.dec_item_add_content("CMOD : The component has been modified, read documentation to determine the modifications");
+                                        held.dec_item_add_content("The component has been modified, read documentation to determine the modifications");
+                                        held.dec_item_add_content("The component has been modified");
                                     }
                                     display_sample(swd_simple);
-                                    ScanaStudio.dec_item_end();
+                                    held.dec_item_end();
                                     //Packet View
                                     packet_view_add_packet_v2(ch_io,swd_simple,"PIDR_3.CMOD",packet_string,"Data");
                                     // REVAND bits
@@ -5689,17 +5892,17 @@ function on_decode_signals(resume)
                                     if (swd_value == 0)
                                     {
                                         packet_string = "No minor errata fixes";
-                                        ScanaStudio.dec_item_add_content("REVAND : No minor errata fixes");
-                                        ScanaStudio.dec_item_add_content("No minor errata fixes");
+                                        held.dec_item_add_content("REVAND : No minor errata fixes");
+                                        held.dec_item_add_content("No minor errata fixes");
                                     }
                                     else
                                     {
                                         packet_string = "Minor errata fixes : 0x" + pad(swd_value.toString(16),1);
-                                        ScanaStudio.dec_item_add_content("REVAND : Number of minor errata fixes : 0x" + pad(swd_value.toString(16),1));
-                                        ScanaStudio.dec_item_add_content("Number of minor errata fixes : 0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("REVAND : Number of minor errata fixes : 0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("Number of minor errata fixes : 0x" + pad(swd_value.toString(16),1));
                                     }
                                     display_sample(swd_simple);
-                                    ScanaStudio.dec_item_end();
+                                    held.dec_item_end();
                                     //Packet View
                                     packet_view_add_packet_v2(ch_io,swd_simple,"PIDR_3.REVAND",packet_string,"Data");
                                     break;
@@ -5733,18 +5936,18 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = pad(swd_value.toString(16),2);
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("PRMBL_0 : 0x" + pad(swd_value.toString(16),2));
-                                    ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),2));
+                                    held.dec_item_add_content("PRMBL_0 : 0x" + pad(swd_value.toString(16),2));
+                                    held.dec_item_add_content("0x" + pad(swd_value.toString(16),2));
                                 }
                                 else
                                 {
                                     packet_string = "Should be 0x0D";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("PRMBL_0 : Should be 0x0D");
-                                    ScanaStudio.dec_item_add_content("Should be 0x0D");
+                                    held.dec_item_add_content("PRMBL_0 : Should be 0x0D");
+                                    held.dec_item_add_content("Should be 0x0D");
                                 }
                                 display_sample(swd_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_io,swd_simple,"CIDR0.PRMBL_0",packet_string,types);
                                 break;
@@ -5767,18 +5970,18 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = pad(swd_value.toString(16),2);
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("PRMBL_1 : 0x" + pad(swd_value.toString(16),2));
-                                    ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),2));
+                                    held.dec_item_add_content("PRMBL_1 : 0x" + pad(swd_value.toString(16),2));
+                                    held.dec_item_add_content("0x" + pad(swd_value.toString(16),2));
                                 }
                                 else
                                 {
                                     packet_string = "Should be 0x0";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("PRMBL_1 : Should be 0x0");
-                                    ScanaStudio.dec_item_add_content("Should be 0x0");
+                                    held.dec_item_add_content("PRMBL_1 : Should be 0x0");
+                                    held.dec_item_add_content("Should be 0x0");
                                 }
                                 display_sample(swd_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_io,swd_simple,"CIDR1.PRMBL_1",packet_string,types);
                                 // CLASS bits
@@ -5797,64 +6000,64 @@ function on_decode_signals(resume)
                                     case 0 :
                                     {
                                         types = "Data";
-                                        ScanaStudio.dec_item_add_content("CLASS : Generic verification component 0x" + pad(swd_value.toString(16),1));
-                                        ScanaStudio.dec_item_add_content("CLASS : 0x" + pad(swd_value.toString(16),1));
-                                        ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("CLASS : Generic verification component 0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("CLASS : 0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("0x" + pad(swd_value.toString(16),1));
                                         break;
                                     }
                                     case 1 :
                                     {
                                         types = "Data";
-                                        ScanaStudio.dec_item_add_content("CLASS : ROM Table 0x" + pad(swd_value.toString(16),1));
-                                        ScanaStudio.dec_item_add_content("CLASS : 0x" + pad(swd_value.toString(16),1));
-                                        ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("CLASS : ROM Table 0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("CLASS : 0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("0x" + pad(swd_value.toString(16),1));
                                         break;
                                     }
                                     case 9 :
                                     {
                                         types = "Data";
-                                        ScanaStudio.dec_item_add_content("CLASS : CoreSight component 0x" + pad(swd_value.toString(16),1));
-                                        ScanaStudio.dec_item_add_content("CLASS : 0x" + pad(swd_value.toString(16),1));
-                                        ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("CLASS : CoreSight component 0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("CLASS : 0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("0x" + pad(swd_value.toString(16),1));
                                         break;
                                     }
                                     case 11 :
                                     {
                                         types = "Data";
-                                        ScanaStudio.dec_item_add_content("CLASS : Peripheral Test Block 0x" + pad(swd_value.toString(16),1));
-                                        ScanaStudio.dec_item_add_content("CLASS : 0x" + pad(swd_value.toString(16),1));
-                                        ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("CLASS : Peripheral Test Block 0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("CLASS : 0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("0x" + pad(swd_value.toString(16),1));
                                         break;
                                     }
                                     case 14 :
                                     {
                                         types = "Data";
-                                        ScanaStudio.dec_item_add_content("CLASS : Generic IP component 0x" + pad(swd_value.toString(16),1));
-                                        ScanaStudio.dec_item_add_content("CLASS : 0x" + pad(swd_value.toString(16),1));
-                                        ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("CLASS : Generic IP component 0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("CLASS : 0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("0x" + pad(swd_value.toString(16),1));
                                         break;
                                     }
                                     case 15 :
                                     {
                                         types = "Data";
-                                        ScanaStudio.dec_item_add_content("CLASS : CoreLink, PrimeCell, or system component with no standardized register layout, for backwards compatibility. 0x" + pad(swd_value.toString(16),1));
-                                        ScanaStudio.dec_item_add_content("CLASS : CoreLink, PrimeCell, or system component with no standardized register layout 0x" + pad(swd_value.toString(16),1));
-                                        ScanaStudio.dec_item_add_content("CLASS : CoreLink, PrimeCell 0x" + pad(swd_value.toString(16),1));
-                                        ScanaStudio.dec_item_add_content("CLASS : 0x" + pad(swd_value.toString(16),1));
-                                        ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("CLASS : CoreLink, PrimeCell, or system component with no standardized register layout, for backwards compatibility. 0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("CLASS : CoreLink, PrimeCell, or system component with no standardized register layout 0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("CLASS : CoreLink, PrimeCell 0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("CLASS : 0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("0x" + pad(swd_value.toString(16),1));
                                         break;
                                     }
                                     default :
                                     {
                                         types = "Data";
-                                        ScanaStudio.dec_item_add_content("CLASS : Reserved 0x" + pad(swd_value.toString(16),1));
-                                        ScanaStudio.dec_item_add_content("Reserved 0x" + pad(swd_value.toString(16),1));
-                                        ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("CLASS : Reserved 0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("Reserved 0x" + pad(swd_value.toString(16),1));
+                                        held.dec_item_add_content("0x" + pad(swd_value.toString(16),1));
                                         break;
                                     }
                                 }
                                 display_sample(swd_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_string = "0x" + pad(swd_value.toString(16),1);
                                 packet_view_add_packet_v2(ch_io,swd_simple,"CIDR1.CLASS",packet_string,types);
@@ -5878,18 +6081,18 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = pad(swd_value.toString(16),2);
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("PRMBL_2 : 0x" + pad(swd_value.toString(16),2));
-                                    ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),2));
+                                    held.dec_item_add_content("PRMBL_2 : 0x" + pad(swd_value.toString(16),2));
+                                    held.dec_item_add_content("0x" + pad(swd_value.toString(16),2));
                                 }
                                 else
                                 {
                                     packet_string = "Should be 0x05";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("PRMBL_2 : Should be 0x05");
-                                    ScanaStudio.dec_item_add_content("Should be 0x05");
+                                    held.dec_item_add_content("PRMBL_2 : Should be 0x05");
+                                    held.dec_item_add_content("Should be 0x05");
                                 }
                                 display_sample(swd_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_io,swd_simple,"CIDR2.PRMBL_2",packet_string,types);
                                 break;
@@ -5912,18 +6115,18 @@ function on_decode_signals(resume)
                                 {
                                     packet_string = pad(swd_value.toString(16),2);
                                     types = "Data";
-                                    ScanaStudio.dec_item_add_content("PRMBL_3 : 0x" + pad(swd_value.toString(16),2));
-                                    ScanaStudio.dec_item_add_content("0x" + pad(swd_value.toString(16),2));
+                                    held.dec_item_add_content("PRMBL_3 : 0x" + pad(swd_value.toString(16),2));
+                                    held.dec_item_add_content("0x" + pad(swd_value.toString(16),2));
                                 }
                                 else
                                 {
                                     packet_string = "Should be 0xB1";
                                     types = "Error";
-                                    ScanaStudio.dec_item_add_content("PRMBL_3 : Should be 0xB1");
-                                    ScanaStudio.dec_item_add_content("Should be 0xB1");
+                                    held.dec_item_add_content("PRMBL_3 : Should be 0xB1");
+                                    held.dec_item_add_content("Should be 0xB1");
                                 }
                                 display_sample(swd_simple);
-                                ScanaStudio.dec_item_end();
+                                held.dec_item_end();
                                 //Packet View
                                 packet_view_add_packet_v2(ch_io,swd_simple,"CIDR3.PRMBL_3",packet_string,types);
                                 break;
@@ -5967,21 +6170,21 @@ function on_decode_signals(resume)
                         {
                             if (SERACTV != 0 || WFIFOCNT != 0)
                             {
-                                ScanaStudio.dec_item_add_content("PSEL7-PSEL0 : You MUST only write to this register when CSW.WFIFOCNT and CSW.SERACTV are both zero");
+                                held.dec_item_add_content("PSEL7-PSEL0 : You MUST only write to this register when CSW.WFIFOCNT and CSW.SERACTV are both zero");
                             }
                             else
                             {
                                 if (item_content.length == 1)
                                 {
                                     packet_string = "JTAG port " + item_content + " is selected";
-                                    ScanaStudio.dec_item_add_content("PSEL7-PSEL0 : JTAG port" + item_content + " is selected");
-                                    ScanaStudio.dec_item_add_content("JTAG port" + item_content + " is selected");
+                                    held.dec_item_add_content("PSEL7-PSEL0 : JTAG port" + item_content + " is selected");
+                                    held.dec_item_add_content("JTAG port" + item_content + " is selected");
                                 }
                                 else
                                 {
                                     packet_string = "JTAG port " + item_content + " are selected";
-                                    ScanaStudio.dec_item_add_content("PSEL7-PSEL0 : JTAG port" + item_content + " are selected");
-                                    ScanaStudio.dec_item_add_content("JTAG port" + item_content + " are selected");
+                                    held.dec_item_add_content("PSEL7-PSEL0 : JTAG port" + item_content + " are selected");
+                                    held.dec_item_add_content("JTAG port" + item_content + " are selected");
                                 }
                             }
                         }
@@ -5990,18 +6193,18 @@ function on_decode_signals(resume)
                             if (item_content.length == 1)
                             {
                                 packet_string = "JTAG port " + item_content + " is selected";
-                                ScanaStudio.dec_item_add_content("PSEL7-PSEL0 : JTAG port" + item_content + " is selected");
-                                ScanaStudio.dec_item_add_content("JTAG port" + item_content + " is selected");
+                                held.dec_item_add_content("PSEL7-PSEL0 : JTAG port" + item_content + " is selected");
+                                held.dec_item_add_content("JTAG port" + item_content + " is selected");
                             }
                             else
                             {
                                 packet_string = "JTAG port " + item_content + " are selected";
-                                ScanaStudio.dec_item_add_content("PSEL7-PSEL0 : JTAG port" + item_content + " are selected");
-                                ScanaStudio.dec_item_add_content("JTAG port" + item_content + " are selected");
+                                held.dec_item_add_content("PSEL7-PSEL0 : JTAG port" + item_content + " are selected");
+                                held.dec_item_add_content("JTAG port" + item_content + " are selected");
                             }
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"PSEL.PSEL7-PSEL0",packet_string,"Data");
                         //RES0
@@ -6042,23 +6245,23 @@ function on_decode_signals(resume)
                         {
                             if ((SERACTV != 0 || WFIFOCNT != 0) && (swd_value != 0))
                             {
-                                ScanaStudio.dec_item_add_content("PSTA7-PSTA0 : You MUST only write to this register when CSW.WFIFOCNT and CSW.SERACTV are both zero");
+                                held.dec_item_add_content("PSTA7-PSTA0 : You MUST only write to this register when CSW.WFIFOCNT and CSW.SERACTV are both zero");
                             }
                             else
                             {
                                 packet_string = "Clear PSTA" + item_content + " to 0b0";
-                                ScanaStudio.dec_item_add_content("PSTA7-PSTA0 : Clear PSTA" + item_content + " to 0b0");
-                                ScanaStudio.dec_item_add_content("Clear PSTA" + item_content + " to 0b0");
+                                held.dec_item_add_content("PSTA7-PSTA0 : Clear PSTA" + item_content + " to 0b0");
+                                held.dec_item_add_content("Clear PSTA" + item_content + " to 0b0");
                             }
                         }
                         else
                         {
                             packet_string = "JTAG port " + item_content + " has been disabled";
-                            ScanaStudio.dec_item_add_content("PSTA7-PSTA0 : JTAG port " + item_content + " has been disabled, others are not disabled OR not connected");
-                            ScanaStudio.dec_item_add_content("JTAG port" + item_content + " has been disabled, others are not disabled OR not connected");
+                            held.dec_item_add_content("PSTA7-PSTA0 : JTAG port " + item_content + " has been disabled, others are not disabled OR not connected");
+                            held.dec_item_add_content("JTAG port" + item_content + " has been disabled, others are not disabled OR not connected");
                         }
                         display_sample(swd_simple);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"PSTA.PSTA7-PSTA0",packet_string,"Data");
                         //RES0
@@ -6084,10 +6287,10 @@ function on_decode_signals(resume)
                             item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                             swd_value = Number(swd_simple.unsigned_words);
                             dec_item_new_v2(ch_io,swd_simple);
-                            var byte_nb = i+1;
-                            ScanaStudio.dec_item_add_content("Byte " + byte_nb + " : 0x" + pad(swd_value.toString(16),2));
+                            byte_nb = i+1;
+                            held.dec_item_add_content("Byte " + byte_nb + " : 0x" + pad(swd_value.toString(16),2));
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             Title = "BRFIFO.Byte " + byte_nb;
                             packet_string = "0x" + pad(swd_value.toString(16),2);
@@ -6116,10 +6319,10 @@ function on_decode_signals(resume)
                             item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                             swd_value = Number(swd_simple.unsigned_words);
                             dec_item_new_v2(ch_io,swd_simple);
-                            var byte_nb = i+1;
-                            ScanaStudio.dec_item_add_content("Byte " + byte_nb + " : 0x" + pad(swd_value.toString(16),2));
+                            byte_nb = i+1;
+                            held.dec_item_add_content("Byte " + byte_nb + " : 0x" + pad(swd_value.toString(16),2));
                             display_sample(swd_simple);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             Title = "BWFIFO.Byte " + byte_nb;
                             packet_string = "0x" + pad(swd_value.toString(16),2);
@@ -6147,7 +6350,7 @@ function on_decode_signals(resume)
                             swd_value = Number(swd_simple.unsigned_words);
                             dec_item_new_v2(ch_io,swd_simple);
                             display_sample_0_1(swd_simple, item_display);
-                            ScanaStudio.dec_item_end();
+                            held.dec_item_end();
                             //Packet View
                             packet_view_add_packet_v2(ch_io,swd_simple,"Unknown_AP_Register","Unknown data","Data");
                         }
@@ -6167,9 +6370,9 @@ function on_decode_signals(resume)
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         swd_value = Number(swd_simple.unsigned_words);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("Ignore these bits");
+                        held.dec_item_add_content("Ignore these bits");
                         display_sample_0_1(swd_simple, item_display);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"WO Register","Ignore these bits","Misc");
                         break;
@@ -6188,9 +6391,9 @@ function on_decode_signals(resume)
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         swd_value = Number(swd_simple.unsigned_words);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("Ignore these bits");
+                        held.dec_item_add_content("Ignore these bits");
                         display_sample_0_1(swd_simple, item_display);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"IGNORE DATA","Ignore these bits","Misc");
                         break;
@@ -6209,9 +6412,9 @@ function on_decode_signals(resume)
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         swd_value = Number(swd_simple.unsigned_words);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("The data is unknown for the first AP read access");
+                        held.dec_item_add_content("The data is unknown for the first AP read access");
                         display_sample_0_1(swd_simple, item_display);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,"UNKNOWN DATA","The data is unknown","Data");
                         break;
@@ -6230,9 +6433,9 @@ function on_decode_signals(resume)
                         item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                         swd_value = Number(swd_simple.unsigned_words);
                         dec_item_new_v2(ch_io,swd_simple);
-                        ScanaStudio.dec_item_add_content("This register and his data are unknown");
+                        held.dec_item_add_content("This register and his data are unknown");
                         display_sample_0_1(swd_simple, item_display);
-                        ScanaStudio.dec_item_end();
+                        held.dec_item_end();
                         //Packet View
                         packet_view_add_packet_v2(ch_io,swd_simple,Register_name,"The data is unknown","Data");
                         break;
@@ -6255,24 +6458,24 @@ function on_decode_signals(resume)
                     ScanaStudio.console_info_msg("parity_array.length" + parity_array.length + " Register_name : " + Register_name);
                 }*/
                 item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
-                var end_data = dec_item_new_v2(ch_io,swd_simple)[1];
+                end_data = dec_item_new_v2(ch_io,swd_simple)[1];
                 if (swd_value == parity_calculated)
                 {
                     packet_string = "OK";
                     types = "Check";
-                    ScanaStudio.dec_item_add_content("Parity bit OK");
-                    ScanaStudio.dec_item_add_content("OK");
+                    held.dec_item_add_content("Parity bit OK");
+                    held.dec_item_add_content("OK");
                 }
                 else
                 {
                     packet_string = "NOT OK";
                     types = "Error";
-                    ScanaStudio.dec_item_add_content("Parity bit NOT OK");
-                    ScanaStudio.dec_item_add_content("NOT OK");
-                    ScanaStudio.dec_item_emphasize_error();
+                    held.dec_item_add_content("Parity bit NOT OK");
+                    held.dec_item_add_content("NOT OK");
+                    held.dec_item_emphasize_error();
                 }
                 display_sample_0_1(swd_simple, item_display);
-                ScanaStudio.dec_item_end();
+                held.dec_item_end();
                 //Packet View
                 packet_view_add_packet_v2(ch_io,swd_simple,"Parity bit",packet_string,types);
                 parity_array = [];
@@ -6283,9 +6486,9 @@ function on_decode_signals(resume)
                     break;
                 }
                 //Display who is the driver on the clk line
-                var test = ScanaStudio.dec_item_new(ch_clk,start_data,end_data);
-                ScanaStudio.dec_item_add_content("DRIVER : " + driver);
-                ScanaStudio.dec_item_end();
+                test = held.dec_item_new(ch_clk,start_data,end_data);
+                held.dec_item_add_content("DRIVER : " + driver);
+                held.dec_item_end();
 
                 if (RnW == "Read")
                 {
@@ -6298,26 +6501,26 @@ function on_decode_signals(resume)
                         break;
                     }
                     swd_value = Number(swd_simple.unsigned_words);
-                    var trs_start = ScanaStudio.trs_get_before(ch_clk,swd_simple.start_sample + 1);
-                    var tmp_trs_sample_index;
+                    trs_start = ScanaStudio.trs_get_before(ch_clk,swd_simple.start_sample + 1);
+                    tmp_trs_sample_index;
                     tmp_trs_sample_index = trs_start.sample_index;
-                    while( (tmp_trs_sample_index == trs_start.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+                    while( (tmp_trs_sample_index == trs_start.sample_index) && (is_not_last(ch_clk) == true) )
                     {
                         trs_start = ScanaStudio.trs_get_previous(ch_clk);
                     }
                     tmp_trs_sample_index = trs_start.sample_index;
-                    while( (tmp_trs_sample_index == trs_start.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+                    while( (tmp_trs_sample_index == trs_start.sample_index) && (is_not_last(ch_clk) == true) )
                     {
-                        trs_start = ScanaStudio.trs_get_next(ch_clk);
+                        trs_start = next_trs(ch_clk);
                     }
-                    ScanaStudio.dec_item_new(ch_io,trs_start.sample_index,swd_simple.end_sample - 1);
-                    ScanaStudio.dec_item_add_content("Turnaround bits");
-                    ScanaStudio.dec_item_add_content("Trn");
-                    ScanaStudio.dec_item_end();
+                    held.dec_item_new(ch_io,trs_start.sample_index,swd_simple.end_sample - 1);
+                    held.dec_item_add_content("Turnaround bits");
+                    held.dec_item_add_content("Trn");
+                    held.dec_item_end();
                     // Display the driver on the clk line
-                    ScanaStudio.dec_item_new(ch_clk,trs_start.sample_index + 1,swd_simple.end_sample - 1);
-                    ScanaStudio.dec_item_add_content("Driver : No one");
-                    ScanaStudio.dec_item_end();
+                    held.dec_item_new(ch_clk,trs_start.sample_index + 1,swd_simple.end_sample - 1);
+                    held.dec_item_add_content("Driver : No one");
+                    held.dec_item_end();
                     //Packet View
                     packet_view_add_packet_v2(ch_io,swd_simple,"Trn","Turnaround bits","Misc");
                     driver = "Host";
@@ -6325,11 +6528,11 @@ function on_decode_signals(resume)
 
                 while (trs_io.sample_index < swd_simple.end_sample)
                 {
-                    if (!ScanaStudio.trs_is_not_last(ch_io))
+                    if (!is_not_last(ch_io))
                     {
                         break;
                     }
-                    trs_io = ScanaStudio.trs_get_next(ch_io);
+                    trs_io = next_trs(ch_io);
                 }
                 last_APnDP = APnDP;
                 last_RnW = RnW;
@@ -6343,11 +6546,11 @@ function on_decode_signals(resume)
                 {
                     trs_clk = ScanaStudio.trs_get_before(ch_clk, swd_simple.end_sample + 1);
                     tmp_trs_sample_index = trs_clk.sample_index;
-                    while( (tmp_trs_sample_index == trs_clk.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+                    while( (tmp_trs_sample_index == trs_clk.sample_index) && (is_not_last(ch_clk) == true) )
                     {
-                        trs_clk = ScanaStudio.trs_get_next(ch_clk); // end of HIGH value
+                        trs_clk = next_trs(ch_clk); // end of HIGH value
                     }
-                    var start_search = trs_clk.sample_index;
+                    start_search = trs_clk.sample_index;
                     first = false;
                 }
                 current_start_sample = swd_simple.end_sample;
@@ -6370,7 +6573,7 @@ function on_decode_signals(resume)
                     go_to_last_trans_io();
                     break;
                 }
-                var test = 0;
+                test = 0;
                 for (i=0; i<50; i++)
                 {
                     if (reset_sequence.signed_words[i] == 0)
@@ -6384,40 +6587,40 @@ function on_decode_signals(resume)
                     break;
                 }
                 // Display the search of reset sequence
-                var end_reset_search = ScanaStudio.trs_get_before(ch_io,reset_sequence.start_sample);
-                ScanaStudio.dec_item_new(ch_io,start_search + 1, end_reset_search.sample_index - 1);
-                ScanaStudio.dec_item_add_content("Search for a reset sequence");
-                ScanaStudio.dec_item_end();
+                end_reset_search = ScanaStudio.trs_get_before(ch_io,reset_sequence.start_sample);
+                held.dec_item_new(ch_io,start_search + 1, end_reset_search.sample_index - 1);
+                held.dec_item_add_content("Search for a reset sequence");
+                held.dec_item_end();
                 // Display the driver on the clk line
-                ScanaStudio.dec_item_new(ch_clk,start_search + 1, end_reset_search.sample_index - 1);
-                ScanaStudio.dec_item_add_content("Driver : Host");
-                ScanaStudio.dec_item_end();
+                held.dec_item_new(ch_clk,start_search + 1, end_reset_search.sample_index - 1);
+                held.dec_item_add_content("Driver : Host");
+                held.dec_item_end();
                 dec_item_new_v2(ch_io, reset_sequence);
-                ScanaStudio.dec_item_add_content("Reset Sequence, go back to normal state");
-                ScanaStudio.dec_item_end();
+                held.dec_item_add_content("Reset Sequence, go back to normal state");
+                held.dec_item_end();
                 // packet_view
                 trs_io = ScanaStudio.trs_get_before(ch_io,swd_simple.start_sample);
-                var start_reset = trs_io.sample_index;
-                var tmp_trs_sample_index;
+                start_reset = trs_io.sample_index;
+                tmp_trs_sample_index;
                 tmp_trs_sample_index = trs_io.sample_index;
-                while( (tmp_trs_sample_index == trs_io.sample_index) && (ScanaStudio.trs_is_not_last(ch_io) == true) )
+                while( (tmp_trs_sample_index == trs_io.sample_index) && (is_not_last(ch_io) == true) )
                 {
-                    trs_io = ScanaStudio.trs_get_next(ch_io); // end of HIGH value
+                    trs_io = next_trs(ch_io); // end of HIGH value
                 }
-                var end_reset = trs_io.sample_index;
-                ScanaStudio.packet_view_add_packet(true,ch_io,reset_sequence.start_sample + 1,reset_sequence.end_sample - 1,"RESET SEQUENCE","50 clocks with SWDIOTMS HIGH",ScanaStudio.PacketColors.Preamble.Title,ScanaStudio.PacketColors.Preamble.Content);
-                var start_idle = end_reset;
-                trs_io = ScanaStudio.trs_get_next(ch_io); //END of idle cycles
-                var end_idle = trs_io.sample_index;
-                ScanaStudio.dec_item_new(ch_io,start_idle + 1,end_idle - 1);
-                ScanaStudio.dec_item_add_content("Idles Cycles");
-                ScanaStudio.dec_item_end();
+                end_reset = trs_io.sample_index;
+                held.packet_view_add_packet(true,ch_io,reset_sequence.start_sample + 1,reset_sequence.end_sample - 1,"RESET SEQUENCE","50 clocks with SWDIOTMS HIGH",ScanaStudio.PacketColors.Preamble.Title,ScanaStudio.PacketColors.Preamble.Content);
+                start_idle = end_reset;
+                trs_io = next_trs(ch_io); //END of idle cycles
+                end_idle = trs_io.sample_index;
+                held.dec_item_new(ch_io,start_idle + 1,end_idle - 1);
+                held.dec_item_add_content("Idles Cycles");
+                held.dec_item_end();
                 // packet_view
-                ScanaStudio.packet_view_add_packet(false,ch_io,start_idle,end_idle,"RESET SEQUENCE","IDLE CYCLES",ScanaStudio.PacketColors.Misc.Title,ScanaStudio.PacketColors.Misc.Content);
+                held.packet_view_add_packet(false,ch_io,start_idle,end_idle,"RESET SEQUENCE","IDLE CYCLES",ScanaStudio.PacketColors.Misc.Title,ScanaStudio.PacketColors.Misc.Content);
                 // Display the driver on the clk line
-                ScanaStudio.dec_item_new(ch_clk,end_reset_search.sample_index + 1,end_idle - 1);
-                ScanaStudio.dec_item_add_content("Driver : Host");
-                ScanaStudio.dec_item_end();
+                held.dec_item_new(ch_clk,end_reset_search.sample_index + 1,end_idle - 1);
+                held.dec_item_add_content("Driver : Host");
+                held.dec_item_end();
                 Protocol_State = "Reset";
                 DP_BANK_SEL = 0;
                 Turnaround_period = 1;
@@ -6426,6 +6629,16 @@ function on_decode_signals(resume)
                 break;
             }//end case ENUM_STATE_RESET
         }//end switch (state_machine)
+        }
+        catch (e)
+        {
+            if (e === PASS_WAIT)
+            {
+                return; //this pass is done again with more data
+            }
+            throw e;
+        }
+        pass_commit();
     }//end while (ScanaStudio.abort_is_requested() == false)
 }//end on_decode_signals
 
@@ -8055,13 +8268,13 @@ function display_register_name()
             if (AP_Adress == 254)
             {
                 var number = Adress/4;
-                ScanaStudio.dec_item_add_content("Adress field : 0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + number + "'");
+                held.dec_item_add_content("Adress field : 0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + number + "'");
                 packet_string = "0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + number + "'";
             }
             else
             {
                 var number = Adress/4 + 4;
-                ScanaStudio.dec_item_add_content("Adress field : 0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + number + "'");
+                held.dec_item_add_content("Adress field : 0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + number + "'");
                 packet_string = "0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + number + "'";
             }
             break;
@@ -8069,7 +8282,7 @@ function display_register_name()
         case "DEVAFF" :
         {
             var number = Adress/4 - 2;
-            ScanaStudio.dec_item_add_content("Adress field : 0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + number + "'");
+            held.dec_item_add_content("Adress field : 0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + number + "'");
             packet_string = "0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + number + "'";
             break;
         }
@@ -8077,14 +8290,14 @@ function display_register_name()
         case "BD" :
         {
             var number = Adress/4;
-            ScanaStudio.dec_item_add_content("Adress field : 0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + number + "'");
+            held.dec_item_add_content("Adress field : 0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + number + "'");
             packet_string = "0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + number + "'";
             break;
         }
         case "DAR" :
         {
             var number = AP_Adress*4 + Adress/4;
-            ScanaStudio.dec_item_add_content("Adress field : 0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + number + "'");
+            held.dec_item_add_content("Adress field : 0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + number + "'");
             packet_string = "0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + number + "'";
             break;
         }
@@ -8092,20 +8305,20 @@ function display_register_name()
         case "BWFIFO" :
         {
             var number = Adress/4 + 1;
-            ScanaStudio.dec_item_add_content("Adress field : 0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + number + "'");
+            held.dec_item_add_content("Adress field : 0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + number + "'");
             packet_string = "0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + number + "'";
             break;
         }
         case "DEVID" :
         {
             var number = 2 - Adress/4 ;
-            ScanaStudio.dec_item_add_content("Adress field : 0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + number + "'");
+            held.dec_item_add_content("Adress field : 0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + number + "'");
             packet_string = "0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + number + "'";
             break;
         }
         default :
         {
-            ScanaStudio.dec_item_add_content("Adress field : 0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + "'");
+            held.dec_item_add_content("Adress field : 0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + "'");
             packet_string = "0x" + pad(Adress.toString(16),1) + " or Register '" + Register_name + "'";
             break;
         }
@@ -8161,12 +8374,12 @@ function RES0(start_sample, nbits, parity_array, Register_name)
     else
     {
         types = "Error";
-        ScanaStudio.dec_item_emphasize_error();
+        held.dec_item_emphasize_error();
     }
-    ScanaStudio.dec_item_add_content("RES0, a reserved bit or field with Should-Be-Zero-or-Preserved (SBZP) behavior");
-    ScanaStudio.dec_item_add_content("RES0");
+    held.dec_item_add_content("RES0, a reserved bit or field with Should-Be-Zero-or-Preserved (SBZP) behavior");
+    held.dec_item_add_content("RES0");
     display_sample(swd_simple);
-    ScanaStudio.dec_item_end();
+    held.dec_item_end();
     //Packet View
     if (Register_name == "DEVID")
     {
@@ -8327,6 +8540,10 @@ function sync_decode_v2 (channel,clock_start_sample,bits_per_word)
             decoder_result_t.start_sample = decoder_result_t.sampling_points[0];
             decoder_result_t.end_sample = decoder_result_t.sampling_points[bits_per_word-1];
         }
+        if ((valid_bit != bits_per_word) && wait_for_more_data())
+        {
+            throw PASS_WAIT;
+        }
         return decoder_result_t;
 }
 
@@ -8377,23 +8594,23 @@ function dec_item_new_v2 (channel, swd_simple)
     var trs_start = ScanaStudio.trs_get_before(ch_clk,swd_simple.start_sample + 1);
     var tmp_trs_sample_index;
     tmp_trs_sample_index = trs_start.sample_index;
-    while( (tmp_trs_sample_index == trs_start.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+    while( (tmp_trs_sample_index == trs_start.sample_index) && (is_not_last(ch_clk) == true) )
     {
         trs_start = ScanaStudio.trs_get_previous(ch_clk);
     }
     tmp_trs_sample_index = trs_start.sample_index;
-    while( (tmp_trs_sample_index == trs_start.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+    while( (tmp_trs_sample_index == trs_start.sample_index) && (is_not_last(ch_clk) == true) )
     {
-        trs_start = ScanaStudio.trs_get_next(ch_clk);
+        trs_start = next_trs(ch_clk);
     }
     var trs_end = ScanaStudio.trs_get_before(ch_clk,swd_simple.end_sample + 1);
     var tmp_trs_sample_index;
     tmp_trs_sample_index = trs_end.sample_index;
-    while( (tmp_trs_sample_index == trs_end.sample_index) && (ScanaStudio.trs_is_not_last(ch_clk) == true) )
+    while( (tmp_trs_sample_index == trs_end.sample_index) && (is_not_last(ch_clk) == true) )
     {
-        trs_end = ScanaStudio.trs_get_next(ch_clk);
+        trs_end = next_trs(ch_clk);
     }
-    test = ScanaStudio.dec_item_new(channel,trs_start.sample_index ,trs_end.sample_index - 1);
+    test = held.dec_item_new(channel,trs_start.sample_index ,trs_end.sample_index - 1);
     if (test != 1)
     {
         // ScanaStudio.console_info_msg("test : " + test);
@@ -8408,7 +8625,7 @@ function packet_view_add_packet_v2 (ch,swd_simple,title,content,types)
     {
         case "Wrap" :
         {
-            ScanaStudio.packet_view_add_packet(false,
+            held.packet_view_add_packet(false,
                 ch,
                 swd_simple.start_sample,
                 swd_simple.end_sample,
@@ -8420,7 +8637,7 @@ function packet_view_add_packet_v2 (ch,swd_simple,title,content,types)
         }
         case "Head" :
         {
-            ScanaStudio.packet_view_add_packet(false,
+            held.packet_view_add_packet(false,
             ch,
             swd_simple.start_sample,
             swd_simple.end_sample,
@@ -8432,7 +8649,7 @@ function packet_view_add_packet_v2 (ch,swd_simple,title,content,types)
         }
         case "Preamble" :
         {
-            ScanaStudio.packet_view_add_packet(false,
+            held.packet_view_add_packet(false,
             ch,
             swd_simple.start_sample,
             swd_simple.end_sample,
@@ -8444,7 +8661,7 @@ function packet_view_add_packet_v2 (ch,swd_simple,title,content,types)
         }
         case "Data" :
         {
-            ScanaStudio.packet_view_add_packet(false,
+            held.packet_view_add_packet(false,
             ch,
             swd_simple.start_sample,
             swd_simple.end_sample,
@@ -8456,7 +8673,7 @@ function packet_view_add_packet_v2 (ch,swd_simple,title,content,types)
         }
         case "Check" :
         {
-            ScanaStudio.packet_view_add_packet(false,
+            held.packet_view_add_packet(false,
             ch,
             swd_simple.start_sample,
             swd_simple.end_sample,
@@ -8468,7 +8685,7 @@ function packet_view_add_packet_v2 (ch,swd_simple,title,content,types)
         }
         case "Error" :
         {
-            ScanaStudio.packet_view_add_packet(false,
+            held.packet_view_add_packet(false,
             ch,
             swd_simple.start_sample,
             swd_simple.end_sample,
@@ -8480,7 +8697,7 @@ function packet_view_add_packet_v2 (ch,swd_simple,title,content,types)
         }
         case "Misc" :
         {
-            ScanaStudio.packet_view_add_packet(false,
+            held.packet_view_add_packet(false,
             ch,
             swd_simple.start_sample,
             swd_simple.end_sample,
@@ -8522,7 +8739,7 @@ function display_sample(decoder_result_t)
 {
     for (i=0; i < decoder_result_t.sampling_points.length; i++)
     {
-        ScanaStudio.dec_item_add_sample_point(decoder_result_t.sampling_points[i],"P");
+        held.dec_item_add_sample_point(decoder_result_t.sampling_points[i],"P");
     }
 }
 
@@ -8532,11 +8749,11 @@ function display_sample_0_1(decoder_result_t, display_array)
     {
         if (display_array[i] == 1)
         {
-            ScanaStudio.dec_item_add_sample_point(decoder_result_t.sampling_points[i],"1");
+            held.dec_item_add_sample_point(decoder_result_t.sampling_points[i],"1");
         }
         else
         {
-            ScanaStudio.dec_item_add_sample_point(decoder_result_t.sampling_points[i],"0");
+            held.dec_item_add_sample_point(decoder_result_t.sampling_points[i],"0");
         }
     }
 }
