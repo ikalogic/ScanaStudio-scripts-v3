@@ -3,7 +3,7 @@
 <DESCRIPTION>
 JTAG (named after the Joint Test Action Group which codified it) is an industry standard for verifying designs and testing printed circuit boards after manufacture.
 </DESCRIPTION>
-<VERSION> 0.40 </VERSION>
+<VERSION> 0.41 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
@@ -11,6 +11,7 @@ JTAG (named after the Joint Test Action Group which codified it) is an industry 
 of the GNU General Public License GPLv3 </LICENSE>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <RELEASE_NOTES>
+V0.41: Fixed live decoding inventing a TCK edge at the end of the received samples.
 V0.40: Fixed builder.
 V0.31: Updated description.
 V0.3: Change url and added packet view.
@@ -44,6 +45,7 @@ var state_machine;
 var trs_tck;
 var last_trs_tck;
 var next_trs_tck;
+var next_tck_pending;
 var cur_data_in;
 var cur_data_in_start_sample;
 var cur_data_in_bit_sample = [];
@@ -307,7 +309,6 @@ function add_dec_item_value_tdio(ch_td, start_sample, end_sample, sample_pt, td_
 
 function on_decode_signals(resume)
 {
-    var end_reached = false;
     if (!resume) //If resume == false, it's the first call to this function.
     {
         //initialization
@@ -325,6 +326,7 @@ function on_decode_signals(resume)
         last_trs_tck.sample_index = 0;
         last_trs_tck.value = 0;
         next_trs_tck = ScanaStudio.trs_get_next(ch_tck);
+        next_tck_pending = false;
 
         cur_data_in = 0;
         cur_data_in_start_sample = 0;
@@ -336,15 +338,17 @@ function on_decode_signals(resume)
 
     }
 
-    while ( (ScanaStudio.abort_is_requested() == false) && (!end_reached) )
+    while (ScanaStudio.abort_is_requested() == false)
     {
-        //if last transition reached, do one more time before exiting
-        if( !ScanaStudio.trs_is_not_last(ch_tck) )
+        //An edge is decoded once the next one is known: it ends the edge's items
+        if (next_tck_pending)
         {
-            //do one more time
-            next_trs_tck.sample_index = ScanaStudio.get_available_samples(ch_tck);
-            next_trs_tck.value = last_trs_tck.value;
-            end_reached = true;
+            if (!ScanaStudio.trs_is_not_last(ch_tck))
+            {
+                return; //No further TCK edge yet: wait for more samples
+            }
+            next_trs_tck = ScanaStudio.trs_get_next(ch_tck);
+            next_tck_pending = false;
         }
 
 
@@ -731,7 +735,7 @@ function on_decode_signals(resume)
 
         last_trs_tck = trs_tck;
         trs_tck = next_trs_tck;
-        next_trs_tck = ScanaStudio.trs_get_next(ch_tck);
+        next_tck_pending = true;
     }//end while
 }
 
