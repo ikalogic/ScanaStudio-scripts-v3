@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Modbus enables communication among many devices connected to the same network, for example, a system that measures temperature and humidity and communicates the results to a computer. Modbus is often used to connect a supervisory computer with a remote terminal unit (RTU) in supervisory control and data acquisition (SCADA) systems. Many of the data types are named from industry usage of Ladder logic and its use in driving relays: a single-bit physical output is called a coil, and a single-bit physical input is called a discrete input or a contact.
 </DESCRIPTION>
-<VERSION> 0.33 </VERSION>
+<VERSION> 0.34 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.34: Decodes while the capture is running.
 V0.33: Improved decoding speed.
 V0.32: Fix compatibility issue with UART decoder.
 V0.31: Updated description.
@@ -74,6 +75,10 @@ var trame_started;
 var trame_ended;
 var last_item_end;
 var available_samples;
+var prev_item = null; //the last UART byte processed
+var held_item = null; //the last UART byte received, kept until the next one is known
+var last_call_available = -1;
+var final_call = false;
 
 
 function reload_dec_gui_values()
@@ -175,6 +180,11 @@ function on_decode_signals_RTU_mode(uart_items)
             data_items.push(uart_items[j]);
         }
     }
+    if (held_item !== null)
+    {
+        data_items.unshift(held_item);
+        held_item = null;
+    }
     uart_items = data_items;
 
     // for(j=0; j<uart_items.length; j++)
@@ -188,17 +198,25 @@ function on_decode_signals_RTU_mode(uart_items)
     var sample_per_bits = ScanaStudio.get_capture_sample_rate() / baud;
     for(j=0; (j<uart_items.length) && (!ScanaStudio.abort_is_requested()); j++)
     {
+        // whether a frame ends after a byte depends on the next one
+        if ((j == uart_items.length-1) && !final_call)
+        {
+            held_item = uart_items[j];
+            break;
+        }
+        // the previous byte may have come with the previous call
+        var prev = (j > 0) ? uart_items[j-1] : prev_item;
         if(!trame_started)
         {
             trame = [];
-            if(j==0)
+            if(prev === null)
             {
                 trame_started = true;
             }
-            else if( (uart_items[j].start_sample_index - 1*sample_per_bits - 1.5*11*sample_per_bits) >= (uart_items[j-1].end_sample_index + 2*sample_per_bits) )
+            else if( (uart_items[j].start_sample_index - 1*sample_per_bits - 1.5*11*sample_per_bits) >= (prev.end_sample_index + 2*sample_per_bits) )
             {
                 trame_started = true;
-                last_item_end = uart_items[j-1].end_sample_index;
+                last_item_end = prev.end_sample_index;
             }
         }
 
@@ -209,6 +227,11 @@ function on_decode_signals_RTU_mode(uart_items)
                 if(uart_items[j].end_sample_index + 2*sample_per_bits <= available_samples-1.5*11*sample_per_bits )
                 {
                     trame_ended = true;
+                }
+                else
+                {
+                    held_item = uart_items[j]; //a call with no new sample is not always the last one
+                    break;
                 }
             }
             else
@@ -1083,6 +1106,11 @@ function on_decode_signals_RTU_mode(uart_items)
             }//end if trame ended
         }//end if trame started
     }//end for j in uart_item
+    var processed = (held_item !== null) ? j : uart_items.length;
+    if (processed > 0)
+    {
+        prev_item = uart_items[processed - 1];
+    }
 }//end function decode for RTU mode
 
 
@@ -1104,6 +1132,11 @@ function on_decode_signals_ASCII_mode(uart_items)
             data_items.push(uart_items[j]);
         }
     }
+    if (held_item !== null)
+    {
+        data_items.unshift(held_item);
+        held_item = null;
+    }
     uart_items = data_items;
 
     // for(j=0; j<uart_items.length; j++)
@@ -1117,6 +1150,14 @@ function on_decode_signals_ASCII_mode(uart_items)
     var sample_per_bits = ScanaStudio.get_capture_sample_rate() / baud;
     for(j=0; (j<uart_items.length) && (!ScanaStudio.abort_is_requested()); j++)
     {
+        // whether a frame ends after a byte depends on the next one
+        if ((j == uart_items.length-1) && !final_call)
+        {
+            held_item = uart_items[j];
+            break;
+        }
+        // the previous byte may have come with the previous call
+        var prev = (j > 0) ? uart_items[j-1] : prev_item;
         if(!trame_started)
         {
             trame = [];
@@ -1132,9 +1173,9 @@ function on_decode_signals_ASCII_mode(uart_items)
 
             if(j==uart_items.length-1)
             {
-                if(j>=1 )
+                if(prev !== null)
                 {
-                    if( (uart_items[j-1].content == "\r".charCodeAt()) && (uart_items[j].content == "\n".charCodeAt()) )
+                    if( (prev.content == "\r".charCodeAt()) && (uart_items[j].content == "\n".charCodeAt()) )
                     {
                         trame_ended = true;
                     }
@@ -1143,6 +1184,12 @@ function on_decode_signals_ASCII_mode(uart_items)
                 {
                     trame_ended = true;
                 }
+                if(!trame_ended)
+                {
+                    trame.pop();
+                    held_item = uart_items[j]; //a call with no new sample is not always the last one
+                    break;
+                }
             }
             else
             {
@@ -1150,9 +1197,9 @@ function on_decode_signals_ASCII_mode(uart_items)
                 {
                     trame_ended = true;
                 }
-                else if(j>=1 )
+                else if(prev !== null)
                 {
-                    if( (uart_items[j-1].content == "\r".charCodeAt()) && (uart_items[j].content == "\n".charCodeAt()) )
+                    if( (prev.content == "\r".charCodeAt()) && (uart_items[j].content == "\n".charCodeAt()) )
                     {
                         trame_ended = true;
                         // trame.push(uart_items[j+1]);
@@ -2081,6 +2128,11 @@ function on_decode_signals_ASCII_mode(uart_items)
             }//end if trame ended
         }//end if trame started
     }//end for j in uart_item
+    var processed = (held_item !== null) ? j : uart_items.length;
+    if (processed > 0)
+    {
+        prev_item = uart_items[processed - 1];
+    }
 }//end function decode for ASCII mode
 
 
@@ -2099,7 +2151,15 @@ function on_decode_signals(resume)
         trame_started = false;
         trame_ended = false;
         last_item_end = 0;
+        prev_item = null;
+        held_item = null;
+        last_call_available = -1;
     }
+    // ScanaStudio calls once more when the samples stop: nothing new since the
+    // previous call means the end of the capture
+    var available = ScanaStudio.get_available_samples(channel);
+    final_call = (available == last_call_available);
+    last_call_available = available;
 
     if(mode==0)//RTU mode
     {
