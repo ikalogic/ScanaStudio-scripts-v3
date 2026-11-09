@@ -5,13 +5,14 @@ DMX512 (Digital Multiplex) is a standard for digital communication networks that
 Signals are based on UART.
 DMX512-A include RDM improvement that allow bidirectional communication between slaves devices and the master.
 </DESCRIPTION>
-<VERSION> 0.76 </VERSION>
+<VERSION> 0.77 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms
 of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.77: A frame stays open until the next BREAK while the capture is running.
 V0.76: Fixed an endless loop when a BREAK cut an RDM or Discovery frame short.
 V0.75: Improved decoding speed.
 V0.74: Improved builder and decoder.
@@ -403,7 +404,6 @@ function on_decode_signals (resume)
                         }
                         else //wrong start but still decode following byte
                         {
-                            trame_started = false;
                             ScanaStudio.dec_item_new(channel, trame[i].start_sample_index, trame[i].end_sample_index);
                             ScanaStudio.dec_item_add_content( "WRONG Start " + trame[i].content);
                             ScanaStudio.dec_item_add_content( trame[i].content);
@@ -1229,7 +1229,6 @@ function on_decode_signals (resume)
                         }
                         else // Standard DMX or unrecognized frame
                         {
-                            trame_started = false;
                             ScanaStudio.dec_item_new(channel,trame[i].start_sample_index,trame[i].end_sample_index);
                             ScanaStudio.dec_item_add_content(trame[i].content);
                             ScanaStudio.dec_item_end();
