@@ -3,13 +3,14 @@
 <DESCRIPTION>
 I2C support for ScanaStudio.
 </DESCRIPTION>
-<VERSION> 0.17 </VERSION>
-<AUTHOR_NAME>  Ibrahim KAMAL </AUTHOR_NAME>
+<VERSION> 0.19 </VERSION>
+<AUTHOR_NAME>  Ibrahim KAMAL, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.19: Decodes in steps, while the capture runs and under pre_decode. Debug log off.
 v0.18: Improved live performance.
 v0.17: Fixed a bug when first SDA transition occures before SCL transition.
 v0.16: Fixed a bug that caused STOP item to be displayed with wrong width.
@@ -87,7 +88,7 @@ var ch_scl;
 var address_opt;
 var address_format;
 var data_format;
-var dbg = true;
+var dbg = false;
 /*
   Get GUI values
 */
@@ -104,6 +105,9 @@ function reload_dec_gui_values() {
 var sda_level = 1;
 var scl_level = 1;
 var prev_scl_edge = 0;
+var iterators_started = false;
+var sda_to_process = false;
+var last_call_available = -1;
 
 function build_condition_item(ch, sample_point, width, content, content_short, content_shorter) {
 
@@ -173,18 +177,9 @@ function on_decode_signals(resume) {
     {
         sampling_rate = ScanaStudio.get_capture_sample_rate();
         reload_dec_gui_values();
-        //Reset iterator
-        ScanaStudio.trs_reset(ch_sda);
-        ScanaStudio.trs_reset(ch_scl);
-        trs_scl = ScanaStudio.trs_get_next(ch_scl);
-        trs_sda = ScanaStudio.trs_get_next(ch_sda);
-        last_trs_scl = trs_scl;
-        last_trs_sda = trs_sda;
-        sda_level = trs_sda.value;
-        scl_level = trs_scl.value;
-        ScanaStudio.trs_get_previous(ch_scl);
-        ScanaStudio.trs_get_previous(ch_sda);
-        scl_to_process = true;
+        iterators_started = false;
+        sda_to_process = false;
+        last_call_available = -1;
 
         //init global variables
         state_machine = 0;
@@ -204,12 +199,22 @@ function on_decode_signals(resume) {
         if (dbg) ScanaStudio.console_info_msg("Decoding resumed");
     }
 
-    trs_backlog = 0;
+    if (!iterators_started) {
+        if (ScanaStudio.get_available_samples(ch_scl) <= 0) {
+            return; //no sample yet: the start-of-capture marker could not be read
+        }
+        start_iterators();
+        iterators_started = true;
+    }
+
     // Read ONCE a pass: neither the caller nor the end of the capture can change
     // under us, and both were being asked on every byte and every transition.
     is_pre_dec = ScanaStudio.is_pre_decoding();
-    scl_available = ScanaStudio.trs_is_not_last(ch_scl);
-    sda_available = ScanaStudio.trs_is_not_last(ch_sda);
+    // ScanaStudio calls once more when the samples stop: nothing new since the
+    // previous call means the end of the capture
+    var available = ScanaStudio.get_available_samples(ch_scl);
+    var final_call = (available == last_call_available);
+    last_call_available = available;
     var abort_countdown = ABORT_CHECK_PERIOD;
 
     while (true) {
@@ -223,42 +228,71 @@ function on_decode_signals(resume) {
             }
         }
 
-        if (!scl_available || !sda_available) {
-            if (dbg) ScanaStudio.console_warning_msg("End of capture reached, decoding stopped.", trs_scl.sample_index);
-            //Allow state machine to run beyon last transition to process last SCL/SDA transitions
-            trs_backlog++;
-            if (trs_backlog > 3) {
-                break;
-            }
+        if (!scl_to_process) {
+            scl_to_process = fetch_next_scl();
+        }
+        if (!sda_to_process) {
+            sda_to_process = fetch_next_sda();
+        }
+        // An SDA edge reads the NEXT SCL edge and an SCL edge the SDA level: while
+        // the capture runs, the next call carries on once both are received
+        if (!(scl_to_process && sda_to_process) && !final_call) {
+            break;
         }
 
-        if ((trs_scl.sample_index < trs_sda.sample_index) && scl_to_process) {
+        if (scl_to_process && (!sda_to_process || (trs_scl.sample_index < trs_sda.sample_index))) {
             last_trs_scl = trs_scl;
             processSCL(trs_scl);
             if (dbg) ScanaStudio.console_info_msg("SCL transition = " + trs_scl.value, trs_scl.sample_index);
-            if (scl_available) {
-                do {
-                    trs_scl = ScanaStudio.trs_get_next(ch_scl);
-                }
-                while (check_signal_noise(trs_scl, last_trs_scl));
-                scl_to_process = true;
-                // only this channel moved, so only its end-of-data can have
-                scl_available = ScanaStudio.trs_is_not_last(ch_scl);
-            }
         }
-        else {
+        else if (sda_to_process) {
             last_trs_sda = trs_sda;
             processSDA(trs_sda);
+            sda_to_process = false;
             if (dbg) ScanaStudio.console_info_msg("SDA transition", trs_sda.sample_index);
-            if (sda_available) {
-                do {
-                    trs_sda = ScanaStudio.trs_get_next(ch_sda);
-                }
-                while (check_signal_noise(trs_sda, last_trs_sda));
-                sda_available = ScanaStudio.trs_is_not_last(ch_sda);
-            }
+        }
+        else {
+            break; //the end of the capture, everything processed
         }
     }
+}
+
+//Each channel's cursor on its first transition
+function start_iterators() {
+    ScanaStudio.trs_reset(ch_sda);
+    ScanaStudio.trs_reset(ch_scl);
+    trs_scl = ScanaStudio.trs_get_next(ch_scl);
+    trs_sda = ScanaStudio.trs_get_next(ch_sda);
+    last_trs_scl = trs_scl;
+    last_trs_sda = trs_sda;
+    sda_level = trs_sda.value;
+    scl_level = trs_scl.value;
+    ScanaStudio.trs_get_previous(ch_scl);
+    ScanaStudio.trs_get_previous(ch_sda);
+    scl_to_process = true;
+    sda_to_process = true;
+}
+
+//The next SCL transition that is not a glitch, false when none is received yet
+function fetch_next_scl() {
+    while (ScanaStudio.trs_is_not_last(ch_scl)) {
+        trs_scl = ScanaStudio.trs_get_next(ch_scl);
+        if (!check_signal_noise(trs_scl, last_trs_scl)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+//The next SDA transition that is not a glitch, false when none is received yet
+function fetch_next_sda() {
+    while (ScanaStudio.trs_is_not_last(ch_sda)) {
+        trs_sda = ScanaStudio.trs_get_next(ch_sda);
+        if (!check_signal_noise(trs_sda, last_trs_sda)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /*
