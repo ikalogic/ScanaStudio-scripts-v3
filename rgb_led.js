@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Adressable RGB LED chipsets (WS281x, SK68xx, APA104, Wurth WL-ICLED, ...)
 </DESCRIPTION>
-<VERSION> 0.11 </VERSION>
+<VERSION> 0.12 </VERSION>
 <AUTHOR_NAME>  Vladislav Kosinov, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright 2019 Ikalogic SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.12: Offers to add the RGB LED decoder once the generator is added, preset with the generator's interface, channels and chipset (ScanaStudio v6).
 v0.11: Settings of a wizard page never shown (decoder added from the demo device) fall back to their defaults instead of failing.
 v0.10: Clocked end frame is now DATA-high (per WL-ICLED datasheet). Rewrote clocked framing (start frame = 32 consecutive zeros, short zero runs flushed into the word) which removes the start/LED and end/start packet overlaps and the data-high end-frame handling. Generator end frame holds data high.
 v0.9: Decoder GUI is now a 3-step wizard. Step 3 lets the user enable "Plot LED current" and only shows the plot options when enabled.
@@ -1307,7 +1308,7 @@ function on_draw_gui_pattern_generator(page_number)
     {
         ScanaStudio.gui_add_info_label("Step 1: choose the LED interface to generate.", page_number);
 
-        ScanaStudio.gui_add_combo_box("interface_gen", "LED interface", page_number);
+        ScanaStudio.gui_add_combo_box("interface", "LED interface", page_number);
             ScanaStudio.gui_add_item_to_combo_box("Single-wire (NRZ)", true);
             ScanaStudio.gui_add_item_to_combo_box("Two-wire (clocked, APA102 / WL-ICLED dual)", false);
 
@@ -1316,16 +1317,16 @@ function on_draw_gui_pattern_generator(page_number)
 
     if (page_number == 1)
     {
-        var iface = Number(ScanaStudio.gui_get_value("interface_gen"));
+        var iface = Number(ScanaStudio.gui_get_value("interface"));
 
         if (iface == 1) // Two-wire (clocked)
         {
             ScanaStudio.gui_add_info_label("Step 2: two-wire channels, chipset and clock.", page_number);
 
-            ScanaStudio.gui_add_ch_selector("ch_gen", "Data line (DIN)", "DIN", 0, page_number);
-            ScanaStudio.gui_add_ch_selector("ch_clk_gen", "Clock line (CIN)", "CLK", 1, page_number);
+            ScanaStudio.gui_add_ch_selector("ch", "Data line (DIN)", "DIN", 0, page_number);
+            ScanaStudio.gui_add_ch_selector("ch_clk", "Clock line (CIN)", "CLK", 1, page_number);
 
-            ScanaStudio.gui_add_combo_box("chip_clocked_gen", "Chipset", page_number);
+            ScanaStudio.gui_add_combo_box("chip_clocked", "Chipset", page_number);
             var clk_chips = clocked_chips_in_order();
             for (var j = 0; j < clk_chips.length; j++)
             {
@@ -1339,9 +1340,9 @@ function on_draw_gui_pattern_generator(page_number)
         {
             ScanaStudio.gui_add_info_label("Step 2: single-wire channel and chipset.", page_number);
 
-            ScanaStudio.gui_add_ch_selector("ch_gen", "Data line (DIN)", "DIN", 0, page_number);
+            ScanaStudio.gui_add_ch_selector("ch", "Data line (DIN)", "DIN", 0, page_number);
 
-            ScanaStudio.gui_add_combo_box("chip_gen", "Chipset", page_number);
+            ScanaStudio.gui_add_combo_box("chip_id", "Chipset", page_number);
             var chips = chips_in_order();
             for (var i = 0; i < chips.length; i++)
             {
@@ -1375,9 +1376,9 @@ function on_eval_gui_pattern_generator(page_number)
 {
     if (page_number == 1)
     {
-        ScanaStudio.set_script_instance_name("RGB LED generator on CH " + (Number(ScanaStudio.gui_get_value("ch_gen")) + 1));
+        ScanaStudio.set_script_instance_name("RGB LED generator on CH " + (Number(ScanaStudio.gui_get_value("ch")) + 1));
 
-        if (Number(ScanaStudio.gui_get_value("interface_gen")) == 1)
+        if (Number(ScanaStudio.gui_get_value("interface")) == 1)
         {
             var gain = Number(ScanaStudio.gui_get_value("gain"));
             if (!(gain >= 0 && gain <= 31)) return "Global brightness must be between 0 and 31";
@@ -1394,14 +1395,21 @@ function on_eval_gui_pattern_generator(page_number)
         }
     }
 
+    // ScanaStudio v6 offers to add the RGB LED decoder once the generator is
+    // added; v3 has no such call and would stop this eval on a TypeError.
+    if (typeof ScanaStudio.ask_to_add_decoder === "function")
+    {
+        ScanaStudio.ask_to_add_decoder();
+    }
+
     return ""; //All good.
 }
 
 function on_pattern_generate()
 {
     var builder = ScanaStudio.BuilderObject;
-    var clocked = (Number(ScanaStudio.gui_get_value("interface_gen")) == 1);
-    var ch = Number(ScanaStudio.gui_get_value("ch_gen"));
+    var clocked = (Number(ScanaStudio.gui_get_value("interface")) == 1);
+    var ch = Number(ScanaStudio.gui_get_value("ch"));
     var sample_rate = ScanaStudio.builder_get_sample_rate();
     var num_leds = Math.floor(Number(ScanaStudio.gui_get_value("num_leds")));
     var num_frames = Math.floor(Number(ScanaStudio.gui_get_value("num_frames")));
@@ -1413,9 +1421,9 @@ function on_pattern_generate()
 
     if (clocked)
     {
-        // ch_clk_gen only exists in two-wire mode - read it here, not unconditionally.
-        ch_clk = Number(ScanaStudio.gui_get_value("ch_clk_gen"));
-        var clk_chip = clocked_chips_in_order()[Number(ScanaStudio.gui_get_value("chip_clocked_gen"))];
+        // ch_clk only exists in two-wire mode - read it here, not unconditionally.
+        ch_clk = Number(ScanaStudio.gui_get_value("ch_clk"));
+        var clk_chip = clocked_chips_in_order()[Number(ScanaStudio.gui_get_value("chip_clocked"))];
         var clk_freq = Number(ScanaStudio.gui_get_value("clk_freq"));
         gain = Math.floor(Number(ScanaStudio.gui_get_value("gain"))) & 0x1F;
 
@@ -1430,7 +1438,7 @@ function on_pattern_generate()
     }
     else
     {
-        var chip = chips_in_order()[Number(ScanaStudio.gui_get_value("chip_gen"))];
+        var chip = chips_in_order()[Number(ScanaStudio.gui_get_value("chip_id"))];
         builder.config(ch, sample_rate, chip);
 
         // Electrical settings (WL-ICLED and most addressable LEDs run at 5V, push-pull).

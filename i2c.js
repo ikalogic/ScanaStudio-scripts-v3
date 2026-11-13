@@ -3,13 +3,14 @@
 <DESCRIPTION>
 I2C support for ScanaStudio.
 </DESCRIPTION>
-<VERSION> 0.19 </VERSION>
+<VERSION> 0.20 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.20: Offers to configure the I2C trigger once added (ScanaStudio v6).
 v0.19: Decodes in steps, while the capture runs and under pre_decode. Debug log off.
 v0.18: Improved live performance.
 v0.17: Fixed a bug when first SDA transition occures before SCL transition.
@@ -53,6 +54,15 @@ function on_draw_gui_decoder() {
     ScanaStudio.gui_add_item_to_combo_box("ASCII", false);
     ScanaStudio.gui_add_check_box("en_noise_flter", "Ignore high-frequency noise on data and clock lines", false);
     ScanaStudio.gui_end_tab();
+}
+
+function on_eval_gui_decoder() {
+    // ScanaStudio v6 offers to configure the I2C trigger once the decoder is
+    // added; v3 has no such call and would stop this eval on a TypeError.
+    if (typeof ScanaStudio.ask_to_add_trigger === "function") {
+        ScanaStudio.ask_to_add_trigger();
+    }
+    return ""; //All good.
 }
 
 //Global variables

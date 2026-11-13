@@ -8,13 +8,14 @@ at 100 Mbps or 10 Mbps, in timing mode (REF_CLK captured on a channel) or state 
 payload (with IPv4/ARP summary) and verifies the Ethernet FCS (CRC32).
 Frames are counted per direction, with FCS and framing error statistics.
 </DESCRIPTION>
-<VERSION> 1.0 </VERSION>
-<AUTHOR_NAME> Ibrahim KAMAL </AUTHOR_NAME>
+<VERSION> 1.1 </VERSION>
+<AUTHOR_NAME> Ibrahim KAMAL, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/RMII-decoder-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v1.1: Offers to configure the RMII trigger once added (ScanaStudio v6).
 v1.0: Initial release: RX/TX/dual decoding, 10/100 Mbps, timing and state mode, FCS check, frame counting, demo builder and trigger helper.
 </RELEASE_NOTES>
 */
@@ -125,6 +126,12 @@ function on_draw_gui_decoder(page_number) {
 }
 
 function on_eval_gui_decoder(page_number) {
+    // ScanaStudio v6 offers to configure the RMII trigger once the decoder is
+    // added; v3 has no such call and would stop this eval on a TypeError.
+    if (typeof ScanaStudio.ask_to_add_trigger === "function") {
+        ScanaStudio.ask_to_add_trigger();
+    }
+
     mode = ScanaStudio.gui_get_value("mode");
     state_mode = (ScanaStudio.gui_get_value("sampling") == SAMPLING_STATE);
     var required_channels = ((mode == MODE_BOTH) ? 6 : 3) + (state_mode ? 0 : 1);

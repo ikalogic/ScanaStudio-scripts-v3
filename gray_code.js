@@ -3,13 +3,14 @@
 <DESCRIPTION>
 gray code support for ScanaStudio.
 </DESCRIPTION>
-<VERSION> 0.5 </VERSION>
+<VERSION> 0.6 </VERSION>
 <AUTHOR_NAME>	Juille Neil, Ibrahim KAMAL, Nicolas BASTIT	</AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/ </HELP_URL>
 <COPYRIGHT> Copyright 2019 Ikalogic SAS </COPYRIGHT>
 <LICENSE>	This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.6: Offers to configure the Gray code trigger once added (ScanaStudio v6).
 V0.5: Decoding, demo, trigger and CSV fixed. Position, velocity and acceleration graphs.
 V0.4: Fixed the on_build_demo_signals, on_decode_signals and added a trigger. Also added a table in the GUI in order to help users.
 V0.3: Added dec_item_end() for each dec_item_new().
@@ -117,6 +118,13 @@ function on_eval_gui_decoder()
 	}
 
 	ScanaStudio.set_script_instance_name("Gray code (" + (ch_gray.length-unused_channels_count).toString() + " bits)");
+
+	// ScanaStudio v6 offers to configure the Gray code trigger once the decoder is
+	// added; v3 has no such call and would stop this eval on a TypeError.
+	if (typeof ScanaStudio.ask_to_add_trigger === "function")
+	{
+		ScanaStudio.ask_to_add_trigger();
+	}
 
 	return "" //All good.
 }

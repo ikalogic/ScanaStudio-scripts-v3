@@ -4,13 +4,14 @@
 <DESCRIPTION>
 Serial UART (Universal asynchronous receiver/transmitter) Protocol Decoder.
 </DESCRIPTION>
-<VERSION> 1.55 </VERSION>
+<VERSION> 1.56 </VERSION>
 <AUTHOR_NAME>	Vladislav Kosinov, Ibrahim Kamal, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/UART-ScanaStudio-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright 2019 Ikalogic SAS </COPYRIGHT>
 <LICENSE>	This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V1.56: Offers to configure the UART trigger once added (ScanaStudio v6).
 V1.55 Removed deprecated call to function set_async_mode().
 V1.54: Fixed bug that caused unexisting start bits to be detected in some rare situations.
 V1.53: Fixed bug in Hex View when using more than 8 bits, and added 0/1 sampling points (Thanks to @hristomirchev)
@@ -120,6 +121,13 @@ function on_eval_gui_decoder()
     if(Number(ScanaStudio.gui_get_value("baud")) == 0)
     {
         return "Selected bauderate can't be null.";
+    }
+
+    // ScanaStudio v6 offers to configure the UART trigger once the decoder is
+    // added; v3 has no such call and would stop this eval on a TypeError.
+    if (typeof ScanaStudio.ask_to_add_trigger === "function")
+    {
+        ScanaStudio.ask_to_add_trigger();
     }
 
     return ""; //All good.

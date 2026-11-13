@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Decode most of NMEA 2000 PGN.
 </DESCRIPTION>
-<VERSION> 0.2 </VERSION>
-<AUTHOR_NAME> Corentin MARAVAT </AUTHOR_NAME>
+<VERSION> 0.3 </VERSION>
+<AUTHOR_NAME> Corentin MARAVAT, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ikalogic SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.3:  Offers to configure the NMEA 2000 trigger once added (ScanaStudio v6).
 V0.2:  Decodes while the capture is running, not only the data present at the first call.
 V0.1:  Initial release.
 </RELEASE_NOTES>
@@ -68,6 +69,14 @@ function on_eval_gui_decoder()
               + "(Maximum allowable bit rate is " + ScanaStudio.engineering_notation(max_rate,5) + "Hz"
             );
     }
+
+    // ScanaStudio v6 offers to configure the NMEA 2000 trigger once the decoder is
+    // added; v3 has no such call and would stop this eval on a TypeError.
+    if (typeof ScanaStudio.ask_to_add_trigger === "function")
+    {
+        ScanaStudio.ask_to_add_trigger();
+    }
+
     return "" //All good.
 }
 

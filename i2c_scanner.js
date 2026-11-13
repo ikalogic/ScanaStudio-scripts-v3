@@ -8,13 +8,14 @@ version that focuses on finding devices on a bus.
 The signal builder feature can be used to generate a series of I2C address calls
 to scan the whole range of possible addresses.
 </DESCRIPTION>
-<VERSION> 0.5 </VERSION>
-<AUTHOR_NAME> Camille Perrin </AUTHOR_NAME>
+<VERSION> 0.6 </VERSION>
+<AUTHOR_NAME> Camille Perrin, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ikalogic </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.6:  Offers to add the I2C scanner decoder once the generator is added (ScanaStudio v6).
 V0.5:  Now can be used by SP1000G series (Pattern generator).
 V0.4:  Bug fixed : No silence periode on the first launch.
 V0.3:  Added Signal decoder capability, PacketView and emphasis on valid (ACK) addresses.
@@ -240,6 +241,14 @@ function on_eval_gui_pattern_generator()
 		return "I2C frequency is too high. The maximum value for the current sampling rate is: "
 				+ ScanaStudio.engineering_notation(ScanaStudio.builder_get_sample_rate()/10,3) + "Hz";
 	}
+
+	// ScanaStudio v6 offers to add the I2C scanner decoder once the generator is
+	// added; v3 has no such call and would stop this eval on a TypeError.
+	if (typeof ScanaStudio.ask_to_add_decoder === "function")
+	{
+		ScanaStudio.ask_to_add_decoder();
+	}
+
 	return "";
 }
 

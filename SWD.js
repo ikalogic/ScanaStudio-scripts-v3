@@ -4,13 +4,14 @@
 SW-DP decoder according to the ARM Debug Interface Architecture Specification ADIv6.0.
 About the APACC, it can decode the MEM-AP and the JTAG-AP, others are consider unknown.
 </DESCRIPTION>
-<VERSION> 1.2 </VERSION>
+<VERSION> 1.3 </VERSION>
 <AUTHOR_NAME> Corentin Maravat, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ikalogic SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V1.3:  Offers to configure the SWD trigger once added (ScanaStudio v6).
 V1.2:  Decodes while the capture is running.
 V1.1:  Bug fix : variable declaration.
 V1.0:  Initial release.
@@ -96,6 +97,14 @@ function on_eval_gui_decoder()
     {
         return "Selected bauderate is too high compared to the sampling rate you chose. Bauderate should be at least 8 times lower than the sampling rate.";
     }
+
+  // ScanaStudio v6 offers to configure the SWD trigger once the decoder is
+  // added; v3 has no such call and would stop this eval on a TypeError.
+  if (typeof ScanaStudio.ask_to_add_trigger === "function")
+  {
+    ScanaStudio.ask_to_add_trigger();
+  }
+
   return ""; //All good.
 }
 

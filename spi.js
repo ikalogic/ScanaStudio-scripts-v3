@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Highly configurable SPI bus decoder
 </DESCRIPTION>
-<VERSION> 1.86 </VERSION>
-<AUTHOR_NAME>  Vladislav Kosinov, Ibrahim Kamal </AUTHOR_NAME>
+<VERSION> 1.87 </VERSION>
+<AUTHOR_NAME>  Vladislav Kosinov, Ibrahim Kamal, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> mailto:v.kosinov@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/SPI-script-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v1.87: Offers to configure the SPI trigger once added (ScanaStudio v6).
 v1.86: Fix bug related to trigger with various CPOL/CPHA options.
 v1.85: Fix bug related to decode without CS (Slave Select) line.
 v1.84: Fix bug related to decode without CS (Slave Select) line.
@@ -210,6 +211,12 @@ function on_eval_gui_decoder() {
     instance_name += "]";
 
     ScanaStudio.set_script_instance_name(instance_name);
+
+    // ScanaStudio v6 offers to configure the SPI trigger once the decoder is
+    // added; v3 has no such call and would stop this eval on a TypeError.
+    if (typeof ScanaStudio.ask_to_add_trigger === "function") {
+        ScanaStudio.ask_to_add_trigger();
+    }
 
     return ""; //All good.
 }

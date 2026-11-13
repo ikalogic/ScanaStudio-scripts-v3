@@ -3,13 +3,14 @@
 <DESCRIPTION>
 Decode servomotor command signal.
 </DESCRIPTION>
-<VERSION> 2.1 </VERSION>
+<VERSION> 2.2 </VERSION>
 <AUTHOR_NAME> Corentin Maravat, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ikalogic SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V2.2: Offers to configure the servomotor trigger once added (ScanaStudio v6).
 V2.1: Fixed a syntax error that prevented the script from loading.
 V2.0: Added VAC
 V1.0:  Initial release.
@@ -49,6 +50,14 @@ function on_eval_gui_decoder()
     {
         return "Invalid Pulse width.";
     }
+
+  // ScanaStudio v6 offers to configure the servomotor trigger once the decoder is
+  // added; v3 has no such call and would stop this eval on a TypeError.
+  if (typeof ScanaStudio.ask_to_add_trigger === "function")
+  {
+    ScanaStudio.ask_to_add_trigger();
+  }
+
   return ""; //All good.
 }
 

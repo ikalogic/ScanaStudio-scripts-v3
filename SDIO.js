@@ -3,13 +3,14 @@
 <DESCRIPTION>
 SDIO Bus Decoder
 </DESCRIPTION>
-<VERSION> 2.00 </VERSION>
+<VERSION> 2.01 </VERSION>
 <AUTHOR_NAME> Corentin Maravat, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ikalogic SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V2.01:  Offers to configure the SDIO trigger once added (ScanaStudio v6).
 V2.00:  Decodes while the capture is running. Demo signals over the whole capture.
 V1.00:  Initial release.
 </RELEASE_NOTES>
@@ -248,6 +249,13 @@ function on_eval_gui_decoder()
     instance_name += "]";
 
     ScanaStudio.set_script_instance_name(instance_name);
+
+    // ScanaStudio v6 offers to configure the SDIO trigger once the decoder is
+    // added; v3 has no such call and would stop this eval on a TypeError.
+    if (typeof ScanaStudio.ask_to_add_trigger === "function")
+    {
+        ScanaStudio.ask_to_add_trigger();
+    }
 
     return ""; //All good.
 }

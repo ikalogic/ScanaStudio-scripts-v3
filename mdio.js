@@ -4,13 +4,14 @@
 IEEE 802.3 MDIO (Management Data Input/Output) decoder with Clause 22 and Clause 45 support.
 (Clause 45 is untested, please report any issues you may find)
 </DESCRIPTION>
-<VERSION> 1.2 </VERSION>
+<VERSION> 1.3 </VERSION>
 <AUTHOR_NAME> Ibrahim KAMAL, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v1.3: Offers to configure the MDIO trigger once added (ScanaStudio v6).
 v1.2: Fixed live decoding losing a preamble or a frame cut at the end of the received samples.
 v1.1: Fixed read timing to comply with IEEE 802.3 specification - PHY-driven data now sampled on falling edge of MDC.
 v1.0: Initial release with Clause 22 decoding, Packet View, demo builder and trigger helper.
@@ -66,6 +67,13 @@ function on_eval_gui_decoder() {
     }
 
     ScanaStudio.set_script_instance_name("MDIO on CH" + (mdio_ch + 1) + " / CH" + (mdc_ch + 1));
+
+    // ScanaStudio v6 offers to configure the MDIO trigger once the decoder is
+    // added; v3 has no such call and would stop this eval on a TypeError.
+    if (typeof ScanaStudio.ask_to_add_trigger === "function") {
+        ScanaStudio.ask_to_add_trigger();
+    }
+
     return "";
 }
 

@@ -3,13 +3,14 @@
 <DESCRIPTION>
 CAN bus protocol analyzer (supporting CAN FD)
 </DESCRIPTION>
-<VERSION> 1.1 </VERSION>
+<VERSION> 1.2 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com, n.bastit@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v1.2: Offers to configure the CAN trigger once added (ScanaStudio v6).
 v1.1: Classic CAN decodes whatever the FD bit rate; a FD data phase too fast for the sampling rate is reported.
 v1.0: Added support for CAN-FD ISO CRC (ISO 11898-1:2015)
 v0.991: Fix bug in trigger: doesn't trig on the first frame
@@ -78,6 +79,14 @@ function on_eval_gui_decoder()
   }
   //A FD bit rate too high is not refused: classic frames still decode, and the
   //data phase of each FD frame is reported as unreadable
+
+  // ScanaStudio v6 offers to configure the CAN trigger once the decoder is
+  // added; v3 has no such call and would stop this eval on a TypeError.
+  if (typeof ScanaStudio.ask_to_add_trigger === "function")
+  {
+    ScanaStudio.ask_to_add_trigger();
+  }
+
   return "" //All good.
 }
 

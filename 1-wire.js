@@ -3,13 +3,14 @@
 <DESCRIPTION>
 1-Wire protocol analyzer. Decodes Reset, presence and byte fields.
 </DESCRIPTION>
-<VERSION> 0.16 </VERSION>
-<AUTHOR_NAME> Vladislav Kosinov, Alexander Goomenyuk </AUTHOR_NAME>
+<VERSION> 0.17 </VERSION>
+<AUTHOR_NAME> Vladislav Kosinov, Alexander Goomenyuk, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> v.kosinov@ikalogic.com, emerg.reanimator@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/1-Wire-bus-analyzer-documentation </HELP_URL>
 <COPYRIGHT> Copyright IKALOGIC SAS 2019 </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+v0.17: Offers to configure the 1-Wire trigger once added (ScanaStudio v6).
 v0.16: Trigger on specific word: fixed bit order (LSB first) and ASCII character input.
 v0.15: Change display options.
 v0.14: Builder fixed.
@@ -288,6 +289,14 @@ function on_draw_gui_decoder()
 function on_eval_gui_decoder()
 {
 	ScanaStudio.set_script_instance_name("1-Wire on CH " + (ScanaStudio.gui_get_value("g_ch") + 1).toString());
+
+	// ScanaStudio v6 offers to configure the 1-Wire trigger once the decoder is
+	// added; v3 has no such call and would stop this eval on a TypeError.
+	if (typeof ScanaStudio.ask_to_add_trigger === "function")
+	{
+		ScanaStudio.ask_to_add_trigger();
+	}
+
 	return ""; //All good.
 }
 
