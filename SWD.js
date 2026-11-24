@@ -4,13 +4,14 @@
 SW-DP decoder according to the ARM Debug Interface Architecture Specification ADIv6.0.
 About the APACC, it can decode the MEM-AP and the JTAG-AP, others are consider unknown.
 </DESCRIPTION>
-<VERSION> 1.3 </VERSION>
+<VERSION> 1.4 </VERSION>
 <AUTHOR_NAME> Corentin Maravat, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ikalogic SAS </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V1.4:  Memory View (ScanaStudio v6). CSW data size display fix.
 V1.3:  Offers to configure the SWD trigger once added (ScanaStudio v6).
 V1.2:  Decodes while the capture is running.
 V1.1:  Bug fix : variable declaration.
@@ -31,6 +32,14 @@ function on_draw_gui_decoder()
   ScanaStudio.gui_add_ch_selector("ch_io","SWDIO Channel","SWDIO");
   ScanaStudio.gui_add_ch_selector("ch_clk","SWDCLK Channel","SWDCLK");
   ScanaStudio.gui_add_baud_selector("baud","Baud rate",10000);
+  if (memory_view_exists())
+  {
+    ScanaStudio.gui_add_combo_box("mem_view_access","Memory View shows the data of");
+    ScanaStudio.gui_add_item_to_combo_box("MEM-AP reads and writes",true);
+    ScanaStudio.gui_add_item_to_combo_box("MEM-AP reads",false);
+    ScanaStudio.gui_add_item_to_combo_box("MEM-AP writes",false);
+    ScanaStudio.gui_add_item_to_combo_box("Nothing",false);
+  }
   ScanaStudio.gui_add_new_tab("SWD Mode configuration",false);
   ScanaStudio.gui_add_combo_box("protocol_version", "SWD protocol Version");
   ScanaStudio.gui_add_item_to_combo_box("v2", true);
@@ -69,6 +78,7 @@ function reload_dec_gui_values()
     Protocol_version = Number(ScanaStudio.gui_get_value("protocol_version"));
     Turnaround_period = Number(ScanaStudio.gui_get_value("turnaround_period"));
     DPIDR_exit_error_state = ScanaStudio.gui_get_value("access_dpidr_change_state");
+    mem_view_access = memory_view_exists() ? Number(ScanaStudio.gui_get_value("mem_view_access")) : MemViewAccess.NOTHING;
     AP_Memory = Number(ScanaStudio.gui_get_value("access_port"));
     if (AP_Memory == 0)
     {
@@ -83,6 +93,13 @@ function reload_dec_gui_values()
     {
         AP_Memory = "JTAG-AP";
     }
+}
+
+//The Memory View arrived in ScanaStudio 6.0.23, with set_channel_name: ScanaStudio 3 and
+//older versions of ScanaStudio 6 have neither. "in" reads the API without calling it.
+function memory_view_exists()
+{
+  return ("mem_view_add_bytes" in ScanaStudio) || ("set_channel_name" in ScanaStudio);
 }
 
 
@@ -100,7 +117,9 @@ function on_eval_gui_decoder()
 
   // ScanaStudio v6 offers to configure the SWD trigger once the decoder is
   // added; v3 has no such call and would stop this eval on a TypeError.
-  if (typeof ScanaStudio.ask_to_add_trigger === "function")
+  // "in" reads the API without calling it: this eval also runs while decoding,
+  // where the call does not exist.
+  if ("ask_to_add_trigger" in ScanaStudio)
   {
     ScanaStudio.ask_to_add_trigger();
   }
@@ -176,6 +195,25 @@ var clk_lvl = 0;
 var rng_data = 0;
 var second_trn = false;
 var trs_io;
+// Memory View (ScanaStudio v6): the memory the MEM-AP reads and writes
+const MemViewAccess = {
+    READS_AND_WRITES: 0,
+    READS: 1,
+    WRITES: 2,
+    NOTHING: 3
+};
+var mem_view_access = MemViewAccess.NOTHING;
+var mem_view_base_set = false;
+var mem_ap_tar = 0; // TAR[31:0]
+var mem_ap_tar_known = false;
+var mem_ap_size = -1; // CSW.Size: 0 = 8-bit, 1 = 16-bit, 2 = 32-bit, -1 = unknown
+var mem_ap_addr_inc = -1; // CSW.AddrInc: 0 = off, 1 = single, 2 = packed, -1 = unknown
+var mem_ap_pending = null; // the AP read whose data the next AP read or DP RDBUFF returns
+// The request of the transfer being decoded, before the posted read handling changes it
+var mem_req_ap = false;
+var mem_req_read = false;
+var mem_req_register = "";
+var mem_req_adress = 0;
 
 
 //decoder state
@@ -239,7 +277,8 @@ var wait_available = -1; //samples there when a pass last waited
 var PASS_WAIT = "SWD pass waiting for more data";
 var PASS_EXCLUDED = ["PASS_WAIT", "wait_available", "held_output", "pass_snapshot", "GLOBAL_SCOPE", "PASS_EXCLUDED", "PASS_VARIABLES", "HELD_CALLS", "held"];
 var HELD_CALLS = ["dec_item_new", "dec_item_add_content", "dec_item_add_sample_point", "dec_item_emphasize_error",
-    "dec_item_emphasize_warning", "dec_item_emphasize_success", "dec_item_end", "packet_view_add_packet", "hex_view_add_byte"];
+    "dec_item_emphasize_warning", "dec_item_emphasize_success", "dec_item_end", "packet_view_add_packet", "hex_view_add_byte",
+    "mem_view_set_base", "mem_view_add_bytes"];
 var held = {};
 for (var held_i = 0; held_i < HELD_CALLS.length; held_i++)
 {
@@ -250,6 +289,12 @@ function make_held_call(name)
 {
     return function ()
     {
+        //A turnaround shorter than one clock period gives an item that ends
+        //before it starts: ScanaStudio refuses it, so it is not sent at all
+        if ((name == "dec_item_new") && (arguments[2] < arguments[1]))
+        {
+            return 0;
+        }
         held_output.push([name, Array.prototype.slice.call(arguments)]);
         return 1;
     };
@@ -394,6 +439,16 @@ function on_decode_signals(resume)
       state_machine = ENUM_STATE_REQUEST;
       DP_BANK_SEL = 0;
       AP_Adress = 0;
+      mem_view_base_set = false;
+      mem_ap_tar = 0;
+      mem_ap_tar_known = false;
+      mem_ap_size = -1;
+      mem_ap_addr_inc = -1;
+      mem_ap_pending = null;
+      if (mem_view_access != MemViewAccess.NOTHING)
+      {
+          ScanaStudio.mem_view_set_endianness("little"); // Arm targets
+      }
   }//end if !resume
   else
   {
@@ -2024,6 +2079,10 @@ function on_decode_signals(resume)
 
                 // Check the behavior of the access accordly to the request and the others request
                 parity_array = [];
+                mem_req_ap = (APnDP == "AP");
+                mem_req_read = (RnW == "Read");
+                mem_req_register = Register_name;
+                mem_req_adress = Adress;
                 if (RnW == "Write") //if we do an AP/DP access write, it destroy the last AP access
                 {
                     last_Register_name = "";
@@ -3597,7 +3656,7 @@ function on_decode_signals(resume)
                                 break;
                             }
                             swd_value = Number(swd_simple.unsigned_words);
-                            data_size = Math.pow(2,swd_value + 4);
+                            data_size = Math.pow(2,swd_value + 3); //Size 0: 8 bits, 1: 16 bits, 2: 32 bits...
                             item_display = parity_pre_calcul(swd_simple.unsigned_words, nbits, parity_array);
                             dec_item_new_v2(ch_io,swd_simple);
                             packet_string = "Data Type " + data_size + "-bits";
@@ -6462,6 +6521,7 @@ function on_decode_signals(resume)
                 }
                 swd_value = Number(swd_simple.unsigned_words);
                 parity_calculated = get_parity(parity_array);
+                mem_view_transfer_end(parity_array, swd_value == parity_calculated);
                 /*if (parity_array.length != 32)
                 {
                     ScanaStudio.console_info_msg("parity_array.length" + parity_array.length + " Register_name : " + Register_name);
@@ -7344,147 +7404,119 @@ function on_build_demo_signals()
     }
 
 
-    while(ScanaStudio.builder_get_samples_acc(io_channel) < samples_to_build )
+    // A debugger session, repeated: it reads a firmware state block in RAM, then writes a configuration
+    var uptime = 7265;
+    while (ScanaStudio.builder_get_samples_acc(ch_io) < samples_to_build)
     {
-        var rng_reset = Math.floor(Math.random()*1.01);
-        if (rng_reset == 1)
+        demo_put_session(swd_builder, uptime);
+        uptime++;
+        for (var idle = 0; idle < 20; idle++)
         {
-            // Idle cycles
-            for (i=0; i<8; i++)
-            {
-                swd_builder.put_bit(0);
-            }
-            // Reset Sequence
-            for (i=0; i<50; i++)
-            {
-                swd_builder.put_bit(1);
-            }
-            // Idle cycles
             swd_builder.put_bit(0);
-            swd_builder.put_bit(0);
-            swd_builder.put_bit(0);
-            swd_builder.put_bit(0);
-            DP_BANK_SEL = 0;
-            Turnaround_period = 1;
-
-            // Request DP DPIDR
-            parity_array = [];
-            swd_builder.put_start();
-            swd_builder.put_request("DP", "Read", 0, parity_array); // Read on DPIDR
-            swd_builder.put_parity_bit(parity_array);
-            swd_builder.put_stop();
-            swd_builder.put_park();
-            swd_builder.put_trn();
-
-            // ACK
-            swd_builder.put_ack("OK");
-            if (RnW == "Write")
-            {
-                swd_builder.put_trn();
-            }
-
-            // DATA
-            parity_array = [];
-            swd_builder.put_data_bits(1,1, parity_array); //RAO
-            swd_builder.put_rand_data(16, parity_array); // rng
-            swd_builder.put_data_bits(0,3, parity_array); //RES0
-            swd_builder.put_rand_data(12, parity_array); // rng
-            swd_builder.put_parity_bit(parity_array);
-            if (RnW == "Read")
-            {
-                swd_builder.put_trn();
-            }
-        }
-        else
-        {
-            // Request
-            var rng_idle = Math.floor(Math.random()*1.1);
-            if (rng_idle == 1)
-            {
-                for (i=0; i<10; i++)
-                {
-                    swd_builder.put_bit(0);
-                }
-            }
-            parity_array = [];
-            swd_builder.put_start();
-            swd_builder.put_rand_request(parity_array);
-            get_register_name(RnW, Adress*4, APnDP, DP_BANK_SEL);
-            swd_builder.put_parity_bit(parity_array);
-            swd_builder.put_stop();
-            swd_builder.put_park();
-            swd_builder.put_trn();
-
-            swd_builder.put_ack("OK");
-            if (RnW == "Write")
-            {
-                swd_builder.put_trn();
-            }
-
-            parity_array = [];
-            switch (Register_name)
-            {
-                case "SELECT" :
-                {
-                    rng_data = 0;
-                    while (rng_data != 208 && rng_data != 209 && rng_data != 210 && rng_data != 211 && rng_data != 223 && rng_data != 240 && rng_data != 250 && rng_data != 251 && rng_data != 252 && rng_data != 253 && rng_data != 254 && rng_data != 255)
-                    {
-                        rng_data = 208 + Math.floor(Math.random()*48);
-                    }
-                    rng_dp_bank_sel = Math.floor(Math.random()*6.9);
-                    swd_builder.put_data_bits(rng_dp_bank_sel, 4, parity_array);
-                    swd_builder.put_data_bits(rng_data, 28, parity_array);
-                    SELECT_ADDR = rng_data;
-                    update_AP_adress();
-                    DP_BANK_SEL = rng_dp_bank_sel;
-                    break;
-                }
-                case "SELECT1" :
-                {
-                    // rng_data = 208 + Math.floor(Math.random()*48);
-                    rng_data = 0;
-                    swd_builder.put_data_bits(rng_data, 32, parity_array);
-                    SELECT1_ADDR = rng_data;
-                    update_AP_adress();
-                    break;
-                }
-                case "DLCR" :
-                {
-                    swd_builder.put_rand_data(32, parity_array);
-                    Turnaround_period = parity_array[8];
-                    Turnaround_period += parity_array[9]*2 + 1;
-                    break;
-                }
-                case "Reserved, RES0" :
-                {
-                    rng = Math.floor(Math.random()*1.1);
-                    if (rng == 0)
-                    {
-                        swd_builder.put_data_bits(0, 32, parity_array);
-                    }
-                    else
-                    {
-                        swd_builder.put_rand_data(32, parity_array);
-                    }
-                    break;
-                }
-                default :
-                {
-                    swd_builder.put_data_bits(1,1, parity_array);
-                    swd_builder.put_rand_data(31, parity_array);
-                    break;
-                }
-            }
-            swd_builder.put_parity_bit(parity_array);
-            if (RnW == "Read")
-            {
-                swd_builder.put_trn();
-            }
         }
     }
+}
 
+//One OK-acknowledged transfer, after 4 idle cycles. On a read, value is the data the target returns.
+function demo_put_transfer(swd_builder, apndp, rnw, a, value)
+{
+    var request = [];
+    var data = [];
+    for (var idle = 0; idle < 4; idle++)
+    {
+        swd_builder.put_bit(0);
+    }
+    swd_builder.put_start();
+    swd_builder.put_request(apndp, rnw, a, request);
+    swd_builder.put_parity_bit(request);
+    swd_builder.put_stop();
+    swd_builder.put_park();
+    swd_builder.put_trn();
+    swd_builder.put_ack("OK");
+    if (rnw == "Write")
+    {
+        swd_builder.put_trn();
+    }
+    swd_builder.put_data_bits(value, 32, data);
+    swd_builder.put_parity_bit(data);
+    if (rnw == "Read")
+    {
+        swd_builder.put_trn();
+    }
+}
 
+//4 ASCII characters from index as a little-endian 32-bit word, a missing character is 0
+function demo_ascii_word(text, index)
+{
+    var word = 0;
+    for (var b = 3; b >= 0; b--)
+    {
+        var c = (index + b < text.length) ? text.charCodeAt(index + b) : 0;
+        word = (word * 256) + c;
+    }
+    return word;
+}
 
+//The firmware state block at 0x20000000: 16 little-endian words
+function demo_ram_block(uptime)
+{
+    var version = "sensor-node v2.4.1";
+    var block = [];
+    block.push(0x4E534E53); // 0x00: magic, "SNSN"
+    block.push(uptime); // 0x04: uptime in seconds
+    block.push(17); // 0x08: boot counter
+    block.push(0x00000003); // 0x0C: status, sensor OK and radio link up
+    for (var i = 0; i < 20; i += 4)
+    {
+        block.push(demo_ascii_word(version, i)); // 0x10 to 0x23: firmware version, zero padded
+    }
+    block.push(0x41BC0000); // 0x24: temperature, 23.5 (IEEE 754 float)
+    block.push(41); // 0x28: relative humidity in %
+    block.push(101325); // 0x2C: pressure in Pa
+    block.push(3712); // 0x30: battery voltage in mV
+    block.push(Math.floor(uptime / 5)); // 0x34: packets sent
+    block.push(0); // 0x38: last error code
+    block.push(2608); // 0x3C: free stack in bytes
+    return block;
+}
+
+//The configuration the debugger writes at 0x20000100: 4 words
+function demo_config_block()
+{
+    return [
+        1000, // 0x00: sample period in ms
+        0x41F00000, // 0x04: temperature alarm threshold, 30.0 (IEEE 754 float)
+        0x00000005, // 0x08: flags, logging and radio enabled
+        demo_ascii_word("CFG1", 0) // 0x0C: "CFG1"
+    ];
+}
+
+//Select the MEM-AP, set CSW and TAR, read 16 words with posted reads, then write 4 words
+function demo_put_session(swd_builder, uptime)
+{
+    var ram = demo_ram_block(uptime);
+    var config = demo_config_block();
+    // DP SELECT: DPBANKSEL 0, ADDR 0xD0 (register bank 0xD00 of the AP: CSW, TAR, DRW)
+    demo_put_transfer(swd_builder, "DP", "Write", 2, 0x00000D00);
+    // AP CSW: 32-bit, auto-increment single, DeviceEn
+    demo_put_transfer(swd_builder, "AP", "Write", 0, 0x23000052);
+    // AP TAR
+    demo_put_transfer(swd_builder, "AP", "Write", 1, 0x20000000);
+    // AP DRW reads: each returns the data of the previous one, the first one stale data
+    var returned = 0x00000000;
+    for (var w = 0; w < ram.length; w++)
+    {
+        demo_put_transfer(swd_builder, "AP", "Read", 3, returned);
+        returned = ram[w];
+    }
+    // DP RDBUFF returns the data of the last AP read
+    demo_put_transfer(swd_builder, "DP", "Read", 3, returned);
+    // AP TAR, then AP DRW writes
+    demo_put_transfer(swd_builder, "AP", "Write", 1, 0x20000100);
+    for (var c = 0; c < config.length; c++)
+    {
+        demo_put_transfer(swd_builder, "AP", "Write", 3, config[c]);
+    }
 }
 
 //Builder object that can be shared to other scripts
@@ -7765,6 +7797,189 @@ ScanaStudio.BuilderObject =
 
 };//end BuilderObject
 
+
+/*
+ * Memory View (ScanaStudio v6): the bytes the MEM-AP reads and writes, at their target address.
+ * TAR, CSW.Size and CSW.AddrInc are followed from the AP accesses. Only OK-acknowledged transfers
+ * with a correct data parity are used. SWD AP reads are posted: an AP read returns the data of the
+ * previous AP read, and DP RDBUFF returns the data of the last one.
+*/
+function mem_view_transfer_end(data_bits, parity_ok)
+{
+    if ((mem_view_access == MemViewAccess.NOTHING) || (ACK != "OK"))
+    {
+        return;
+    }
+    var data = null;
+    if (parity_ok && (data_bits.length == 32))
+    {
+        data = 0;
+        for (var b = 31; b >= 0; b--)
+        {
+            data = (data * 2) + data_bits[b];
+        }
+    }
+    if (!mem_req_read)
+    {
+        mem_ap_pending = null; // as the decoder: after a write, the data of an AP read is unknown
+        if (mem_req_ap && (data !== null))
+        {
+            mem_ap_write(mem_req_register, mem_req_adress, data);
+        }
+        return;
+    }
+    if (mem_req_ap)
+    {
+        if ((data !== null) && (mem_ap_pending !== null))
+        {
+            mem_ap_read_data(mem_ap_pending, data);
+        }
+        mem_ap_pending = mem_ap_read_request(mem_req_register, mem_req_adress);
+    }
+    else if (mem_req_register == "RDBUFF")
+    {
+        if ((data !== null) && (mem_ap_pending !== null))
+        {
+            mem_ap_read_data(mem_ap_pending, data);
+        }
+    }
+}
+
+//An AP read request: what its data, returned later, is
+function mem_ap_read_request(register, adress)
+{
+    if (register == "DRW")
+    {
+        return {register: "DRW", accesses: mem_ap_drw_accesses()};
+    }
+    if (register == "BD")
+    {
+        return {register: "BD", accesses: mem_ap_bd_accesses(adress)};
+    }
+    if ((register == "CSW") || ((register == "TAR") && (adress == 4)))
+    {
+        return {register: register, accesses: []};
+    }
+    return {register: "OTHER", accesses: []};
+}
+
+//The data of an AP read requested earlier
+function mem_ap_read_data(pending, data)
+{
+    if (pending.register == "CSW")
+    {
+        mem_ap_set_csw(data);
+    }
+    else if (pending.register == "TAR")
+    {
+        mem_ap_tar = data;
+        mem_ap_tar_known = true;
+    }
+    for (var i = 0; i < pending.accesses.length; i++)
+    {
+        mem_view_add_access(pending.accesses[i], data, true);
+    }
+}
+
+//An AP write: the data is in the transfer
+function mem_ap_write(register, adress, data)
+{
+    var accesses = [];
+    if (register == "CSW")
+    {
+        mem_ap_set_csw(data);
+    }
+    else if ((register == "TAR") && (adress == 4)) // TAR[63:32] is ignored
+    {
+        mem_ap_tar = data;
+        mem_ap_tar_known = true;
+    }
+    else if (register == "DRW")
+    {
+        accesses = mem_ap_drw_accesses();
+    }
+    else if (register == "BD")
+    {
+        accesses = mem_ap_bd_accesses(adress);
+    }
+    for (var i = 0; i < accesses.length; i++)
+    {
+        mem_view_add_access(accesses[i], data, false);
+    }
+}
+
+function mem_ap_set_csw(data)
+{
+    mem_ap_size = data % 8; // CSW[2:0]
+    mem_ap_addr_inc = Math.floor(data / 16) % 4; // CSW[5:4]
+}
+
+//The memory accesses of a DRW access, at TAR, that then increments TAR
+function mem_ap_drw_accesses()
+{
+    var accesses = [];
+    if (!mem_ap_tar_known)
+    {
+        return accesses;
+    }
+    if ((mem_ap_size < 0) || (mem_ap_size > 2) || (mem_ap_addr_inc < 0) || (mem_ap_addr_inc > 2))
+    {
+        // Unknown or unsupported access size or increment: TAR is unknown after an access
+        mem_ap_tar_known = (mem_ap_addr_inc == 0);
+        return accesses;
+    }
+    var nbytes = Math.pow(2, mem_ap_size);
+    var count = 1;
+    if (mem_ap_addr_inc == 2) // Packed: one 32-bit DRW access holds 4 / nbytes memory accesses
+    {
+        count = 4 / nbytes;
+    }
+    for (var k = 0; k < count; k++)
+    {
+        var address = mem_ap_tar - (mem_ap_tar % nbytes); // aligned to the access size
+        // The data of an 8-bit or 16-bit access is on the byte lanes given by TAR[1:0]
+        accesses.push({address: address, lane: address % 4, size: nbytes});
+        if (mem_ap_addr_inc != 0)
+        {
+            // The increment is only guaranteed within TAR[9:0]: wrap at 1 KB
+            mem_ap_tar = (mem_ap_tar - (mem_ap_tar % 1024)) + ((mem_ap_tar + nbytes) % 1024);
+        }
+    }
+    return accesses;
+}
+
+//BD0 to BD3: the 32-bit word at (TAR & ~0xF) + 4 * n, TAR does not increment
+function mem_ap_bd_accesses(adress)
+{
+    if (!mem_ap_tar_known)
+    {
+        return [];
+    }
+    return [{address: (mem_ap_tar - (mem_ap_tar % 16)) + adress, lane: 0, size: 4}];
+}
+
+//Read or written, a byte is what the target holds at that address: the last one seen wins
+function mem_view_add_access(access, data, is_read)
+{
+    var shown = (mem_view_access == MemViewAccess.READS_AND_WRITES)
+        || ((mem_view_access == MemViewAccess.READS) && is_read)
+        || ((mem_view_access == MemViewAccess.WRITES) && !is_read);
+    if (!shown)
+    {
+        return;
+    }
+    var bytes = [];
+    for (var b = 0; b < access.size; b++)
+    {
+        bytes.push(Math.floor(data / Math.pow(2, 8 * (access.lane + b))) % 256);
+    }
+    if (!mem_view_base_set)
+    {
+        held.mem_view_set_base(access.address);
+        mem_view_base_set = true;
+    }
+    held.mem_view_add_bytes(access.address, bytes);
+}
 
 function update_AP_adress()
 {

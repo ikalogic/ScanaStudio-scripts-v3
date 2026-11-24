@@ -3,13 +3,14 @@
 <DESCRIPTION>
 The LPC protocol is a low-pin-count bus developed by Intel to replace older, bulkier interfaces like the ISA bus in PCs.
 </DESCRIPTION>
-<VERSION> 0.4 </VERSION>
+<VERSION> 0.5 </VERSION>
 <AUTHOR_NAME> Ibrahim KAMAL, Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> contact@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE> This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.5:  Trigger offer and Memory View fix (ScanaStudio v6).
 V0.4:  Offers to configure the LPC trigger once added (ScanaStudio v6).
 V0.3:  Demo signals over the whole capture, built in a few seconds.
 V0.2:  Decoding fixed. Demo signals, trigger and Memory View.
@@ -566,7 +567,9 @@ function on_eval_gui_decoder() {
 
     // ScanaStudio v6 offers to configure the LPC trigger once the decoder is
     // added; v3 has no such call and would stop this eval on a TypeError.
-    if (typeof ScanaStudio.ask_to_add_trigger === "function") {
+    // "in" reads the API without calling it: this eval also runs while decoding,
+    // where the call does not exist.
+    if ("ask_to_add_trigger" in ScanaStudio) {
         ScanaStudio.ask_to_add_trigger();
     }
 
@@ -586,9 +589,10 @@ function read_gui_values() {
     mem_view_cycles = memory_view_exists() ? ScanaStudio.gui_get_value("mem_view_cycles") : MemViewCycles.NOTHING;
 }
 
-//The Memory View exists in ScanaStudio 6 only: ScanaStudio 3 has no mem_view_* functions
+//The Memory View arrived in ScanaStudio 6.0.23, with set_channel_name: ScanaStudio 3 and
+//older versions of ScanaStudio 6 have neither. "in" reads the API without calling it.
 function memory_view_exists() {
-    return typeof ScanaStudio.mem_view_add_bytes == "function";
+    return ("mem_view_add_bytes" in ScanaStudio) || ("set_channel_name" in ScanaStudio);
 }
 
 function end_of_samples() {

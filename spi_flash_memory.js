@@ -3,13 +3,14 @@
 <DESCRIPTION>
  SPI Flash memory transactions analyzer
 </DESCRIPTION>
-<VERSION> 0.5 </VERSION>
+<VERSION> 0.6 </VERSION>
 <AUTHOR_NAME>  Ibrahim KAMAL, Chris HEMINGWAY </AUTHOR_NAME>
 <AUTHOR_URL> i.kamal@ikalogic.com </AUTHOR_URL>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki/SPI-Flash-memory-instructions-analyzer </HELP_URL>
 <COPYRIGHT> Copyright Ibrahim KAMAL </COPYRIGHT>
 <LICENSE>  This code is distributed under the terms of the GNU General Public License GPLv3 </LICENSE>
 <RELEASE_NOTES>
+V0.6: Memory View (ScanaStudio v6). Default channels. Read Data fix.
 V0.5: Add support for packet view
 V0.4: Support for newer SPI.Js script version.
 V0.3: Add selectable flash types, NAND flash, and option to enumerate data bytes
@@ -30,22 +31,31 @@ V0.1: Initial release.
 function on_draw_gui_decoder()
 {
   //Define decoder configuration GUI
-  ScanaStudio.gui_add_ch_selector( "ch_mosi", "MOSI (Master Out) Line", "MOSI" );
-	ScanaStudio.gui_add_ch_selector( "ch_miso", "MISO (Slave Out) Line", "MISO" );
-	ScanaStudio.gui_add_ch_selector( "ch_clk", "CLOCK Line", "SCLK" );
-	ScanaStudio.gui_add_ch_selector( "ch_cs", "Chip Select (Slave select)", "CS" );
+  ScanaStudio.gui_add_ch_selector( "ch_mosi", "MOSI (Master Out) Line", "MOSI", 0 );
+	ScanaStudio.gui_add_ch_selector( "ch_miso", "MISO (Slave Out) Line", "MISO", 1 );
+	ScanaStudio.gui_add_ch_selector( "ch_clk", "CLOCK Line", "SCLK", 2 );
+	ScanaStudio.gui_add_ch_selector( "ch_cs", "Chip Select (Slave select)", "CS", 3 );
   // Type of flash, determines what commands db is used
   ScanaStudio.gui_add_combo_box("flash_type","Flash Type:")
   ScanaStudio.gui_add_item_to_combo_box("NOR",true);      // Index 0 = TYPE_NOR
   ScanaStudio.gui_add_item_to_combo_box("NAND (Micron MT29F 60 series)",false);
+
+  if (memory_view_exists())
+  {
+    ScanaStudio.gui_add_combo_box("mem_view_data","Memory View shows (NOR flash)");
+    ScanaStudio.gui_add_item_to_combo_box("Data read and programmed",true);
+    ScanaStudio.gui_add_item_to_combo_box("Data read",false);
+    ScanaStudio.gui_add_item_to_combo_box("Data programmed",false);
+    ScanaStudio.gui_add_item_to_combo_box("Nothing",false);
+  }
 
 
   if (ScanaStudio.get_device_channels_count() > 4)
   {
       ScanaStudio.gui_add_new_tab("Quad IO",false);
       ScanaStudio.gui_add_check_box("quad_io","Enable Quad IO SPI",false);
-      ScanaStudio.gui_add_ch_selector("ch_io2","IO 2","");
-      ScanaStudio.gui_add_ch_selector("ch_io3","IO 3","");
+      ScanaStudio.gui_add_ch_selector("ch_io2","IO 2","",4);
+      ScanaStudio.gui_add_ch_selector("ch_io3","IO 3","",5);
       ScanaStudio.gui_add_info_label("IO0 is the MOSI line, IO1 is the MISO line.\n"
                                     +"IO2 and IO3 lines need to be configured above.\n");
     ScanaStudio.gui_end_tab();
@@ -109,6 +119,47 @@ function read_gui_values()
   flash_format_address = ScanaStudio.gui_get_value("flash_format_address");
   flash_number_data = ScanaStudio.gui_get_value("flash_number_data");
   nbits = ScanaStudio.gui_get_value("nbits");
+  mem_view_data = memory_view_exists() ? ScanaStudio.gui_get_value("mem_view_data") : MEM_VIEW_NOTHING;
+}
+
+//The Memory View arrived in ScanaStudio 6.0.23, with set_channel_name: ScanaStudio 3 and
+//older versions of ScanaStudio 6 have neither. "in" reads the API without calling it.
+function memory_view_exists()
+{
+  return ("mem_view_add_bytes" in ScanaStudio) || ("set_channel_name" in ScanaStudio);
+}
+
+//NOR instructions whose payload is the content of the memory, at the address sent with them
+var NOR_READ_CODES = [0x03, 0x0B, 0x3B, 0xBB, 0x6B, 0xEB];
+var NOR_PROGRAM_CODES = [0x02, 0x32];
+
+//Adds one payload byte to the Memory View, at the address it is read from or programmed to
+function add_to_mem_view(code, n, value)
+{
+  var is_read = (NOR_READ_CODES.indexOf(code) >= 0);
+  var is_program = (NOR_PROGRAM_CODES.indexOf(code) >= 0);
+  var address;
+  if ((flash_type != TYPE_NOR) || (cmd_address < 0)) return;
+  if (is_read && ((mem_view_data == MEM_VIEW_READ_AND_PROGRAM) || (mem_view_data == MEM_VIEW_READ)))
+  {
+    //A read continues through the whole memory
+    address = (cmd_address + n) & 0xFFFFFF;
+  }
+  else if (is_program && ((mem_view_data == MEM_VIEW_READ_AND_PROGRAM) || (mem_view_data == MEM_VIEW_PROGRAM)))
+  {
+    //A page program wraps to the start of its 256-byte page
+    address = (cmd_address & 0xFFFF00) | ((cmd_address + n) & 0xFF);
+  }
+  else
+  {
+    return;
+  }
+  if (!mem_view_base_set)
+  {
+    ScanaStudio.mem_view_set_base(address);
+    mem_view_base_set = true;
+  }
+  ScanaStudio.mem_view_add_bytes(address, [value]);
 }
 //Constants
 var IO_MOSI = 0;
@@ -119,6 +170,14 @@ var NO_PAYLOAD = -1;
 
 var TYPE_NOR = 0;
 var TYPE_NAND = 1;
+
+var MEM_VIEW_READ_AND_PROGRAM = 0;
+var MEM_VIEW_READ = 1;
+var MEM_VIEW_PROGRAM = 2;
+var MEM_VIEW_NOTHING = 3;
+var mem_view_data = MEM_VIEW_NOTHING;
+var mem_view_base_set = false;
+var cmd_address = -1;
 
 //Global variables
 var state_machine;
@@ -142,6 +201,7 @@ function on_decode_signals(resume)
       //initialization code
       state_machine = 0;
       frame_counter = -1;
+      mem_view_base_set = false;
       sampling_rate = ScanaStudio.get_capture_sample_rate();
       // read GUI values using
       read_gui_values();
@@ -202,6 +262,7 @@ function parse_spi_items(item)
       if (item.channel_index == ch_mosi)
       {
         cmd_descriptor = fetch_command_description(item.content);
+        cmd_address = -1;
         //ScanaStudio.console_info_msg("New command:" + cmd_descriptor[0].code.toString(16));
         marker = item.end_sample_index;
         cmd_par_counter = 1;
@@ -273,6 +334,10 @@ function parse_spi_items(item)
                 ScanaStudio.packet_view_add_packet(false, ch_mosi, parameter_start_sample_index, item.end_sample_index,
                   pkt_par_title, pkt_par_content, pkt_title_color, pkt_content_color);
               }
+              if (cmd_descriptor[cmd_par_counter].short_caption === "A")
+              {
+                cmd_address = parameter_data;
+              }
               cmd_par_counter++;
               if (cmd_par_counter >= cmd_descriptor.length)
               {
@@ -315,6 +380,7 @@ function parse_spi_items(item)
               "Data[" + payload_counter + "]", data_to_str(item.content, flash_format_data, 8),
               ScanaStudio.PacketColors.Data.Title, ScanaStudio.PacketColors.Data.Content);
 
+            add_to_mem_view(cmd_descriptor[0].code, payload_counter, item.content);
             payload_counter++;
             // ScanaStudio.console_info_msg("Payload:"+ formatted_data);
           }
@@ -384,6 +450,11 @@ function on_build_demo_signals()
 
   var random_mosi, random_miso, random_d, random_size, w,instr,p;
   spi_builder.put_silence(10e-6);
+  if (flash_type == TYPE_NOR)
+  {
+    build_demo_nor_boot(spi_builder, samples_to_build, silence_period);
+    return;
+  }
   instr = 0;
   while (ScanaStudio.builder_get_samples_acc(ch_clk) < samples_to_build)
   {
@@ -558,6 +629,95 @@ function on_build_demo_signals()
   } */
 }
 
+//Demo for a NOR flash: a microcontroller boots from it again and again.
+//It reads the image header, the vector table and its settings, then appends
+//one line to a boot log. The reads always return the same flash content, so
+//the Memory View shows a coherent image.
+function build_demo_nor_boot(spi_builder, samples_to_build, silence_period)
+{
+  var boot = 41;
+  var header = [];
+  push_ascii(header, "IKFW");                 //magic
+  push_bytes(header, [0x02, 0x04, 0x01, 0x00]); //version 2.4.1
+  push_u32_le(header, 0x0001E240);            //image size
+  push_u32_le(header, 0x08008000);            //load address
+  push_u32_le(header, 0x08008199);            //entry point
+  push_u32_le(header, 0x5A3C9E17);            //CRC-32
+  push_ascii_padded(header, "sensor-node", 16, 0x00);
+  push_ascii(header, "20261117");             //build date
+  var vectors = [];
+  push_u32_le(vectors, 0x20005000);           //initial stack pointer
+  push_u32_le(vectors, 0x08008199);           //Reset
+  push_u32_le(vectors, 0x080081A1);           //NMI
+  push_u32_le(vectors, 0x080081A3);           //HardFault
+  push_u32_le(vectors, 0x080081A5);           //MemManage
+  push_u32_le(vectors, 0x080081A7);           //BusFault
+  push_u32_le(vectors, 0x080081A9);           //UsageFault
+  push_u32_le(vectors, 0x00000000);
+  var settings = [];
+  push_ascii_padded(settings, "period=1000\nthreshold=35\nunit=C\nnode=12\n", 48, 0xFF);
+
+  demo_transaction(spi_builder, [0x9F], [0xEF, 0x40, 0x18]); //JEDEC ID: Winbond W25Q128
+  spi_builder.put_silence(silence_period);
+  while (ScanaStudio.builder_get_samples_acc(ch_clk) < samples_to_build)
+  {
+    if (ScanaStudio.abort_is_requested()) break;
+    boot++;
+    demo_transaction(spi_builder, [0x03, 0x00, 0x00, 0x00], header);          //Read Data
+    spi_builder.put_silence(silence_period);
+    demo_transaction(spi_builder, [0x0B, 0x00, 0x01, 0x00, 0x00], vectors);   //Fast Read, 1 dummy byte
+    spi_builder.put_silence(silence_period);
+    demo_transaction(spi_builder, [0x03, 0x00, 0x02, 0x00], settings);        //Read Data
+    spi_builder.put_silence(silence_period);
+
+    //Boot log: one 16-byte line per boot, 16 lines in the page at 0x000300
+    var line = [];
+    push_ascii_padded(line, "boot " + pad(boot.toString(), 4) + ": ok", 14, 0x20);
+    push_bytes(line, [0x0D, 0x0A]);
+    var address = 0x300 + ((boot % 16) * 16);
+    demo_transaction(spi_builder, [0x06], []);                                //Write Enable
+    spi_builder.put_silence(silence_period / 4);
+    demo_transaction(spi_builder, [0x02, 0x00, (address >> 8) & 0xFF, address & 0xFF].concat(line), []); //Page Program
+    spi_builder.put_silence(silence_period / 4);
+    demo_transaction(spi_builder, [0x05], [0x03]);                            //Status: busy
+    spi_builder.put_silence(silence_period / 4);
+    demo_transaction(spi_builder, [0x05], [0x00]);                            //Status: ready
+    spi_builder.put_silence(silence_period * 4);
+  }
+}
+
+//One chip select frame: the bytes sent on MOSI, then the bytes answered on MISO
+function demo_transaction(spi_builder, mosi, miso)
+{
+  var i;
+  spi_builder.put_start();
+  spi_builder.put_silence(1e-6);
+  for (i = 0; i < mosi.length; i++) spi_builder.put_word(mosi[i], 0xFF);
+  for (i = 0; i < miso.length; i++) spi_builder.put_word(0x00, miso[i]);
+  spi_builder.put_silence(1e-6);
+  spi_builder.put_stop();
+}
+
+function push_bytes(arr, bytes)
+{
+  for (var i = 0; i < bytes.length; i++) arr.push(bytes[i]);
+}
+
+function push_u32_le(arr, value)
+{
+  for (var i = 0; i < 4; i++) arr.push(Math.floor(value / Math.pow(256, i)) & 0xFF);
+}
+
+function push_ascii(arr, text)
+{
+  for (var i = 0; i < text.length; i++) arr.push(text.charCodeAt(i));
+}
+
+function push_ascii_padded(arr, text, len, fill)
+{
+  for (var i = 0; i < len; i++) arr.push((i < text.length) ? text.charCodeAt(i) : fill);
+}
+
 function fetch_command_description(h)
 {
   var i;
@@ -623,12 +783,12 @@ function build_commands_db_nor()
   //-------------
 
   transaction = [];
-  transaction.push(new header_t(0x03,"RD","Read Data",ch_miso,IO_MOSI));
+  transaction.push(new header_t(0x03,"RD","Read Data",IO_MISO));
   transaction.push(new parameter_t(3,IO_MOSI,"A","3 Address bytes",flash_format_address));
   commands.push(transaction);
 
   transaction = [];
-  transaction.push(new header_t(0x0B,"FRD","Fast Read Data",ch_miso,IO_MOSI));
+  transaction.push(new header_t(0x0B,"FRD","Fast Read Data",IO_MISO));
   transaction.push(new parameter_t(3,IO_MOSI,"A","3 Address bytes",flash_format_address));
   transaction.push(new parameter_t(1,IO_MISO,"Dummy","1 Dummy byte",flash_format_data));
   commands.push(transaction);
@@ -862,12 +1022,12 @@ function build_commands_db_nand()
   //------------- READ Operations
 
   transaction = [];
-  transaction.push(new header_t(0x13,"PR","Page Read",ch_miso,NO_PAYLOAD));
+  transaction.push(new header_t(0x13,"PR","Page Read",NO_PAYLOAD));
   transaction.push(new parameter_t(3,IO_MOSI,"A","3 Address bytes",flash_format_address));
   commands.push(transaction);
 
   transaction = [];
-  transaction.push(new header_t(0x03,"RD","Read Cache x1",ch_miso,IO_MISO));
+  transaction.push(new header_t(0x03,"RD","Read Cache x1",IO_MISO));
   transaction.push(new parameter_t(2,IO_MOSI,"A","Column Address",flash_format_address));
   transaction.push(new parameter_t(1,IO_MISO,"Dummy","1 Dummy byte",flash_format_data));
   commands.push(transaction);
