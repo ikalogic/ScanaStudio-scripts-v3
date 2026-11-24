@@ -3,7 +3,7 @@
 <DESCRIPTION>
 JTAG (named after the Joint Test Action Group which codified it) is an industry standard for verifying designs and testing printed circuit boards after manufacture.
 </DESCRIPTION>
-<VERSION> 0.41 </VERSION>
+<VERSION> 0.42 </VERSION>
 <AUTHOR_NAME>  Nicolas BASTIT </AUTHOR_NAME>
 <AUTHOR_URL> n.bastit@ikalogic.com </AUTHOR_URL>
 <COPYRIGHT> Copyright Nicolas BASTIT </COPYRIGHT>
@@ -11,6 +11,7 @@ JTAG (named after the Joint Test Action Group which codified it) is an industry 
 of the GNU General Public License GPLv3 </LICENSE>
 <HELP_URL> https://github.com/ikalogic/ScanaStudio-scripts-v3/wiki </HELP_URL>
 <RELEASE_NOTES>
+V0.42: Fixed the EXIT1-DR state item placing its sample point at sample 0.
 V0.41: Fixed live decoding inventing a TCK edge at the end of the received samples.
 V0.40: Fixed builder.
 V0.31: Updated description.
@@ -477,7 +478,7 @@ function on_decode_signals(resume)
             {
                 if(trs_tck.value == 0)
                 {
-                    add_dec_item_state_machine( last_trs_tck.sample_index, next_trs_tck.sample_index);
+                    add_dec_item_state_machine( last_trs_tck.sample_index, next_trs_tck.sample_index, trs_tck.sample_index);
                     if(cur_data_in_bit_sample.length > 0)
                     {
                         add_dec_item_value_tdio(ch_tdi, cur_data_in_start_sample, trs_tck.sample_index, cur_data_in_bit_sample, cur_data_in);
